@@ -1,0 +1,13 @@
+{
+  "name": "takeoff_hover_land",
+  "description": "Full cycle: take off to 3 m, hover 10 s, land and disarm. Adds touchdown speed and landing time to the hover metrics.",
+  "max_time": 120,
+  "params": {"MIS_TAKEOFF_ALT": 3},
+  "abort": {"max_tilt_deg": 100, "max_alt": 60, "crash_speed": 3.0},
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "takeoff", "alt": 3, "settle": 2, "timeout": 25},
+    {"type": "hold", "name": "hover", "duration": 10},
+    {"type": "land", "timeout": 40}
+  ]
+}

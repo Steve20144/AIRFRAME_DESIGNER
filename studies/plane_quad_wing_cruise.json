@@ -1,0 +1,16 @@
+{
+  "name": "plane_quad_wing_cruise",
+  "description": "Wing incidence and tailplane incidence of the winged quad for the cheapest 12 m/s cruise: minimise cruise power relative to hover with the wing carrying weight, no stall, no crash. Nelder-Mead from the current design.",
+  "airframe": "airframes/plane_quad.json",
+  "scenario": "cruise",
+  "variables": [
+    {"path": "wings[0].incidence_deg", "range": [-2, 10]},
+    {"path": "wings[1].incidence_deg", "range": [-6, 4]}
+  ],
+  "objective": "phases.cruise.power_ratio_vs_hover + 0.02 * phases.cruise.vel_err_rms",
+  "constraints": ["not metrics.crashed", "ok", "phases.cruise.speed_mean > 10"],
+  "penalty": 100,
+  "algorithm": {"name": "nelder_mead", "budget": 16, "step": 0.3},
+  "workers": 1,
+  "sim": {"rate": 250, "substeps": 2, "noise": true, "speed": 0}
+}

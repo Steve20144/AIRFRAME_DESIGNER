@@ -1,0 +1,16 @@
+{
+  "name": "atlas08_hover_tilt",
+  "description": "Rear jet tilt and hover pitch of ATLAS_08 for the stillest hover: minimise position wobble and pitch activity, keep motor headroom. CMA-ES, 24 closed-loop simulations.",
+  "airframe": "airframes/atlas_08.json",
+  "scenario": "hover",
+  "variables": [
+    {"path": "rotors[0:8].tilt_deg", "range": [10, 45]},
+    {"path": "hover_pitch_deg", "range": [0, 35]}
+  ],
+  "objective": "phases.hover.pos_std_xy + 0.05 * phases.hover.pitch_rms_deg + 0.05 * phases.hover.roll_rms_deg + 0.5 * phases.hover.util_max",
+  "constraints": ["not metrics.crashed", "ok", "phases.hover.util_max < 0.9"],
+  "penalty": 100,
+  "algorithm": {"name": "cmaes", "budget": 24, "population": 6, "sigma": 0.3, "seed": 1},
+  "workers": 6,
+  "sim": {"rate": 250, "substeps": 2, "noise": true, "speed": 0, "timeout_wall": 400}
+}

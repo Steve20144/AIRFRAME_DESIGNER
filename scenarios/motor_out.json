@@ -1,0 +1,14 @@
+{
+  "name": "motor_out",
+  "description": "Hover, then rotor 1 loses all thrust. Does the remaining geometry keep the vehicle up (PX4 is not told)?",
+  "max_time": 100,
+  "params": {"MIS_TAKEOFF_ALT": 5},
+  "abort": {"max_tilt_deg": 100, "max_alt": 60, "crash_speed": 3.0},
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "takeoff", "alt": 5, "settle": 2, "timeout": 25},
+    {"type": "hold", "name": "hover", "duration": 5},
+    {"type": "motor_failure", "rotor": 0, "scale": 0.0},
+    {"type": "hold", "name": "one_out", "duration": 10}
+  ]
+}

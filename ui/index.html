@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Airframe Designer</title>
+<link rel="stylesheet" href="/static/style.css">
+<script>try { const t = localStorage.getItem('airframe-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { }</script>
+<script type="importmap">
+{ "imports": { "three": "/static/vendor/three/three.module.js",
+               "three/addons/controls/OrbitControls.js": "/static/vendor/three/OrbitControls.js",
+               "three/addons/controls/TransformControls.js": "/static/vendor/three/TransformControls.js" } }
+</script>
+</head>
+<body>
+<div class="shell">
+  <div class="main">
+    <section class="panel view">
+      <div class="panel-head">
+        <div class="panel-title">Airframe<span id="title-name"></span></div>
+        <div class="panel-spacer"></div>
+        <button class="pill" id="btn-reset" title="Start clean: force-disarm, vehicle back on the ground, and PX4 rebooted (HITL) or relaunched (SITL)">Reset</button>
+        <button class="pill" id="btn-pause">Pause</button>
+        <button class="pill toggle" id="btn-follow" title="Camera: static → track (looks at the drone) → follow (moves with it)">Static</button>
+        <button class="pill theme-btn" id="btn-theme" title="Toggle dark mode">◐</button>
+      </div>
+      <div class="status">
+        <button class="pill st" id="st-link" title="Open the Connect tab"><i class="dot"></i><b id="st-mode">—</b>&nbsp;<span id="st-conn">not connected</span></button>
+        <button class="pill st detected hidden" id="st-detected" title="A flight controller is plugged in — click to connect">Pixhawk detected · connect</button>
+        <span class="pill st" id="st-armed">Disarmed</span>
+        <span class="pill st" id="st-flightmode">—</span>
+        <span class="pill st num" id="st-thrust" title="collective thrust: sum of all motor thrusts as a share of the sum of their (jetfoil-corrected) maximum thrusts">Thrust —</span>
+        <span class="pill st num" id="st-lift" title="wing lift as a share of the weight, and in newtons (red = a wing is stalled)">Lift —</span>
+        <span class="pill st num" id="st-time">0.0 s</span>
+        <span class="pill st num" id="st-rtf">RTF —</span>
+      </div>
+      <div id="viewport">
+        <canvas id="c"></canvas>
+        <div id="hud">
+          <div id="rotor-readout"></div>
+          <div class="hint"><span id="st-pose" class="num"></span></div>
+          <div class="hint"><span id="st-aero" class="num"></span></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="resizer" id="resize-log" title="Drag to resize"></div>
+    <section class="panel log" id="log">
+      <div class="panel-head">
+        <div class="panel-title">Log</div>
+        <div class="panel-spacer"></div>
+        <button class="pill small" id="log-toggle">Hide</button>
+      </div>
+      <div id="log-body"><pre id="log-pre"></pre></div>
+    </section>
+  </div>
+
+  <div class="vresizer" id="resize-side" title="Drag to resize"></div>
+  <aside class="panel side" id="side">
+    <nav class="tabs">
+      <button data-tab="airframe" class="active">Geometry</button>
+      <button data-tab="px4">PX4</button>
+      <button data-tab="design">Optimize</button>
+      <button data-tab="batch">Batch</button>
+      <button data-tab="sim">Flight</button>
+      <button data-tab="connect">Connect</button>
+    </nav>
+    <div class="panel-body">
+
+    <!-- ============================ GEOMETRY ============================ -->
+    <section id="tab-airframe" class="tab active">
+      <div class="row">
+        <label style="flex:1">Name <input id="af-name" type="text"></label>
+        <button id="af-save" class="pill small" title="Save this airframe under its name in airframes/">Save</button>
+        <label>Load <select id="af-preset" style="width:150px"><option value="">Choose…</option></select></label>
+      </div>
+
+      <h3>Mass &amp; CG</h3>
+      <div class="row">
+        <label>Mass kg <input id="af-mass" type="number" step="0.01" min="0.01"></label>
+        <label title="centre of gravity in the structural frame (x forward, y right, z down), m">CG x <input id="af-cgx" type="number" step="0.005"></label>
+        <label>CG y <input id="af-cgy" type="number" step="0.005"></label>
+        <label title="Z is DOWN (+), like PX4: a CG above the reference point has negative Z">CG z <input id="af-cgz" type="number" step="0.005"></label>
+      </div>
+      <div class="row">
+        <label>Ixx <input id="af-ixx" type="number" step="0.001" min="0"></label>
+        <label>Iyy <input id="af-iyy" type="number" step="0.001" min="0"></label>
+        <label>Izz <input id="af-izz" type="number" step="0.001" min="0"></label>
+        <button id="af-estimate" class="pill small" title="Estimate inertia from mass, rotor layout, wings and legs">Estimate</button>
+        <label title="Nose-up pitch of the airframe in hover. PX4 treats this attitude as level: the geometry is exported rotated into that frame and SENS_BOARD_Y_OFF is set to match.">Hover pitch° <input id="af-hover" type="number" step="1" min="-90" max="90"></label>
+        <label title="Nose-up pitch of the airframe when it stands on its legs; the simulator rests the vehicle at this attitude.">Landed pitch° <input id="af-landed" type="number" step="1" min="-90" max="90"></label>
+      </div>
+
+      <h3>Rotors</h3>
+      <div id="rotor-table"></div>
+      <div class="row tight">
+        <button id="rotor-add" class="pill small">+ Rotor</button>
+        <button id="rotor-mirror-y" class="pill small" title="Duplicate the selected rotor mirrored left/right, with opposite spin">Mirror L/R</button>
+        <button id="rotor-mirror-x" class="pill small" title="Duplicate the selected rotor mirrored front/back, with opposite spin">Mirror F/B</button>
+        <button id="rotor-apply-all" class="pill small" title="Copy thrust, tau and prop size of the selected rotor to all rotors">Motor → all</button>
+      </div>
+
+      <h3>Motors</h3>
+      <div class="row">
+        <label>Type <select id="m-kind" style="width:130px"><option value="prop">Propeller</option><option value="ducted">Ducted fan</option></select></label>
+        <label title="max thrust per rotor, N">Tmax N <input id="m-tmax" type="number" step="0.5" min="0"></label>
+        <label title="spool-up time constant, s">τ s <input id="m-tau" type="number" step="0.01" min="0.005"></label>
+        <label title="reaction torque per unit thrust (CA_ROTORn_KM magnitude; spin sign is set per rotor)">|KM| <input id="m-km" type="number" step="0.005" min="0"></label>
+        <label title="fan / prop diameter, m">Ø m <input id="m-dia" type="number" step="0.01" min="0.02"></label>
+        <label title="thrust = Tmax · ω^n">n <input id="m-exp" type="number" step="0.1" min="1" max="3"></label>
+        <label class="row" style="align-self:end;padding-bottom:6px" title="momentum drag of the inlet mass flow"><input id="m-ram" type="checkbox"> ram drag</label>
+        <label title="thrust lost when a jetfoil bends the jet by 90°, %">Jetfoil loss % <input id="m-turnloss" type="number" step="1" min="0" max="60"></label>
+      </div>
+
+      <h3>Wings</h3>
+      <div id="wing-table"></div>
+      <div class="row tight">
+        <button id="wing-add" class="pill small" title="Add a symmetric wing (both halves)">+ Wing</button>
+        <button id="fin-add" class="pill small" title="Add a vertical fin: a single panel with 90° dihedral">+ Fin</button>
+      </div>
+
+      <h3>Legs</h3>
+      <div id="leg-table"></div>
+      <div class="row tight">
+        <button id="leg-add" class="pill small">+ Leg</button>
+        <button id="leg-mirror" class="pill small" title="Duplicate the last leg mirrored left/right">Mirror L/R</button>
+      </div>
+      <div class="row tight" id="leg-generate" title="Replace all legs with four legs whose feet lie on a plane perpendicular to gravity when the airframe stands at the landed pitch">
+        <span class="hint" style="align-self:center">Generate 4 legs:</span>
+        <label title="distance from the CG down to the feet, along gravity when landed">height <input id="lg-height" type="number" step="0.01" min="0.01" value="0.2"></label>
+        <label title="half-size of the foot rectangle, forward/back">spread x <input id="lg-sx" type="number" step="0.01" min="0" value="0.2"></label>
+        <label title="half-size of the foot rectangle, left/right">spread y <input id="lg-sy" type="number" step="0.01" min="0" value="0.2"></label>
+        <label title="z of the attachment points relative to the CG (down positive)">attach z <input id="lg-az" type="number" step="0.01" value="0"></label>
+        <button id="leg-generate-btn" class="pill small">Generate</button>
+      </div>
+
+      <details>
+        <summary>Body, drag</summary>
+        <div class="row">
+          <label>Body L <input id="af-bx" type="number" step="0.01" min="0"></label>
+          <label>Body W <input id="af-by" type="number" step="0.01" min="0"></label>
+          <label>Body H <input id="af-bz" type="number" step="0.01" min="0"></label>
+        </div>
+        <div class="row">
+          <label title="quadratic body drag per body axis, N/(m/s)²">Drag x <input id="af-dragx" type="number" step="0.01" min="0"></label>
+          <label>Drag y <input id="af-dragy" type="number" step="0.01" min="0"></label>
+          <label>Drag z <input id="af-dragz" type="number" step="0.01" min="0"></label>
+        </div>
+        <div class="row">
+          <label title="quadratic angular damping per body axis, Nm/(rad/s)²">Ang. drag x <input id="af-adragx" type="number" step="0.001" min="0"></label>
+          <label>Ang. drag y <input id="af-adragy" type="number" step="0.001" min="0"></label>
+          <label>Ang. drag z <input id="af-adragz" type="number" step="0.001" min="0"></label>
+        </div>
+        <div class="row">
+          <label title="where the body drag acts, structural frame, m">Drag centre x <input id="af-dcx" type="number" step="0.01"></label>
+          <label>y <input id="af-dcy" type="number" step="0.01"></label>
+          <label>z <input id="af-dcz" type="number" step="0.01"></label>
+        </div>
+      </details>
+      <div id="af-problems" class="problems"></div>
+    </section>
+
+    <!-- ============================ PX4 ============================ -->
+    <section id="tab-px4" class="tab">
+      <h3>Edited parameters</h3>
+      <div id="px4-export-status"></div>
+      <div id="overrides" class="card"></div>
+      <div class="row tight">
+        <a id="px4-download" class="pill small" href="/api/px4/export.params" download>Download .params</a>
+        <button id="px4-refresh" class="pill small">Refresh</button>
+      </div>
+
+      <h3>Find a parameter</h3>
+      <div class="row">
+        <input id="param-search" type="search" placeholder="Type to search name or description">
+        <select id="param-group" style="width:150px"><option value="">All groups</option></select>
+      </div>
+      <div class="row tight">
+        <button id="param-refresh" class="pill small">Reload</button>
+        <button id="param-save" class="pill small" title="MAV_CMD_PREFLIGHT_STORAGE: write parameters to flash">Save to flash</button>
+        <button id="param-meta-fetch" class="pill small" title="Download parameter descriptions from the vehicle via MAVLink FTP">Fetch descriptions</button>
+        <button id="param-reboot" class="pill small danger">Reboot PX4</button>
+      </div>
+      <div id="param-count" class="hint" style="margin:6px 0 4px 8px"></div>
+      <div id="param-editor" class="editor hidden"></div>
+      <div id="param-list"></div>
+    </section>
+
+    <!-- ============================ DESIGN / OPTIMIZE ============================ -->
+    <section id="tab-design" class="tab">
+      <h3>Cruise</h3>
+      <div class="row">
+        <label>Speed km/h <input id="d-speed" type="number" step="1" min="1"></label>
+        <span class="hint" id="d-notes"></span>
+      </div>
+      <div id="d-now" class="card"></div>
+
+      <h3>Variables</h3>
+      <div id="d-groups"></div>
+      <div class="row tight">
+        <label class="row"><input id="d-hp-on" type="checkbox" checked> Hover pitch</label>
+        <label>from <input id="d-hp-lo" type="number" step="1" value="0" style="width:60px"></label>
+        <label>to <input id="d-hp-hi" type="number" step="1" value="60" style="width:60px"></label>
+      </div>
+
+      <h3>Objective</h3>
+      <div class="row">
+        <span class="hint">Hover margin</span>
+        <input id="d-weight" type="range" min="0" max="100" value="50" style="flex:1">
+        <span class="hint">Cruise power</span>
+        <label>Samples <input id="d-samples" type="number" step="50" min="50" max="1000" value="300" style="width:70px"></label>
+        <button id="d-run" class="pill small primary">Optimize</button>
+      </div>
+      <div id="d-progress" class="hint"></div>
+      <div id="d-results"></div>
+    </section>
+
+    <!-- ============================ BATCH ============================ -->
+    <section id="tab-batch" class="tab">
+      <h3>Scenarios <small>· headless runs of the current airframe in a private PX4 instance; the interactive sim keeps running</small></h3>
+      <div id="scenario-list"></div>
+
+      <h3>Jobs</h3>
+      <div id="batch-jobs"><div class="hint">No jobs yet.</div></div>
+
+      <h3>Studies</h3>
+      <div id="study-list"></div>
+      <div id="study-status"></div>
+    </section>
+
+    <!-- ============================ FLIGHT / SIM ============================ -->
+    <section id="tab-sim" class="tab">
+      <h3>Flight mode</h3>
+      <div class="row tight" id="mode-pills">
+        <button class="pill small" data-cmd="mode" data-mode="manual">Manual</button>
+        <button class="pill small" data-cmd="mode" data-mode="stabilized">Stabilized</button>
+        <button class="pill small" data-cmd="mode" data-mode="acro">Acro</button>
+        <button class="pill small" data-cmd="mode" data-mode="altitude">Altitude</button>
+        <button class="pill small" data-cmd="mode" data-mode="position">Position</button>
+        <button class="pill small" data-cmd="mode" data-mode="hold">Hold</button>
+        <button class="pill small" data-cmd="takeoff" data-mode="takeoff">Takeoff</button>
+        <button class="pill small" data-cmd="mode" data-mode="land">Land</button>
+        <button class="pill small" data-cmd="mode" data-mode="rtl">RTL</button>
+        <button class="pill small" data-cmd="mode" data-mode="mission">Mission</button>
+      </div>
+      <div id="px4-messages" class="card"></div>
+
+      <h3>Simulation</h3>
+      <div class="row">
+        <label>Speed <input id="sim-speed" type="number" step="0.5" min="0" value="1" title="0 = as fast as PX4 allows (SITL lockstep)"></label>
+        <label class="row" style="align-self:end;padding-bottom:6px"><input id="sim-noise" type="checkbox" checked> Sensor noise</label>
+      </div>
+      <div class="row">
+        <label title="velocity of the air, m/s, positive toward north: air moving north is a TAILWIND for a vehicle facing north. Enter a negative N for a headwind.">Air vel N <input id="wind-n" type="number" step="0.5" value="0"></label>
+        <label title="velocity of the air toward east, m/s">Air vel E <input id="wind-e" type="number" step="0.5" value="0"></label>
+        <label title="velocity of the air downward, m/s (negative = updraft)">Air vel D <input id="wind-d" type="number" step="0.5" value="0"></label>
+        <span class="hint" style="align-self:end;padding-bottom:6px">headwind for a nose-north vehicle: N &lt; 0</span>
+        <button id="wind-apply" class="pill small">Apply</button>
+      </div>
+      <div class="row">
+        <label>Home lat <input id="home-lat" type="number" step="0.0001"></label>
+        <label>Lon <input id="home-lon" type="number" step="0.0001"></label>
+        <label>Alt <input id="home-alt" type="number" step="1"></label>
+        <button id="home-apply" class="pill small">Apply</button>
+      </div>
+
+      <h3>Nose lift <span class="hint">ground sequence for nose-up hoverers</span></h3>
+      <div id="nl-card" class="card">
+        <div class="hint">Raises the nose with the chosen motors to the hover pitch while PX4 is disarmed, holds it while PX4 arms and spools up, then hands over. Saved with the airframe.</div>
+        <div id="nl-motors" class="row tight"></div>
+        <div class="row">
+          <label title="structural pitch to reach before arming (default: hover pitch)">Target° <input id="nl-target" type="number" step="1" style="width:64px"></label>
+          <label title="how fast the nose rises">Rate °/s <input id="nl-rate" type="number" step="1" value="8" style="width:56px"></label>
+          <label title="idle command for all other motors during the lift, % (0 = off); helps when the front motors alone are marginal">Others idle % <input id="nl-assist" type="number" step="5" min="0" max="60" value="0" style="width:56px"></label>
+          <label class="row" style="align-self:end;padding-bottom:6px" title="the Takeoff button runs the nose lift first"><input id="nl-use" type="checkbox"> Use for Takeoff</label>
+        </div>
+        <div class="row tight">
+          <button id="nl-start" class="pill small primary">Lift nose</button>
+          <button id="nl-stop" class="pill small">Stop</button>
+          <span id="nl-status" class="hint"></span>
+        </div>
+      </div>
+
+      <h3>Motors</h3>
+      <label class="row"><input id="motor-enable" type="checkbox"> Manual override</label>
+      <div id="motor-sliders"></div>
+    </section>
+
+    <!-- ============================ CONNECT ============================ -->
+    <section id="tab-connect" class="tab">
+      <h3>Flight controller</h3>
+      <div id="conn-current" class="card"></div>
+      <div id="conn-error" class="problems"></div>
+
+      <h3>Connect to</h3>
+      <div class="card" id="conn-sitl-card">
+        <div class="conn-row">
+          <div><b>PX4 SITL</b></div>
+          <button class="pill small" id="conn-sitl">Use SITL</button>
+        </div>
+      </div>
+      <div id="conn-ports"></div>
+      <div class="row tight">
+        <button class="pill small" id="conn-rescan">Rescan USB</button>
+        <label class="row">Baud <input id="conn-baud" type="number" value="921600" style="width:96px"></label>
+        <button class="pill small" id="conn-disconnect">Disconnect</button>
+        <button class="pill small" id="conn-reboot" title="Reboot the flight controller; the link reconnects by itself">Reboot board</button>
+      </div>
+
+      <h3>Remote</h3>
+      <div id="joy-card" class="card">
+        <div class="conn-row"><div><b id="joy-name">No radio connected</b><div class="hint" id="joy-hint"></div></div>
+          <button id="joy-connect" class="pill small primary">Connect radio</button></div>
+        <div id="joy-map"></div>
+      </div>
+
+      <h3>HITL checklist</h3>
+      <div id="conn-checklist" class="card"></div>
+    </section>
+    </div>
+    <div class="panel-foot">
+      <button id="btn-update" class="pill primary" title="Write the rotor geometry and output mapping to the flight controller and save it">Update PX4</button>
+      <span id="update-status" class="hint"></span>
+      <span class="panel-spacer"></span>
+      <button id="btn-takeoff" class="pill" title="Automatic takeoff: arms if needed, climbs to MIS_TAKEOFF_ALT, then holds">Takeoff</button>
+      <button id="btn-arm" class="pill">Arm</button>
+    </div>
+  </aside>
+</div>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

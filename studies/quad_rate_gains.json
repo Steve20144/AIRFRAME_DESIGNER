@@ -1,0 +1,16 @@
+{
+  "name": "quad_rate_gains",
+  "description": "PX4 pitch/roll rate gains for the quad_x preset against a gust: minimise attitude excursion and position drift while the wind switches on. Random search over two PX4 parameters.",
+  "airframe": "airframes/quad_x.json",
+  "scenario": "gust",
+  "variables": [
+    {"path": "px4.MC_PITCHRATE_P", "range": [0.06, 0.3]},
+    {"path": "px4.MC_ROLLRATE_P", "range": [0.06, 0.3]}
+  ],
+  "objective": "phases.gust.pos_std_xy + 0.02 * phases.gust.rates_rms_deg_s + 0.05 * phases.gust.pitch_rms_deg",
+  "constraints": ["not metrics.crashed", "ok"],
+  "penalty": 100,
+  "algorithm": {"name": "random", "budget": 12, "seed": 2},
+  "workers": 6,
+  "sim": {"rate": 250, "substeps": 2, "noise": true, "speed": 0}
+}

@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.param_cache/
+*.log
+results/
+.pytest_cache/
+.DS_Store
+/px4_work/
+.gstack/
+airframes/_autosave.json
+*.egg-info/

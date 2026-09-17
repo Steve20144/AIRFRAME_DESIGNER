@@ -1,0 +1,16 @@
+{
+  "name": "gust",
+  "description": "Hover in still air, then a 6 m/s wind from the north switches on: disturbance rejection (position excursion, attitude, motor headroom).",
+  "max_time": 100,
+  "params": {"MIS_TAKEOFF_ALT": 4},
+  "abort": {"max_tilt_deg": 100, "max_alt": 60, "crash_speed": 3.0},
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "takeoff", "alt": 4, "settle": 2, "timeout": 25},
+    {"type": "hold", "name": "hover", "duration": 6},
+    {"type": "wind", "ned": [-6, 0, 0]},
+    {"type": "hold", "name": "gust", "duration": 10},
+    {"type": "wind", "ned": [0, 0, 0]},
+    {"type": "hold", "name": "recover", "duration": 6}
+  ]
+}

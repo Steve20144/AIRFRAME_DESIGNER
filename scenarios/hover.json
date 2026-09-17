@@ -1,0 +1,12 @@
+{
+  "name": "hover",
+  "description": "Arm, take off to 3 m, hold for 10 s. The quickest closed-loop check: does PX4 fly this geometry at all, and how still does it hover?",
+  "max_time": 80,
+  "params": {"MIS_TAKEOFF_ALT": 3},
+  "abort": {"max_tilt_deg": 100, "max_alt": 60, "crash_speed": 3.0},
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "takeoff", "alt": 3, "settle": 2, "timeout": 25},
+    {"type": "hold", "name": "hover", "duration": 10}
+  ]
+}

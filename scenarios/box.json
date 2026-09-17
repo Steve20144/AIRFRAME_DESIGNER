@@ -1,0 +1,17 @@
+{
+  "name": "box",
+  "description": "Position tracking: take off, then fly a 20 m box in offboard position control. Tracking error and time per leg measure how crisply PX4 can move this airframe.",
+  "max_time": 200,
+  "params": {"MIS_TAKEOFF_ALT": 5, "MPC_XY_VEL_MAX": 8},
+  "abort": {"max_tilt_deg": 100, "max_alt": 60, "crash_speed": 3.0},
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "takeoff", "alt": 5, "settle": 2, "timeout": 30},
+    {"type": "hold", "name": "hover", "duration": 4},
+    {"type": "offboard_position", "name": "leg1", "pos": [20, 0, -5], "tolerance": 1.0, "timeout": 30},
+    {"type": "offboard_position", "name": "leg2", "pos": [20, 20, -5], "tolerance": 1.0, "timeout": 30},
+    {"type": "offboard_position", "name": "leg3", "pos": [0, 20, -5], "tolerance": 1.0, "timeout": 30},
+    {"type": "offboard_position", "name": "leg4", "pos": [0, 0, -5], "tolerance": 1.0, "timeout": 30},
+    {"type": "land", "timeout": 40}
+  ]
+}

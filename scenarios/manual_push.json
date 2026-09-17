@@ -1,0 +1,14 @@
+{
+  "name": "manual_push",
+  "description": "Hover, then a full forward stick in Position mode for 5 s as a pilot would: the transient a remote-flown test would show.",
+  "max_time": 100,
+  "params": {"MIS_TAKEOFF_ALT": 5, "COM_RC_IN_MODE": 1},
+  "abort": {"max_tilt_deg": 100, "max_alt": 60, "crash_speed": 3.0},
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "takeoff", "alt": 5, "settle": 2, "timeout": 25},
+    {"type": "hold", "name": "hover", "duration": 4},
+    {"type": "manual", "name": "push", "roll": 0, "pitch": 1.0, "throttle": 0.5, "yaw": 0, "duration": 5, "mode": "position"},
+    {"type": "manual", "name": "release", "roll": 0, "pitch": 0.0, "throttle": 0.5, "yaw": 0, "duration": 6, "mode": "position"}
+  ]
+}
