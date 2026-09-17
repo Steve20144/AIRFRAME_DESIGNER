@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from ..aero import RotorSet, WingSet, BodyAero, RHO
+from .contact import LegContacts
 from ..geometry.airframe import Airframe
 from ..geometry.frames import unit
 from .quaternion import q_from_euler, q_to_rotmat, q_to_euler, q_normalize
@@ -193,9 +194,7 @@ class JSBSimBody:
         self.rotors = RotorSet(rotors, cg)          # thrust curve / spool / torque / ram drag: the project's model
         self.wings = WingSet(airframe.active_wings(), cg)   # only for the breakdown readout (lift, alpha)
         self.body = BodyAero(airframe.body, cg)
-        class _Legs:                                  # what the metrics expect
-            n = len(airframe.active_legs())
-        self.legs = _Legs()
+        self.legs = LegContacts(airframe.active_legs(), cg)   # geometry only (feet relative to the CG); JSBSim does the contact
         n = len(rotors)
         if not hasattr(self, "omega") or len(self.omega) != n:
             self.omega = np.zeros(n); self.cmd = np.zeros(n); self.thrust = np.zeros(n)
