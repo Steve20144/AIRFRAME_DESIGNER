@@ -521,6 +521,16 @@ $('#leg-mirror').addEventListener('click', () => {
   airframe.legs.push(l);
   renderLegTable(); scene.setAirframe(airframe); pushAirframe(true);
 });
+$('#leg-auto-btn').addEventListener('click', async () => {
+  try {
+    await api('/api/airframe', { airframe, keep_state: true });
+    const r = await api('/api/airframe/legs/auto', {});
+    airframe.legs = r.legs; renderLegTable(); scene.setAirframe(airframe);
+    $('#leg-static').textContent = `static sink ${(r.static.compression_m * 100).toFixed(1)} cm · damping ratio ${r.static.zeta.toFixed(2)}`;
+    logLine(`[ui] legs sized for ${airframe.mass.mass} kg: k ${r.legs[0].stiffness} N/m, c ${r.legs[0].damping} N/(m/s)`);
+    markDirty();
+  } catch (e) { logLine('[ui] auto legs: ' + e.message); }
+});
 $('#leg-generate-btn').addEventListener('click', async () => {
   try {
     await api('/api/airframe', { airframe, keep_state: true });   // the generator uses the live airframe's CG

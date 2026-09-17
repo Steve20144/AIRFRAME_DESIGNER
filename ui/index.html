@@ -132,6 +132,8 @@
         <label title="half-size of the foot rectangle, left/right">spread y <input id="lg-sy" type="number" step="0.01" min="0" value="0.2"></label>
         <label title="z of the attachment points relative to the CG (down positive)">attach z <input id="lg-az" type="number" step="0.01" value="0"></label>
         <button id="leg-generate-btn" class="pill small">Generate</button>
+        <button id="leg-auto-btn" class="pill small" title="size every leg's spring and damper from the aircraft mass: 2 cm of static sink under the weight and a damping ratio of 0.8, so it settles without bouncing and the feet stay at the ground">Auto k/c</button>
+        <span id="leg-static" class="hint"></span>
       </div>
 
       <details>

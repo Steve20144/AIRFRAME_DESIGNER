@@ -58,7 +58,7 @@ class Leg:
 
 
 def generate_legs(height: float, spread_x: float, spread_y: float, landed_pitch_deg: float = 0.0,
-                  attach_z: float = 0.0, cg=(0.0, 0.0, 0.0), **kw) -> list[Leg]:
+                  attach_z: float = 0.0, cg=(0.0, 0.0, 0.0), mass: float | None = None, **kw) -> list[Leg]:
     """Four legs whose feet lie on a plane perpendicular to gravity when the airframe stands at
     ``landed_pitch_deg`` nose-up, ``height`` below the CG along the landed 'down'. Attachment points sit at the
     body corners (±spread) at ``attach_z``. This reproduces the schema-1 generated feet."""
@@ -66,6 +66,11 @@ def generate_legs(height: float, spread_x: float, spread_y: float, landed_pitch_
     c, s = math.cos(phi), math.sin(phi)
     cg = np.asarray(cg, float)
     legs = []
+    if mass is not None and "stiffness" not in kw:
+        # size the springs for 2 cm of static sink and a damping ratio of 0.8 (no bouncing)
+        w_leg = mass * 9.80665 / 4.0
+        kw["stiffness"] = round(w_leg / 0.02, 1)
+        kw["damping"] = round(2.0 * 0.8 * math.sqrt(kw["stiffness"] * mass / 4.0), 1)
     for name, (x, y) in zip(("FR", "FL", "RR", "RL"), ((spread_x, spread_y), (spread_x, -spread_y), (-spread_x, spread_y), (-spread_x, -spread_y))):
         foot = cg + np.array([c * x - s * height, y, s * x + c * height])   # landed frame (x, y, h) -> structural
         attach = cg + np.array([x, y, attach_z])

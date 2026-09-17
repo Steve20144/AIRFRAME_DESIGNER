@@ -78,6 +78,31 @@ class Airframe:
     def total_max_thrust(self) -> float:
         return sum(r.effective_max_thrust() for r in self.active_rotors())
 
+    def leg_static(self) -> dict:
+        """Static compression and damping ratio of the landing gear under the vehicle's weight (per leg share)."""
+        legs = self.active_legs()
+        if not legs:
+            return {"compression_m": 0.0, "zeta": 1.0}
+        w_leg = self.mass.mass * G / len(legs)
+        m_leg = self.mass.mass / len(legs)
+        comp = max(w_leg / max(l.stiffness, 1e-9) for l in legs)
+        zeta = min(l.damping / (2.0 * math.sqrt(max(l.stiffness, 1e-9) * m_leg)) for l in legs)
+        return {"compression_m": comp, "zeta": zeta}
+
+    def auto_leg_constants(self, compression_m: float = 0.02, zeta: float = 0.8) -> None:
+        """Size every leg's spring and damper from the mass: ``compression_m`` static sink under the weight and a
+        damping ratio ``zeta`` (0.8 = settles without bouncing). Call after changing mass or legs."""
+        legs = self.active_legs()
+        if not legs:
+            return
+        w_leg = self.mass.mass * G / len(legs)
+        m_leg = self.mass.mass / len(legs)
+        k = w_leg / max(compression_m, 1e-4)
+        c = 2.0 * zeta * math.sqrt(k * m_leg)
+        for l in legs:
+            l.stiffness = round(k, 1)
+            l.damping = round(c, 1)
+
     def estimate_inertia(self, **kw) -> list[float]:
         panels = []
         for w in self.active_wings():
@@ -158,6 +183,13 @@ class Airframe:
             problems.append(f"thrust/weight is {total / (self.mass.mass * G):.2f}, hover will be marginal")
         if len(self.active_legs()) < 3:
             problems.append("fewer than 3 legs: the vehicle cannot stand")
+        else:
+            ls = self.leg_static()
+            if ls["compression_m"] > 0.06:
+                problems.append(f"legs too soft for {self.mass.mass:g} kg: the feet sink {ls['compression_m'] * 100:.0f} cm into the ground under "
+                                f"the weight (stiffness too low). Use 'Auto k/c' on the Legs table or raise the stiffness.")
+            elif ls["zeta"] < 0.3:
+                problems.append(f"legs underdamped (damping ratio {ls['zeta']:.2f}): the vehicle bounces after touchdown. Use 'Auto k/c' or raise the damping.")
         for w in self.active_wings():
             if w.root_chord <= 0 and w.tip_chord <= 0:
                 problems.append(f"wing '{w.name}' has no chord")

@@ -259,10 +259,23 @@ def build_app(state: AppState) -> FastAPI:
     async def legs_generate(body: dict):
         """Four legs from a height below the CG, spreads and the landed pitch (replaces the airframe's legs)."""
         af = sim.airframe
+        kw = {}
+        if body.get("stiffness") is not None:
+            kw["stiffness"] = float(body["stiffness"]); kw["damping"] = float(body.get("damping", 150.0))
         legs = generate_legs(float(body.get("height", 0.2)), float(body.get("spread_x", 0.2)), float(body.get("spread_y", body.get("spread_x", 0.2))),
                              float(body.get("landed_pitch_deg", af.landed_pitch_deg)), float(body.get("attach_z", 0.0)), cg=af.mass.cg,
-                             stiffness=float(body.get("stiffness", 3000.0)), damping=float(body.get("damping", 150.0)))
+                             mass=af.mass.mass, **kw)
         return {"ok": True, "legs": [l.to_dict() for l in legs]}
+
+    @app.post("/api/airframe/legs/auto")
+    async def legs_auto(body: dict | None = None):
+        """Size every leg's spring/damper from the mass (2 cm static sink, damping ratio 0.8 by default)."""
+        body = body or {}
+        af = sim.airframe
+        af.auto_leg_constants(float(body.get("compression_m", 0.02)), float(body.get("zeta", 0.8)))
+        sim.set_airframe(af, keep_state=True)
+        autosave(af)
+        return {"ok": True, "legs": [l.to_dict() for l in af.legs], "static": af.leg_static()}
 
     @app.get("/api/airfoils")
     async def list_airfoils():

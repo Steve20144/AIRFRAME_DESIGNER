@@ -357,8 +357,8 @@
       "tilt_deg": 11.053,
       "cant_deg": 0,
       "foot_radius": 0,
-      "stiffness": 3000,
-      "damping": 150,
+      "stiffness": 18796.1,
+      "damping": 1358.1,
       "friction": 0.8,
       "enabled": true
     },
@@ -373,8 +373,8 @@
       "tilt_deg": 11.053,
       "cant_deg": 0,
       "foot_radius": 0,
-      "stiffness": 3000,
-      "damping": 150,
+      "stiffness": 18796.1,
+      "damping": 1358.1,
       "friction": 0.8,
       "enabled": true
     },
@@ -389,8 +389,8 @@
       "tilt_deg": 9.258,
       "cant_deg": 0,
       "foot_radius": 0,
-      "stiffness": 3000,
-      "damping": 150,
+      "stiffness": 18796.1,
+      "damping": 1358.1,
       "friction": 0.8,
       "enabled": true
     }
