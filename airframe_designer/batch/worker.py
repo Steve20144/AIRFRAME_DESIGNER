@@ -57,7 +57,7 @@ def run_once(airframe, scenario, *, variables: dict | None = None, px4_dir: str 
              speed: float = 0.0, rate: float = 250.0, substeps: int = 2, home: Home | None = None, noise: bool = True,
              seed: int = 1, timeout_wall: float = 600.0, connect_timeout: float = 40.0, log=None, quiet: bool = True,
              px4_model: str = "none_iris", extra_params: dict | None = None, timeseries_path: str | None = None,
-             workdir: str | None = None, task_id: str | None = None) -> dict:
+             workdir: str | None = None, task_id: str | None = None, physics: str = "python") -> dict:
     """Run ``scenario`` on ``airframe`` (path, dict or Airframe), optionally with parameter-path ``variables``
     applied first. Returns {"ok", "status", "failures", "metrics", "timing", "airframe", ...}."""
     t_wall0 = time.perf_counter()
@@ -77,7 +77,7 @@ def run_once(airframe, scenario, *, variables: dict | None = None, px4_dir: str 
     ensure_polars(af)
     sc = scenario if isinstance(scenario, Scenario) else load_scenario(scenario)
     result: dict = {"id": task_id, "ok": False, "status": "error", "airframe_name": af.name, "scenario": sc.name,
-                    "variables": variables or {}, "failures": [], "metrics": {}, "timing": {}}
+                    "variables": variables or {}, "physics": physics, "failures": [], "metrics": {}, "timing": {}}
     if instance is None:
         instance = free_px4_instance(start=1)
     elif not instance_is_free(instance):
@@ -99,7 +99,7 @@ def run_once(airframe, scenario, *, variables: dict | None = None, px4_dir: str 
         link.param_types = {k: (6 if v == "Int32" else 9) for k, v in px4_param_types(px4_dir).items()}
         link.open()
         simr = Simulator(af, link, sensor_rate=rate, physics_substeps=substeps, speed=speed, lockstep=True, home=home,
-                         log=_log, seed=seed)
+                         log=_log, seed=seed, physics=physics)
         simr.sensors.noise.enabled = bool(noise)
         metrics = MetricsRecorder()
         runner = ScenarioRunner(sc, link, log=_log, metrics=metrics)

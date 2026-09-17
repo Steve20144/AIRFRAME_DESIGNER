@@ -160,6 +160,7 @@ def build_app(state: AppState) -> FastAPI:
         s["lockstep"] = sim.lockstep
         s["noise"] = sim.sensors.noise.enabled
         s["paused"] = sim.paused
+        s["physics"] = sim.physics
         return s
 
     @app.get("/api/status")
@@ -642,6 +643,20 @@ def build_app(state: AppState) -> FastAPI:
         sim.motor_override = None if v is None else [float(x) for x in v]
         return {"ok": True}
 
+    @app.post("/api/sim/physics")
+    async def sim_physics(body: dict):
+        """Switch the live physics engine: {"physics": "python" | "jsbsim"}. The vehicle restarts on the ground."""
+        name = str(body.get("physics", "python")).lower()
+        if name not in sim.BACKENDS:
+            return JSONResponse({"ok": False, "error": f"unknown physics '{name}'"}, status_code=400)
+        if link.armed:
+            return JSONResponse({"ok": False, "error": "disarm first"}, status_code=409)
+        try:
+            await run_in_threadpool(sim.set_physics, name)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
+        return {"ok": True, "physics": sim.physics}
+
     @app.post("/api/sim/nose_lift")
     async def sim_nose_lift(body: dict):
         """Start ({"motors": [8, 9], "target_pitch_deg": 25, "rate_deg_s": 8}) or stop ({"stop": true}) the nose-lift
@@ -712,7 +727,8 @@ def build_app(state: AppState) -> FastAPI:
         variables = body.get("variables") or {}
         opts = dict(body.get("options") or {})
         job_id = f"job{int(time.time() * 1000) % 100000000}"
-        job = {"id": job_id, "scenario": scenario, "variables": variables, "running": True, "t0": time.time(), "result": None, "log": []}
+        job = {"id": job_id, "scenario": scenario, "variables": variables, "physics": str(opts.get("physics", "python")), "running": True,
+               "t0": time.time(), "result": None, "log": []}
         state.batch_jobs[job_id] = job
         if len(state.batch_jobs) > 50:
             for k in list(state.batch_jobs)[:-50]:
@@ -721,7 +737,7 @@ def build_app(state: AppState) -> FastAPI:
         def run():
             try:
                 r = run_once(af, scenario, variables=variables, px4_dir=state.args.px4_dir, log=lambda s: job["log"].append(s),
-                             quiet=True, **{k: v for k, v in opts.items() if k in ("speed", "rate", "substeps", "noise", "seed", "timeout_wall")})
+                             quiet=True, **{k: v for k, v in opts.items() if k in ("speed", "rate", "substeps", "noise", "seed", "timeout_wall", "physics")})
                 r.pop("airframe", None)
                 job["result"] = r
             except Exception as e:

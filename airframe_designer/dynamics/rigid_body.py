@@ -112,12 +112,13 @@ class RigidBody:
         dv = (self.vel - vel_before) / dt
         dv[2] -= G
         self.accel_body = R.T @ dv
-        # damp residual contact jitter when parked with the motors idle. Only when truly idle (motors below 3% of
-        # the weight): a slow ground manoeuvre such as a nose lift must not be touched, and the damping is kept out
-        # of the accelerometer reading above (a halved velocity would otherwise read as a large fake acceleration)
-        if on_ground and (self.vel @ self.vel) < 0.0025 and (self.rates @ self.rates) < 0.0025 and thrust.sum() < 0.03 * self.mass * G:
-            self.vel = self.vel * 0.5
-            self.rates = self.rates * 0.5
+        # A numerical deadband only: when parked with the motors idle and the motion is below 1 mm/s and 0.06 deg/s,
+        # zero it so the vehicle does not drift on friction noise. (The previous version halved anything below
+        # 5 cm/s every step, which acted as a huge damper and left soft-legged aircraft parked far above their
+        # spring equilibrium, a discrepancy the JSBSim cross-check exposed.)
+        if on_ground and (self.vel @ self.vel) < 1e-6 and (self.rates @ self.rates) < 1e-6 and thrust.sum() < 0.03 * self.mass * G:
+            self.vel = self.vel * 0.0
+            self.rates = self.rates * 0.0
         self.thrust = thrust
         self.on_ground = on_ground
         self.feet_down = feet

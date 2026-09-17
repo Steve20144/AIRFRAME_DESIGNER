@@ -7,6 +7,7 @@ A PX4-in-the-loop aircraft design simulator. Python 3.12, venv at `.venv` (`.ven
 * Interactive app (3D editor, PX4 SITL/HITL, USB remote): `.venv/bin/python -m airframe_designer ui`
   → http://127.0.0.1:8080. **Instance 0 / port 8080 may already be in use by a running session: never kill it.**
 * Headless: `.venv/bin/python -m airframe_designer run --airframe airframes/atlas_08.json --scenario hover --out r.json`
+  (`--physics jsbsim` runs the same flight on JSBSim; `compare` runs both and diffs them)
 * Parallel / studies: `batch --tasks t.json --workers 6`, `study --spec studies/<name>.json`. See docs/AI_GUIDE.md.
 * Tests: `.venv/bin/python -m pytest -q` (the `px4` marked test boots a real PX4 on instance 8, ~15 s).
 * Static analysis: `.venv/bin/python -m airframe_designer analyse --airframe X`.
@@ -17,7 +18,7 @@ airframe_designer/
   geometry/   mass (CG, inertia), propulsion (rotors), wings, gear (legs), body, airframe (composition, schema
               migration, PX4 export, hover check), paths (parameter-path addressing)
   aero/       strip-theory wings, rotor thrust/torque/ram drag, body drag, fastmath
-  dynamics/   quaternion, per-leg contact, rigid body about the CG
+  dynamics/   quaternion, per-leg contact, rigid body about the CG, jsbsim_backend (JSBSim as an alternative engine)
   sensors/    IMU/mag/baro/GPS -> HIL messages
   px4/        link (MAVLink SITL/HITL), sitl (process, BSON param seeding, instances), connection (runtime SITL<->HITL),
               events, param_meta

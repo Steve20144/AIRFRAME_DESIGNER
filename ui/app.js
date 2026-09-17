@@ -926,6 +926,10 @@ $('#btn-follow').addEventListener('click', (e) => {
   scene.setCameraMode(camMode);
 });
 $('#sim-speed').addEventListener('change', e => api('/api/sim/speed', { speed: parseFloat(e.target.value) }));
+$('#sim-physics').addEventListener('change', async e => {
+  try { const r = await api('/api/sim/physics', { physics: e.target.value }); logLine('[ui] physics engine: ' + r.physics); }
+  catch (err) { logLine('[ui] physics switch failed: ' + err.message); }
+});
 $('#sim-noise').addEventListener('change', e => api('/api/sim/noise', { enabled: e.target.checked }));
 $('#wind-apply').addEventListener('click', () => api('/api/sim/wind', { north: +$('#wind-n').value, east: +$('#wind-e').value, down: +$('#wind-d').value }));
 $('#home-apply').addEventListener('click', () => api('/api/sim/home', { lat: +$('#home-lat').value, lon: +$('#home-lon').value, alt: +$('#home-alt').value }));
@@ -959,7 +963,8 @@ let homeFilled = false;
 function applyStatus(s) {
   status = s;
   const none = !s.conn_mode;
-  $('#st-mode').textContent = none ? 'No link' : (s.mode === 'hitl' ? 'Pixhawk' : 'SITL');
+  $('#st-mode').textContent = (none ? 'No link' : (s.mode === 'hitl' ? 'Pixhawk' : 'SITL')) + (s.physics === 'jsbsim' ? ' · JSBSim' : '');
+  if (s.physics && document.activeElement !== $('#sim-physics')) $('#sim-physics').value = s.physics;
   $('#st-conn').textContent = s.paused ? 'PAUSED — PX4 gets no data, press Resume' : none ? (s.conn_error ? 'failed — open Connect' : 'open Connect')
     : s.connected ? (s.mode === 'hitl' ? s.address.replace('/dev/', '') + (s.hil_enabled ? '' : ' · HITL off') : 'PX4 connected')
     : (s.mode === 'sitl' ? (s.px4_running ? 'PX4 starting…' : 'waiting for PX4') : 'no data from ' + s.address.replace('/dev/', ''));
@@ -1434,23 +1439,54 @@ async function loadScenarios() {
   } catch (e) { el.innerHTML = `<div class="hint">${esc(e.message)}</div>`; return; }
   el.innerHTML = scenariosCache.length ? scenariosCache.map(s => `<div class="card sc"><div class="conn-row"><div><b>${esc(s.name)}</b> <span class="hint mono">${esc(s.file)}</span>
       <div class="hint">${esc(s.description || '')}</div><div class="phases">${(s.phases || []).map(p => `<span class="phase">${esc(p)}</span>`).join('')}</div></div>
-      <button class="pill small primary" data-run="${esc(s.file)}">Run headless</button></div></div>`).join('')
+      <div class="row tight"><select class="sc-physics" data-sc="${esc(s.file)}" title="physics engine for this headless run"><option value="python">Python</option><option value="jsbsim">JSBSim</option></select>
+      <button class="pill small primary" data-run="${esc(s.file)}">Run headless</button>
+      <button class="pill small" data-compare="${esc(s.file)}" title="run this scenario on BOTH engines and show the differences">Compare physics</button></div></div></div>`).join('')
     : '<div class="hint">No scenarios in scenarios/.</div>';
+  const start = async (file, physics) => {
+    await api('/api/airframe', { airframe, keep_state: true });   // the job copies the live airframe
+    const r = await api('/api/batch/run', { scenario: file.replace(/\.json$/, ''), options: { physics } });
+    logLine(`[batch] started ${r.id} (${file}, ${physics})`);
+    return r.id;
+  };
   $$('#scenario-list button[data-run]').forEach(b => b.addEventListener('click', async () => {
     b.disabled = true; b.textContent = 'Starting…';
-    try {
-      await api('/api/airframe', { airframe, keep_state: true });   // the job copies the live airframe
-      const r = await api('/api/batch/run', { scenario: b.dataset.run.replace(/\.json$/, ''), options: {} });
-      logLine(`[batch] started ${r.id} (${b.dataset.run})`);
-      pollJobs();
-    } catch (e) { logLine('[batch] ' + e.message); }
+    const physics = ($(`.sc-physics[data-sc="${b.dataset.run}"]`) || {}).value || 'python';
+    try { await start(b.dataset.run, physics); pollJobs(); } catch (e) { logLine('[batch] ' + e.message); }
     b.disabled = false; b.textContent = 'Run headless';
   }));
+  $$('#scenario-list button[data-compare]').forEach(b => b.addEventListener('click', async () => {
+    b.disabled = true; b.textContent = 'Starting…';
+    try { const a = await start(b.dataset.compare, 'python'); const c = await start(b.dataset.compare, 'jsbsim'); comparePairs.push([a, c]); pollJobs(); }
+    catch (e) { logLine('[batch] ' + e.message); }
+    b.disabled = false; b.textContent = 'Compare physics';
+  }));
+}
+const comparePairs = [];   // [pythonJobId, jsbsimJobId] pairs started by "Compare physics"
+const CMP_KEYS = ['alt_mean', 'alt_std', 'pos_std_xy', 'pos_drift', 'speed_mean', 'roll_rms_deg', 'pitch_rms_deg', 'pitch_mean_deg', 'yaw_drift_deg', 'rates_rms_deg_s', 'util_max', 'power_mean', 'lift_share_mean', 'time_to_alt', 'time_to_pitch'];
+function renderCompare(jobs) {
+  const el = $('#batch-compare'); if (!el) return;
+  const byId = Object.fromEntries(jobs.map(j => [j.id, j]));
+  const done = comparePairs.filter(([a, c]) => byId[a] && byId[c] && !byId[a].running && !byId[c].running);
+  if (!done.length) { el.innerHTML = comparePairs.length ? '<div class="hint">comparison running…</div>' : ''; return; }
+  const [a, c] = done[done.length - 1]; const ra = byId[a].result || {}, rc = byId[c].result || {};
+  const pa = (ra.metrics || {}).phases || {}, pc = (rc.metrics || {}).phases || {};
+  const f = (v) => (typeof v === 'number' ? v.toFixed(3) : (v == null ? '—' : String(v)));
+  let html = `<h4>Python vs JSBSim · ${esc(ra.scenario || '')} <span class="hint">python ${ra.ok ? 'ok' : 'FAILED'} · jsbsim ${rc.ok ? 'ok' : 'FAILED'}</span></h4><table class="grid"><thead><tr><th>phase</th><th>metric</th><th class="num">python</th><th class="num">jsbsim</th><th class="num">delta</th></tr></thead><tbody>`;
+  for (const ph of new Set([...Object.keys(pa), ...Object.keys(pc)])) {
+    if (ph === 'wait_ready') continue;
+    for (const k of CMP_KEYS) {
+      const x = (pa[ph] || {})[k], y = (pc[ph] || {})[k]; if (x == null && y == null) continue;
+      const d = (typeof x === 'number' && typeof y === 'number') ? y - x : null;
+      html += `<tr><td>${esc(ph)}</td><td>${k.replace(/_/g, ' ')}</td><td class="num">${f(x)}</td><td class="num">${f(y)}</td><td class="num ${d != null && Math.abs(d) > 0.2 * Math.max(Math.abs(x), 1e-9) && Math.abs(d) > 0.02 ? 'warn' : ''}">${d == null ? '—' : (d >= 0 ? '+' : '') + d.toFixed(3)}</td></tr>`;
+    }
+  }
+  el.innerHTML = html + '</tbody></table>';
 }
 async function pollJobs() {
   clearTimeout(batchTimer);
   if (!$('#tab-batch').classList.contains('active')) return;
-  try { const r = await api('/api/batch/jobs'); lastJobs = r; renderJobs(r); } catch (e) { $('#batch-jobs').innerHTML = `<div class="hint">${esc(e.message)}</div>`; }
+  try { const r = await api('/api/batch/jobs'); lastJobs = r; renderJobs(r); renderCompare(r.jobs || []); } catch (e) { $('#batch-jobs').innerHTML = `<div class="hint">${esc(e.message)}</div>`; }
   batchTimer = setTimeout(pollJobs, 1500);
 }
 function phaseSummary(res) {
@@ -1480,11 +1516,11 @@ function renderJobs(r) {
     const simT = t.sim_s ?? res.sim_time;
     const open = jobsOpen.has(j.id);
     const fails = (res.failures || []).length ? `<div class="err small">${(res.failures || []).map(esc).join('<br>')}</div>` : '';
-    const detail = open ? `<tr class="detail"><td colspan="7">${j.running ? `<pre class="joblog">${(j.log || []).map(esc).join('\n')}</pre>` : `<pre class="joblog">${esc(JSON.stringify({ metrics: res.metrics, timing: res.timing, failures: res.failures, px4_params_verified: res.px4_params_verified, log: j.log }, null, 1))}</pre>`}</td></tr>` : '';
-    return `<tr data-job="${esc(j.id)}" class="${open ? 'open' : ''}"><td class="idx mono">${esc(j.id)}</td><td>${esc(j.scenario)}</td><td>${st}</td><td class="num">${mnum(simT, 1)} s</td><td class="num">${mnum(wall, 0)} s</td><td class="num">${t.rtf != null ? mnum(t.rtf, 1) : '—'}</td>
+    const detail = open ? `<tr class="detail"><td colspan="8">${j.running ? `<pre class="joblog">${(j.log || []).map(esc).join('\n')}</pre>` : `<pre class="joblog">${esc(JSON.stringify({ metrics: res.metrics, timing: res.timing, failures: res.failures, px4_params_verified: res.px4_params_verified, log: j.log }, null, 1))}</pre>`}</td></tr>` : '';
+    return `<tr data-job="${esc(j.id)}" class="${open ? 'open' : ''}"><td class="idx mono">${esc(j.id)}</td><td>${esc(j.scenario)}</td><td>${esc(j.physics || 'python')}</td><td>${st}</td><td class="num">${mnum(simT, 1)} s</td><td class="num">${mnum(wall, 0)} s</td><td class="num">${t.rtf != null ? mnum(t.rtf, 1) : '—'}</td>
       <td class="metrics">${j.running ? `<span class="hint">${esc((j.log || []).slice(-1)[0] || 'starting…')}</span>` : phaseSummary(res) + fails}</td></tr>` + detail;
   }).join('');
-  el.innerHTML = `<table class="grid jobs"><thead><tr><th>Job</th><th>Scenario</th><th>Status</th><th title="simulated time">Sim</th><th title="wall-clock time">Wall</th><th title="real-time factor">RTF</th><th>Metrics</th></tr></thead><tbody>${rows}</tbody></table>`;
+  el.innerHTML = `<table class="grid jobs"><thead><tr><th>Job</th><th>Scenario</th><th title="physics engine">Physics</th><th>Status</th><th title="simulated time">Sim</th><th title="wall-clock time">Wall</th><th title="real-time factor">RTF</th><th>Metrics</th></tr></thead><tbody>${rows}</tbody></table>`;
   $$('#batch-jobs tr[data-job]').forEach(tr => tr.addEventListener('click', () => { const id = tr.dataset.job; if (jobsOpen.has(id)) jobsOpen.delete(id); else jobsOpen.add(id); if (lastJobs) renderJobs(lastJobs); }));
 }
 

@@ -89,6 +89,13 @@ the metrics, constraints and an algorithm (random / grid / CMA-ES / Nelder-Mead)
 [docs/AI_GUIDE.md](docs/AI_GUIDE.md) is the full contract for scripts and AI agents;
 [docs/SCHEMA.md](docs/SCHEMA.md) documents the airframe file and the parameter-path syntax.
 
+## Two physics engines
+
+The default is the project's own rigid body. Any run can instead use **JSBSim** (`--physics jsbsim`, or the Physics
+selector on the Flight tab): the same airframe is exported as a JSBSim aircraft (mass, feet, one force per rotor,
+wing/body coefficient tables) so the two engines can be compared on the same flight with
+`airframe-designer compare` or the Batch tab's Compare physics button. See docs/AI_GUIDE.md.
+
 ## Physics
 
 * 6-DOF rigid body about the CG (inertia tensor with products), semi-implicit Euler at 500-1000 Hz, quaternion attitude.

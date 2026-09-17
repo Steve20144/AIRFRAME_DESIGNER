@@ -179,3 +179,24 @@ per section). At run time every strip looks up its section at its own angle of a
 and the induced drag added, so `oswald` still matters. Stall and the post-stall flat plate come from the polar's
 valid range. `POST /api/airfoil/polar {"name": "naca23006"}` builds a polar and returns CL max, stall angle, CD min
 and L/D max; `GET /api/airfoils` lists what is cached.
+
+## Two physics engines, and comparing them
+
+Every flight can run on the project's Python rigid body (default) or on **JSBSim**, the open-source flight
+dynamics model behind FlightGear and ArduPilot SITL (`--physics jsbsim` on `run`/`batch`, `"physics": "jsbsim"` in
+a study, the Physics selector on the Flight tab, or per job in the Batch tab). JSBSim gets the same airframe: a
+generated aircraft model with the mass and inertia, the feet as ground contacts, one external force per rotor at
+its position along its thrust axis (so JSBSim computes the moment arms itself), and the wing/body aerodynamics as
+coefficient tables sampled from this project's aero models. Rotor spool-up, thrust curve, reaction torque and
+intake ram drag stay the project's own model and are injected each step. A difference between the two engines
+therefore points at integration, frames, moment arms, ground contact or gravity, not at the coefficient data.
+
+```bash
+.venv/bin/python -m airframe_designer compare --airframe airframes/quad_x.json --scenario hover --out cmp.json
+```
+
+prints both runs' per-phase metrics side by side with deltas and the RMS/max differences of the state histories
+(altitude, speed, attitude, rates, thrust); the Batch tab's **Compare physics** button does the same for the live
+design. Reference numbers for the quad preset in hover: altitude 7 mm RMS, thrust 0.06 N, attitude ~0.2 degrees.
+The cross-check already found and fixed one real defect (a rest-damping hack that parked soft-legged aircraft
+25 cm above their spring equilibrium).

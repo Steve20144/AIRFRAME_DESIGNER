@@ -24,12 +24,15 @@ from ..sensors import SensorSuite, Home
 class Simulator:
     def __init__(self, airframe: Airframe, link=None, sensor_rate: float = 250.0, physics_substeps: int = 4,
                  gps_rate: float = 10.0, speed: float = 1.0, lockstep: bool | None = None,
-                 home: Home | None = None, log: Callable[[str], None] | None = None, seed: int = 1):
+                 home: Home | None = None, log: Callable[[str], None] | None = None, seed: int = 1,
+                 physics: str = "python"):
         self.link = link
         self.log = log or (lambda s: print(s, flush=True))
         self.lock = threading.RLock()
         self.airframe = airframe
-        self.sim = RigidBody(airframe)
+        self.physics = "python"
+        self.home = home or Home()
+        self.sim = self._make_body(airframe, physics)
         self.sensors = SensorSuite(home=home, seed=seed)
         self.sensor_rate = float(sensor_rate)
         self.substeps = max(1, int(physics_substeps))
@@ -58,6 +61,33 @@ class Simulator:
         self._last_hb = 0.0
         self._rtf_t0, self._rtf_sim0 = time.perf_counter(), 0
 
+    # ------------------------------------------------------------ backends
+    BACKENDS = ("python", "jsbsim")
+
+    def _make_body(self, airframe: Airframe, physics: str):
+        physics = (physics or "python").lower()
+        if physics == "jsbsim":
+            from ..dynamics.jsbsim_backend import JSBSimBody
+            body = JSBSimBody(airframe, home_alt_m=self.home.alt, lat_deg=self.home.lat, lon_deg=self.home.lon, log=self.log)
+        elif physics == "python":
+            body = RigidBody(airframe)
+        else:
+            raise ValueError(f"unknown physics backend '{physics}' (python, jsbsim)")
+        self.physics = physics
+        return body
+
+    def set_physics(self, physics: str) -> None:
+        """Swap the physics engine under the running loop (the vehicle restarts on the ground)."""
+        with self.lock:
+            wind = self.sim.wind_ned.copy()
+            self.sim = self._make_body(self.airframe, physics)
+            self.sim.wind_ned = wind
+            self.sim.reset()
+            self.nose_lift = None
+            if self.link is not None:
+                self.link.clear_actuators()
+            self.log(f"[sim] physics backend: {self.physics}")
+
     # ------------------------------------------------------------ control
     @property
     def t(self) -> float:
@@ -82,9 +112,13 @@ class Simulator:
     def set_airframe(self, airframe: Airframe, keep_state: bool = True) -> None:
         with self.lock:
             self.airframe = airframe
-            self.sim.set_airframe(airframe)
-            if not keep_state:
-                self.sim.reset()
+            if self.physics == "jsbsim":
+                # JSBSim reloads its model; the vehicle restarts on the ground
+                self.sim = self._make_body(airframe, "jsbsim"); self.sim.reset()
+            else:
+                self.sim.set_airframe(airframe)
+                if not keep_state:
+                    self.sim.reset()
 
     def set_link(self, link, lockstep: bool) -> None:
         with self.lock:
@@ -268,5 +302,6 @@ class Simulator:
                 "diverged": self.diverged,
                 "motor_override": self.motor_override, "wind": s.wind_ned.tolist(),
                 "rotor_health": s.rotors.scale.tolist(),
+                "physics": self.physics,
                 "nose_lift": self.nose_lift.status() if self.nose_lift is not None else self.nose_lift_last,
             }
