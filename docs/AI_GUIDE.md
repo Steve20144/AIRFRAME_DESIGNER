@@ -200,3 +200,28 @@ prints both runs' per-phase metrics side by side with deltas and the RMS/max dif
 design. Reference numbers for the quad preset in hover: altitude 7 mm RMS, thrust 0.06 N, attitude ~0.2 degrees.
 The cross-check already found and fixed one real defect (a rest-damping hack that parked soft-legged aircraft
 25 cm above their spring equilibrium).
+
+## Driving it from ChatGPT or another assistant
+
+Everything above is plain HTTP and CLI, so any assistant that can call a tool can do what Claude Code does here.
+Three ways, from most to least capable:
+
+1. **MCP server** (ChatGPT connectors, Claude Desktop, Cursor, Codex, any MCP client). Start it with
+   `.venv/bin/python -m airframe_designer.mcp_server` (stdio) or `... --http 8765` (streamable HTTP at
+   `http://127.0.0.1:8765/mcp`). It exposes tools: `get_status`, `get_airframe`, `list_paths`, `set_parameters`
+   (edit by parameter path, optionally push to PX4 and save), `load_airframe`, `px4_command`, `sim_control`
+   (reset/pause/speed/physics/wind), `nose_lift`, `list_scenarios`, `analyse`, `run_scenario`, `compare_physics`,
+   `run_study`, plus the guide and schema as resources. The live tools need the app running (URL in `AFD_APP_URL`,
+   default `http://127.0.0.1:8081`); the headless ones run their own PX4. ChatGPT reaches a *local* server only
+   through a public HTTPS tunnel (e.g. `ngrok http 8765`, then add the tunnel URL + `/mcp` as a connector in
+   ChatGPT's settings, developer mode). Claude Desktop / Cursor / Codex take the stdio command directly in their
+   MCP configuration, e.g.
+   `{"mcpServers": {"airframe-designer": {"command": "/Users/you/AIRFRAME_DESIGNER/.venv/bin/python", "args": ["-m", "airframe_designer.mcp_server"]}}}`.
+2. **Custom GPT with Actions.** The app publishes its OpenAPI description at `http://127.0.0.1:8081/openapi.json`.
+   Put a tunnel in front of port 8081, import that schema as the GPT's Action, and the GPT can call the same
+   endpoints (`POST /api/airframe/apply_variables`, `POST /api/px4/push`, `POST /api/batch/run`, ...).
+3. **A shell agent** (OpenAI Codex CLI, Claude Code, aider): point it at this repository; `AGENTS.md` / `CLAUDE.md`
+   tell it how to run headless flights and studies from the command line.
+
+The app has no authentication: only expose it through a tunnel while you use it, and never on a public URL you
+leave running.

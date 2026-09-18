@@ -219,7 +219,11 @@ def main(argv=None) -> int:
     sub.add_parser("scenarios", help="list bundled scenarios")
     p = sub.add_parser("migrate", help="convert a schema-1 airframe"); p.add_argument("src"); p.add_argument("dst")
     sub.add_parser("ui", help="interactive app (all further arguments go to it)")
+    sub.add_parser("mcp", help="MCP server for AI assistants: `mcp` = stdio, `mcp --http [port]` = streamable HTTP")
 
+    if argv and argv[0] == "mcp":
+        from .mcp_server import main as mcp_main
+        return mcp_main(argv[1:])
     if argv and argv[0] == "ui":
         return cmd_ui(None, argv[1:])
     if not argv:

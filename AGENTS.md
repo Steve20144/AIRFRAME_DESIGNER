@@ -1,4 +1,4 @@
-# AIRFRAME_DESIGNER — notes for AI agents working in this repo
+# AIRFRAME_DESIGNER — notes for AI agents (Codex, ChatGPT, Claude, Cursor) working in this repo
 
 A PX4-in-the-loop aircraft design simulator. Python 3.12, venv at `.venv` (`.venv/bin/python`). PX4 SITL is built at
 `~/PX4-Autopilot/build/px4_sitl_default` (v1.18). No build step for the UI (vanilla JS + vendored three.js).

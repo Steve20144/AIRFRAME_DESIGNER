@@ -46,6 +46,8 @@ cd ~/PX4-Autopilot && make px4_sitl_default     # cmake, ninja, ccache from Home
 .venv/bin/python -m airframe_designer ui                       # PX4 SITL started for you, UI on http://127.0.0.1:8080
 .venv/bin/python -m airframe_designer ui --mode auto           # Pixhawk over USB if plugged in (HITL), else SITL
 .venv/bin/python -m airframe_designer ui --airframe airframes/plane_quad.json --speed 0
+.venv/bin/python -m airframe_designer mcp                      # MCP server (stdio) so ChatGPT/Claude/Cursor/Codex can edit + simulate
+.venv/bin/python -m airframe_designer mcp --http 8765          # same over HTTP at /mcp (tunnel it for ChatGPT); see docs/AI_GUIDE.md
 ```
 
 * **Geometry** tab: mass & CG, rotors (drag in 3D: `W` move, `E` rotate the thrust axis), motors, wings table,
