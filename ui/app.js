@@ -1111,6 +1111,45 @@ $('#conn-sitl').addEventListener('click', async () => { await connCall('/api/con
 $('#conn-rescan').addEventListener('click', refreshConnection);
 $('#conn-disconnect').addEventListener('click', async () => { await connCall('/api/connection/disconnect', {}); });
 $('#conn-reboot').addEventListener('click', async () => { if (confirm('Reboot the flight controller? The link reconnects by itself.')) { await api('/api/px4/command', { command: 'reboot' }); setTimeout(refreshConnection, 3000); } });
+
+// ---- USB passthrough. Only WSL needs this: elsewhere the board is already a serial port.
+let usbAvailable = false;          // set by refreshUsb; true only under WSL with usbipd-win installed
+function noControllerHint() {
+  return usbAvailable
+    ? 'WSL has no USB of its own. Plug the Pixhawk into Windows, then click Attach USB below.'
+    : 'Plug the Pixhawk in over USB and click Rescan. If QGroundControl is open, close it or disable its serial auto-connect.';
+}
+async function refreshUsb() {
+  const btn = $('#conn-attach-usb'), hint = $('#conn-usb-hint');
+  let s;
+  try { s = await api('/api/usb'); } catch { s = { available: false }; }
+  if (s.available !== usbAvailable) {
+    // The ports card renders before this answer arrives, so fix its wording rather than wait for the next scan.
+    usbAvailable = !!s.available;
+    const h = $('#conn-ports .hint'); if (h) h.textContent = noControllerHint();
+  }
+  if (!s.available) { btn.hidden = true; hint.hidden = true; return; }
+  btn.hidden = false;
+  btn.textContent = s.attached ? 'Detach USB' : 'Attach USB';
+  btn.dataset.act = s.attached ? 'detach' : 'attach';
+  btn.classList.toggle('primary', !s.attached && s.candidates.length > 0);
+  hint.hidden = false;
+  hint.textContent = s.summary + (s.needs_bind ? ' · needs one admin bind first' : '');
+}
+$('#conn-attach-usb').addEventListener('click', async (e) => {
+  const btn = e.target, detach = btn.dataset.act === 'detach';
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = detach ? 'Detaching…' : 'Attaching…';
+  try {
+    const r = await api(detach ? '/api/usb/detach' : '/api/usb/attach', {});
+    $('#conn-usb-hint').hidden = false;
+    $('#conn-usb-hint').textContent = r.message + (r.hint ? ' ' + r.hint : '');
+    if (r.ok && !detach) await connCall('/api/connection/connect', { mode: 'hitl' });
+  } finally {
+    btn.disabled = false; btn.textContent = was;
+    await refreshUsb(); await refreshConnection();
+  }
+});
 // ---- PX4 messages (decoded events) in the Flight tab
 let eventsTimer = null;
 async function refreshEvents() {
@@ -1157,6 +1196,7 @@ async function connCall(path, body) {
 async function refreshConnection() {
   clearTimeout(connTimer);
   if (!$('#tab-connect').classList.contains('active')) return;
+  refreshUsb();                      // WSL only; hides itself everywhere else
   let c;
   try { c = await api('/api/connection'); } catch (e) { $('#conn-error').textContent = e.message; return; }
   const L = c.link;
@@ -1172,7 +1212,7 @@ async function refreshConnection() {
       <div><b>${p.likely_px4 ? 'Pixhawk' : 'Serial device'}</b> <span class="hint">${p.description || ''}</span><div class="dev">${p.device}</div></div>
       <button class="pill small ${p.likely_px4 ? 'primary' : ''}" data-dev="${p.device}">${c.mode === 'hitl' && c.serial === p.device ? 'Reconnect' : 'Connect'}</button>
     </div></div>`).join('')
-    : '<div class="card"><div class="conn-row"><div><b>No USB flight controller found</b><div class="hint">Plug the Pixhawk in over USB and click Rescan. If QGroundControl is open, close it or disable its serial auto-connect.</div></div></div></div>';
+    : `<div class="card"><div class="conn-row"><div><b>No USB flight controller found</b><div class="hint">${noControllerHint()}</div></div></div></div>`;
   $$('#conn-ports button[data-dev]').forEach(b => b.addEventListener('click', () => connectHitl(b.dataset.dev)));
   const steps = c.checklist || [];
   $('#conn-checklist').innerHTML = steps.map(s => `<div class="check ${s.ok ? 'ok' : ''}"><div class="mark">${s.ok ? '✓' : ''}</div>

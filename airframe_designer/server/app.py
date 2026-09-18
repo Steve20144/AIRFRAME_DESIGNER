@@ -426,6 +426,38 @@ def build_app(state: AppState) -> FastAPI:
     async def enable_hitl():
         return await run_in_threadpool(state.conn.enable_hitl)
 
+    # ---- USB passthrough (WSL only): the board is a Windows COM port until usbipd hands it over
+    @app.get("/api/usb")
+    async def usb_status():
+        from ..px4.usbip import status
+        return await run_in_threadpool(status)
+
+    @app.post("/api/usb/attach")
+    async def usb_attach(body: dict | None = None):
+        from ..px4.usbip import attach
+        r = await run_in_threadpool(attach, (body or {}).get("busid"))
+        state.log("[usb] " + str(r.get("message", "")))
+        if r.get("hint"):
+            state.log("[usb] " + r["hint"])
+        if r.get("ok"):
+            # The tty takes a moment to enumerate after usbipd hands the device over, and the UI connects to it
+            # straight after this returns. Wait for it here rather than let that connect fail on an empty scan.
+            def wait_for_port(deadline: float = 6.0) -> None:
+                t0 = time.time()
+                while time.time() - t0 < deadline:
+                    if any(pt.get("likely_px4") for pt in state.conn.list_ports_cached(0.0)):
+                        return
+                    time.sleep(0.25)
+            await run_in_threadpool(wait_for_port)
+        return r
+
+    @app.post("/api/usb/detach")
+    async def usb_detach(body: dict | None = None):
+        from ..px4.usbip import detach
+        r = await run_in_threadpool(detach, (body or {}).get("busid"))
+        state.log("[usb] " + str(r.get("message", "")))
+        return r
+
     @app.post("/api/firmware/build")
     async def firmware_build(body: dict | None = None):
         return await run_in_threadpool(state.conn.build_firmware, (body or {}).get("target"))

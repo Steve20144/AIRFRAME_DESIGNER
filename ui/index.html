@@ -309,7 +309,9 @@
         <label class="row">Baud <input id="conn-baud" type="number" value="921600" style="width:96px"></label>
         <button class="pill small" id="conn-disconnect">Disconnect</button>
         <button class="pill small" id="conn-reboot" title="Reboot the flight controller; the link reconnects by itself">Reboot board</button>
+        <button class="pill small" id="conn-attach-usb" hidden title="WSL has no USB of its own: hand the flight controller over from Windows so it appears as a serial port here">Attach USB</button>
       </div>
+      <div class="hint" id="conn-usb-hint" hidden></div>
 
       <h3>Remote</h3>
       <div id="joy-card" class="card">

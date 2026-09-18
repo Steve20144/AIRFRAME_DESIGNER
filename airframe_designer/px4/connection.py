@@ -5,6 +5,10 @@ Also owns the PX4 SITL child process and the HITL readiness checklist the UI sho
 from __future__ import annotations
 
 import glob
+try:
+    import grp                       # POSIX only; the hint degrades gracefully without it
+except ImportError:
+    grp = None
 import os
 import re
 import signal
@@ -21,8 +25,37 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 
 # USB vendor ids commonly seen on PX4 flight controllers
 PX4_VENDORS = {0x26AC: "3D Robotics", 0x1209: "PX4/pid.codes", 0x3162: "Holybro", 0x2DAE: "CubePilot",
-               0x0483: "STMicro (bootloader)", 0x35A7: "Auterion", 0x1FC9: "NXP", 0x27AC: "PX4"}
+               0x0483: "STMicro (bootloader)", 0x35A7: "Auterion", 0x1FC9: "NXP", 0x27AC: "PX4",
+               # Observed on a Pixhawk 6X Pro, whose product string reads "Auterion PX4 FMU v6X.x". Windows shows
+               # only "USB Serial Device (COMn)" until something reads the descriptors, so on the usbipd side the
+               # vendor id is the only thing that identifies a flight controller.
+               0x3185: "Auterion"}
 PX4_HINTS = re.compile(r"px4|pixhawk|fmu|cube|holybro|ardupilot|auterion|autopilot", re.I)
+
+
+def serial_open_hint(device: str, err: Exception) -> str:
+    """Why a serial port would not open, said precisely enough to act on.
+
+    "Permission denied" has two unrelated causes wanting opposite responses. Another process holding the port is
+    the usual one on macOS and Windows. On Linux, and so on every WSL install, the likelier one is that the device
+    is mode 0660 root:dialout and the user is not in dialout, which no amount of closing QGroundControl fixes.
+    Telling somebody to close a program they do not have open costs them an afternoon.
+    """
+    low = str(err).lower()
+    if not ("busy" in low or "permission" in low or "resource" in low):
+        return ""
+    busy = (" - another program holds the port. Close QGroundControl (or disable its serial auto-connect) "
+            "and try again.")
+    try:
+        group = grp.getgrgid(os.stat(device).st_gid).gr_name
+        writable = os.access(device, os.W_OK)
+    except (OSError, KeyError, AttributeError):
+        return busy
+    if writable or not group:
+        return busy
+    return (f" - {device} belongs to group '{group}' and this user is not in it, so the port cannot be opened at "
+            f"all. Run:  sudo usermod -aG {group} $USER  then restart WSL (wsl --shutdown) and re-attach the "
+            f"board. For this session only:  sudo chmod 666 {device}")
 
 
 def list_serial_ports() -> list[dict]:
@@ -223,10 +256,7 @@ class ConnectionManager:
                 try:
                     link.open()
                 except Exception as e:
-                    msg = str(e)
-                    if "busy" in msg.lower() or "permission" in msg.lower() or "resource" in msg.lower():
-                        msg += " — another program holds the port. Close QGroundControl (or disable its serial " \
-                               "auto-connect) and try again."
+                    msg = str(e) + serial_open_hint(serial, e)
                     self.error = f"Could not open {serial}: {msg}"
                     self.log(f"[link] {self.error}")
                     self.link = None
