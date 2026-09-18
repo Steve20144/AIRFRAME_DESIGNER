@@ -7,6 +7,7 @@
   airframe-designer analyse   --airframe X [--speed-kmh 50]
   airframe-designer optimise  --airframe X --spec spec.json           (static, no PX4)
   airframe-designer export    --airframe X [--hitl] [--out file.params]
+  airframe-designer vehicle   --manifest vehicle-manifest.json --out airframes/X.json   (CAD -> airframe)
   airframe-designer paths     --airframe X                              (every variable path)
   airframe-designer scenarios                                            (list the bundled scenarios)
   airframe-designer migrate   old.json new.json
@@ -155,6 +156,33 @@ def cmd_paths(a) -> int:
     return 0
 
 
+def cmd_vehicle(a) -> int:
+    """Generate an airframe from the CAD-derived vehicle documents, with its provenance sidecar."""
+    from .geometry.airframe import Airframe
+    from .vehicle import airframe_from_cad, load_vehicle
+    v = load_vehicle(a.manifest, a.geometry)
+    d, sidecar = airframe_from_cad(v, name=a.name, turn_loss=a.turn_loss, km_magnitude=a.km,
+                                   tau_s=a.tau, leg_clearance_m=a.leg_clearance, leg_splay_deg=a.leg_splay)
+    out = Path(a.out or f"airframes/{v.vehicle_id.replace('-', '_')}.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(d, indent=2))
+    side = out.with_suffix(".provenance.json")
+    side.write_text(json.dumps(sidecar, indent=2))
+
+    af = Airframe.from_dict(d)
+    print(f"{v.display_name} rev {v.revision} [{v.declared_state}] -> {out}")
+    print(f"  {af.mass.mass:.3f} kg, CG {af.mass.cg}, {len(af.rotors)} rotors, {len(af.legs)} legs, "
+          f"hover pitch {af.hover_pitch_deg:g} deg")
+    if v.unweighed:
+        print(f"  mass is INCOMPLETE: {len(v.unweighed)} unweighed part(s): {', '.join(v.unweighed)}")
+    for w in af.validate():
+        print(f"  ! {w}")
+    assumed = sorted({f.get("blocker") for r in sidecar["rotors"] for f in r["fields"].values() if f.get("blocker")})
+    print(f"  {len(assumed)} blocker(s) govern generated rotor values: {', '.join(assumed)}")
+    print(f"  provenance -> {side}")
+    return 0
+
+
 def cmd_scenarios(a) -> int:
     d = PROJECT_DIR / "scenarios"
     for p in sorted(d.glob("*.json")):
@@ -215,6 +243,15 @@ def main(argv=None) -> int:
     p.add_argument("--speed-kmh", type=float, default=None); p.add_argument("--set", action="append")
     p = sub.add_parser("optimise", help="static geometric optimiser (no PX4)"); p.add_argument("--airframe", required=True); p.add_argument("--spec", default=None)
     p = sub.add_parser("export", help="PX4 .params file"); p.add_argument("--airframe", required=True); p.add_argument("--hitl", action="store_true"); p.add_argument("--out", default=None)
+    p = sub.add_parser("vehicle", help="generate an airframe from the CAD-derived vehicle documents")
+    p.add_argument("--manifest", required=True, help="path to vehicle-manifest.json")
+    p.add_argument("--geometry", default=None, help="applied geometry config (default: the manifest's as-built one)")
+    p.add_argument("--out", default=None); p.add_argument("--name", default=None)
+    p.add_argument("--turn-loss", type=float, default=0.1, dest="turn_loss", help="thrust lost at 90 deg of jet turning")
+    p.add_argument("--km", type=float, default=0.01, help="reaction-torque magnitude per unit thrust, m")
+    p.add_argument("--tau", type=float, default=0.12, help="fan spool time constant, s")
+    p.add_argument("--leg-clearance", type=float, default=0.10, dest="leg_clearance", help="ground clearance, m")
+    p.add_argument("--leg-splay", type=float, default=30.0, dest="leg_splay", help="foot splay from vertical, deg")
     p = sub.add_parser("paths", help="list variable paths"); p.add_argument("--airframe", required=True)
     sub.add_parser("scenarios", help="list bundled scenarios")
     p = sub.add_parser("migrate", help="convert a schema-1 airframe"); p.add_argument("src"); p.add_argument("dst")
@@ -231,7 +268,7 @@ def main(argv=None) -> int:
         return cmd_ui(None, [])
     a = ap.parse_args(argv)
     return {"run": cmd_run, "batch": cmd_batch, "compare": cmd_compare, "study": cmd_study, "analyse": cmd_analyse, "optimise": cmd_optimise,
-            "export": cmd_export, "paths": cmd_paths, "scenarios": cmd_scenarios, "migrate": cmd_migrate}[a.cmd](a)
+            "export": cmd_export, "vehicle": cmd_vehicle, "paths": cmd_paths, "scenarios": cmd_scenarios, "migrate": cmd_migrate}[a.cmd](a)
 
 
 if __name__ == "__main__":
