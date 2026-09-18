@@ -174,14 +174,25 @@ def _body(vehicle: CadVehicle) -> tuple[dict, dict]:
     """
     lo = np.asarray(vehicle.bbox["min"], float)
     hi = np.asarray(vehicle.bbox["max"], float)
-    size = (hi - lo).tolist()
-    area = [size[1] * size[2], size[0] * size[2], size[0] * size[1]]
+    span = (hi - lo).tolist()
+    area = [span[1] * span[2], span[0] * span[2], span[0] * span[1]]
     quad = [round(0.5 * AIR_DENSITY * 1.0 * a, 4) for a in area]
     centre = ((hi + lo) / 2.0).tolist()
+    # ``size`` is the box the editor draws, not the drag reference: drawing the whole bounding box of a truss
+    # airframe hides every rotor and leg behind a slab. Take the fuselage instead, meaning the bodies that sit on
+    # the centreline, with floors so it stays visible on an aircraft that has no fuselage to speak of.
+    core = [p for p in vehicle.bodies.values() if abs(p[1]) <= 0.05 * max(span[1], 1e-6) + 0.02]
+    if core:
+        clo = [min(p[i] for p in core) for i in range(3)]
+        chi = [max(p[i] for p in core) for i in range(3)]
+        size = [max(chi[i] - clo[i], f) for i, f in enumerate((0.2, 0.12, 0.10))]
+    else:
+        size = [v * 0.4 for v in span]
     body = {"size": [round(v, 4) for v in size], "drag_quadratic": quad,
             "drag_angular": [0.02, 0.02, 0.02], "drag_center": [round(v, 4) for v in centre]}
     prov = {
-        "size": Sourced(body["size"], "cad-derived", note="CAD bounding box").to_dict(),
+        "size": Sourced(body["size"], "cad-derived",
+                        note="drawn box only: the extent of the centreline bodies. Body drag does not use it").to_dict(),
         "drag_quadratic": Sourced(quad, "assumed", note="0.5 * rho * Cd * A with Cd = 1.0 over the bounding box; an "
                                   "upper bound on a bluff body, not measured drag",
                                   blocker="ATLAS-AERO-COEFFICIENTS").to_dict(),

@@ -61,12 +61,12 @@
   "body": {
     "size": {
       "value": [
-        1.1625,
-        0.8914,
-        0.4748
+        0.9511,
+        0.1281,
+        0.1606
       ],
       "source_kind": "cad-derived",
-      "note": "CAD bounding box"
+      "note": "drawn box only: the extent of the centreline bodies. Body drag does not use it"
     },
     "drag_quadratic": {
       "value": [
@@ -638,6 +638,7 @@
       "note": "provisional stand: 0.4888 m below the centre of gravity at 26.571 deg nose-up, feet 0.2822 m out (30 deg splay), springs sized for 20 mm of static sink at a damping ratio of 0.8. Attachment points come from the bounding box, not from verified structure."
     }
   },
+  "symmetry_correction": null,
   "derived": {
     "hover_pitch_deg": {
       "value": 26.571,

@@ -83,6 +83,7 @@ class CadVehicle:
     geometry: dict = field(default_factory=dict)            # applied foil exit angles and front-motor tilts
     blockers: list[dict] = field(default_factory=list)
     component_masses: list[dict] = field(default_factory=list)
+    bodies: dict[str, list[float]] = field(default_factory=dict)   # CAD body name -> centroid, body FRD m
 
     # ------------------------------------------------------------------ derived
     @property
@@ -150,9 +151,12 @@ def load_vehicle(manifest_path: str | Path, geometry_path: str | Path | None = N
         if inertia.get("available") else Sourced(None, "absent", note="no inertia tensor in the manifest")
 
     bbox = {"min": [0.0, 0.0, 0.0], "max": [0.0, 0.0, 0.0]}
+    bodies: dict[str, list[float]] = {}
     cad_path = root / "source" / "cad_geometry.json"
     if cad_path.is_file():
-        bbox = (json.loads(cad_path.read_text()).get("bounding_box_m")) or bbox
+        cad = json.loads(cad_path.read_text())
+        bbox = cad.get("bounding_box_m") or bbox
+        bodies = {b["name"]: b["centroid_frd_m"] for b in cad.get("bodies") or [] if "centroid_frd_m" in b}
 
     return CadVehicle(
         vehicle_id=str(man.get("vehicle_id", "vehicle")),
@@ -170,4 +174,5 @@ def load_vehicle(manifest_path: str | Path, geometry_path: str | Path | None = N
         geometry=geometry,
         blockers=man.get("blockers") or [],
         component_masses=mp.get("component_masses") or [],
+        bodies=bodies,
     )
