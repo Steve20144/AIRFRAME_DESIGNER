@@ -11,7 +11,8 @@ aircraft is described to JSBSim. Rotor spool-up, thrust curve, reaction torque a
 project's own model (JSBSim has no ducted-fan model) and are injected as body forces/moments each step.
 
 So a Python-vs-JSBSim difference points at integration, frames, moment arms, ground contact or gravity, not at
-the coefficient data, which is shared by construction.
+the coefficient data, which is shared by construction. It can also point at the state read back out of JSBSim,
+which is where the horizontal disagreement turned out to live: see _read_state.
 """
 from __future__ import annotations
 
@@ -135,8 +136,8 @@ def generate_model(af: Airframe, name: str, v_ref: float = 20.0) -> Path:
     for i, r in enumerate(rotors):
         ax = unit(r.axis)
         x.append(f'<force name="rotor{i}" frame="BODY"><location unit="IN">{loc(r.pos)}</location><direction><x>{_s(ax[0])}</x><y>{_s(ax[1])}</y><z>{_s(ax[2])}</z></direction></force>')
-    for nm, d in (("extfx", (1, 0, 0)), ("extfy", (0, 1, 0)), ("extfz", (0, 0, 1))):     # injected body forces at the CG
-        x.append(f'<force name="{nm}" frame="BODY"><location unit="IN">{loc(cg)}</location><direction><x>{d[0]}</x><y>{d[1]}</y><z>{d[2]}</z></direction></force>')
+    # the injected body forces and moments are NOT external reactions: they go in through the <aerodynamics>
+    # X/Y/Z and ROLL/PITCH/YAW axes below, as the custom/ext-mx-* properties that step() writes each step.
     x.append('</external_reactions>')
     # aerodynamics: body-axis force tables (X, Z) and pitch moment vs alpha; side/roll/yaw from beta; damping
     def table(vals):
@@ -261,7 +262,11 @@ class JSBSimBody:
     # -- state
     def _read_state(self) -> None:
         f = self.fdm
-        n = f["position/distance-from-start-lat-mt"]; e = f["position/distance-from-start-lon-mt"]
+        # signed displacement from the reset point. NOT position/distance-from-start-{lat,lon}-mt: those are
+        # unsigned distances, so every step south or west was reported as its mirror image to the north-east,
+        # and the GPS built from it made PX4 chase a phantom -- correcting west grew the reported east, which
+        # asked for more west. That runaway, not the physics, was the JSBSim engine's horizontal disagreement.
+        n = f["position/from-start-neu-n-ft"] / FT; e = f["position/from-start-neu-e-ft"] / FT
         d = -(f["position/h-agl-ft"] / FT)
         self.pos = np.array([n, e, d])
         self.vel = np.array([f["velocities/v-north-fps"], f["velocities/v-east-fps"], f["velocities/v-down-fps"]]) / FT

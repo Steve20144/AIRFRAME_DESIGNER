@@ -189,7 +189,8 @@ generated aircraft model with the mass and inertia, the feet as ground contacts,
 its position along its thrust axis (so JSBSim computes the moment arms itself), and the wing/body aerodynamics as
 coefficient tables sampled from this project's aero models. Rotor spool-up, thrust curve, reaction torque and
 intake ram drag stay the project's own model and are injected each step. A difference between the two engines
-therefore points at integration, frames, moment arms, ground contact or gravity, not at the coefficient data.
+therefore points at integration, frames, moment arms, ground contact or gravity, or at the state read back out
+of JSBSim, but not at the coefficient data.
 
 ```bash
 .venv/bin/python -m airframe_designer compare --airframe airframes/quad_x.json --scenario hover --out cmp.json
@@ -198,8 +199,18 @@ therefore points at integration, frames, moment arms, ground contact or gravity,
 prints both runs' per-phase metrics side by side with deltas and the RMS/max differences of the state histories
 (altitude, speed, attitude, rates, thrust); the Batch tab's **Compare physics** button does the same for the live
 design. Reference numbers for the quad preset in hover: altitude 7 mm RMS, thrust 0.06 N, attitude ~0.2 degrees.
-The cross-check already found and fixed one real defect (a rest-damping hack that parked soft-legged aircraft
-25 cm above their spring equilibrium).
+For atlas_08 in hover, over three repeats of each engine (PX4 is a real process in the loop, so read the
+spread, not one run): position spread 0.096 +-0.010 m on Python against 0.117 +-0.023 m on JSBSim, body rates
+0.85 +-0.05 against 0.93 +-0.18 deg/s. The engines agree horizontally to about their own run-to-run scatter.
+
+The cross-check has already found and fixed two real defects. One was a rest-damping hack that parked
+soft-legged aircraft 25 cm above their spring equilibrium. The other was in the cross-check itself: the JSBSim
+backend read its horizontal position from `position/distance-from-start-{lat,lon}-mt`, which are *unsigned*
+distances, so every metre flown west came back as a metre east. The GPS built from it had PX4 correcting west,
+which grew the reported easting, which asked for more west -- a 6 m one-directional runaway over a 15 s hover
+(position spread 1.69 m against the Python engine's 0.10 m) that read exactly like a lateral force error.
+`tests/test_jsbsim_backend.py` now pins both the force/moment equivalence (same state and rotor commands in,
+same total body force and moment out, no flying and no PX4) and the position readout against that.
 
 ## Driving it from ChatGPT or another assistant
 
