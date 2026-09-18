@@ -1,0 +1,382 @@
+{
+  "schema": 2,
+  "name": "ATLAS_F0",
+  "mass": {
+    "mass": 11.191,
+    "cg": [
+      -0.112371,
+      -0.000953,
+      0.133105
+    ],
+    "inertia": [
+      0.608607,
+      0.630664,
+      1.058154
+    ],
+    "inertia_products": [
+      0.00126,
+      -0.051314,
+      -0.000271
+    ],
+    "items": [],
+    "from_items": false
+  },
+  "body": {
+    "size": [
+      0.9511,
+      0.1281,
+      0.1606
+    ],
+    "drag_quadratic": [
+      0.2592,
+      0.3381,
+      0.6347
+    ],
+    "drag_angular": [
+      0.02,
+      0.02,
+      0.02
+    ],
+    "drag_center": [
+      0.1373,
+      0.0,
+      0.1646
+    ]
+  },
+  "rotors": [
+    {
+      "name": "EDF_01_FOIL_LEFT_OUTER",
+      "pos": [
+        -0.405052,
+        -0.391,
+        0.366236
+      ],
+      "axis": [
+        0.42261796517881683,
+        0.0,
+        -0.906307925325668
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_02_FOIL_RIGHT_OUTER",
+      "pos": [
+        -0.405052,
+        0.391,
+        0.366236
+      ],
+      "axis": [
+        0.42261796517881683,
+        0.0,
+        -0.906307925325668
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_03_FOIL_LEFT_MID_OUTER",
+      "pos": [
+        -0.378003,
+        -0.304,
+        0.313838
+      ],
+      "axis": [
+        0.5000001748438417,
+        0.0,
+        -0.8660253028382761
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_04_FOIL_RIGHT_MID_OUTER",
+      "pos": [
+        -0.378003,
+        0.304,
+        0.313838
+      ],
+      "axis": [
+        0.5000001748438417,
+        0.0,
+        -0.8660253028382761
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_05_FOIL_LEFT_MID_INNER",
+      "pos": [
+        -0.350853,
+        -0.2155,
+        0.261347
+      ],
+      "axis": [
+        0.5735761643640093,
+        0.0,
+        -0.8191522347362981
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_06_FOIL_RIGHT_MID_INNER",
+      "pos": [
+        -0.350853,
+        0.2155,
+        0.261347
+      ],
+      "axis": [
+        0.5735761643640093,
+        0.0,
+        -0.8191522347362981
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_07_FOIL_LEFT_INNER",
+      "pos": [
+        -0.323609,
+        -0.128,
+        0.208759
+      ],
+      "axis": [
+        0.6427880569253128,
+        0.0,
+        -0.7660440678408655
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_08_FOIL_RIGHT_INNER",
+      "pos": [
+        -0.323609,
+        0.128,
+        0.208759
+      ],
+      "axis": [
+        0.6427880569253128,
+        0.0,
+        -0.7660440678408655
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_09_FRONT_FORWARD",
+      "pos": [
+        0.356695,
+        -0.001021,
+        0.05775
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": null,
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "EDF_10_FRONT_AFT",
+      "pos": [
+        0.466695,
+        -0.001021,
+        0.05775
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "km": -0.01,
+      "max_thrust": 33.3,
+      "tau": 0.12,
+      "diameter": 0.1032,
+      "thrust_exponent": 2.0,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": null,
+      "turn_loss": 0.1,
+      "enabled": true
+    }
+  ],
+  "wings": [],
+  "legs": [
+    {
+      "name": "RL",
+      "attach": [
+        -0.167174,
+        -0.40539,
+        0.198335
+      ],
+      "length": 0.4236256560646777,
+      "tilt_deg": -50.828,
+      "cant_deg": 1.191,
+      "foot_radius": 0.02,
+      "stiffness": 1371.8,
+      "damping": 99.1,
+      "friction": 0.8,
+      "enabled": true
+    },
+    {
+      "name": "RR",
+      "attach": [
+        -0.167174,
+        0.405385,
+        0.198335
+      ],
+      "length": 0.4236049571844369,
+      "tilt_deg": -50.832,
+      "cant_deg": 0.784,
+      "foot_radius": 0.02,
+      "stiffness": 1371.8,
+      "damping": 99.1,
+      "friction": 0.8,
+      "enabled": true
+    },
+    {
+      "name": "FL",
+      "attach": [
+        0.11677,
+        -0.278531,
+        0.125315
+      ],
+      "length": 0.573298950535186,
+      "tilt_deg": -26.11,
+      "cant_deg": 0.27,
+      "foot_radius": 0.02,
+      "stiffness": 1371.8,
+      "damping": 99.1,
+      "friction": 0.8,
+      "enabled": true
+    },
+    {
+      "name": "FR",
+      "attach": [
+        0.116769,
+        0.278532,
+        0.125317
+      ],
+      "length": 0.5732918297547298,
+      "tilt_deg": -26.11,
+      "cant_deg": 0.057,
+      "foot_radius": 0.02,
+      "stiffness": 1371.8,
+      "damping": 99.1,
+      "friction": 0.8,
+      "enabled": true
+    }
+  ],
+  "hover_pitch_deg": 25.824,
+  "landed_pitch_deg": 25.824,
+  "px4_overrides": {},
+  "design": {},
+  "notes": "Generated from Atlas PHASE 0.1 revision PHASE_0.1_ASSY_copy/2026-09-16. Do not edit by hand: regenerate from the CAD documents, or edit a copy. Declared state: provisional. See the provenance sidecar for what each value rests on."
+}
