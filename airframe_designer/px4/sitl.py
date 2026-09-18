@@ -2,7 +2,7 @@
 
 * ``launch_px4``: start the PX4 SITL binary for an instance with its own working directory, watched by a shell
   wrapper that sends it SIGINT when this process dies, so a crashed simulator never leaves a PX4 behind.
-* ``write_param_file``: PX4 SITL imports ``fs/parameters.bson`` from its working directory at boot, so a batch
+* ``write_param_file``: PX4 SITL imports its parameter file from the working directory at boot, so a batch
   run pre-seeds every parameter (airframe geometry, hand edits, scenario overrides) before PX4 even starts,
   instead of pushing them one by one over MAVLink afterwards. The file is PX4's own BSON subset: int32 (0x10)
   for INT32 parameters and double (0x01) for FLOAT ones.
@@ -85,18 +85,38 @@ def encode_param_bson(params: dict[str, float | int], int_names: set[str] | None
 
 
 def write_param_file(workdir: str | Path, params: dict[str, float | int], types: dict[str, str] | None = None) -> Path:
-    fs = Path(workdir) / "fs"
+    """Write the seeded parameters where PX4 will find them at boot.
+
+    PX4 moved its SITL storage directory: v1.18 reads ``<workdir>/fs/parameters.bson``, v1.17 and earlier read
+    ``<workdir>/parameters.bson``. Writing both costs a few kilobytes and makes a run work against either build;
+    seeding the wrong one is silent, and PX4 then flies the stock airframe instead of ours.
+    """
+    root = Path(workdir)
+    fs = root / "fs"
     fs.mkdir(parents=True, exist_ok=True)
     data = encode_param_bson(params, types=types)
     p = fs / "parameters.bson"
-    p.write_bytes(data)
-    (fs / "parameters_backup.bson").write_bytes(data)
+    for target in (p, fs / "parameters_backup.bson", root / "parameters.bson", root / "parameters_backup.bson"):
+        target.write_bytes(data)
     return p
 
 
 def param_types_from_meta(meta: dict[str, dict]) -> dict[str, str]:
     """{name: 'Int32'|'Float'} from flattened parameters.json metadata."""
     return {k: ("Int32" if str(v.get("type", "")).lower().startswith("int") else "Float") for k, v in meta.items()}
+
+
+# PX4's init.d-posix/rcS sets these for simulated sensors, but only on the boot where it also resets every
+# parameter. Seeded runs skip that boot, so the values are carried here instead: DRV_IMU_DEVTYPE_SIM on buses
+# 1-3, and the two simulated magnetometers.
+SIM_SENSOR_CALIBRATION: dict[str, float | int] = {
+    "CAL_ACC0_ID": 1310988, "CAL_GYRO0_ID": 1310988,
+    "CAL_ACC1_ID": 1310996, "CAL_GYRO1_ID": 1310996,
+    "CAL_ACC2_ID": 1311004, "CAL_GYRO2_ID": 1311004,
+    "CAL_MAG0_ID": 197388, "CAL_MAG0_PRIO": 50,
+    "CAL_MAG1_ID": 197644, "CAL_MAG1_PRIO": 50,
+    "SENS_BOARD_X_OFF": 0.000001, "SENS_DPRES_OFF": 0.001,
+}
 
 
 # ------------------------------------------------------------------ launching
@@ -153,6 +173,13 @@ def launch_px4(px4_dir: str, model: str, log, instance: int = 0, rootfs: str | N
         params.setdefault("SYS_AUTOCONFIG", 0)
         params.setdefault("MAV_SYS_ID", instance + 1)
         params.setdefault("UXRCE_DDS_KEY", instance + 1)
+        # Suppressing the reset also suppresses the block of rcS that ran alongside it, which is where PX4 marks
+        # the simulated IMUs and magnetometers as calibrated. Without those ids the preflight checks report
+        # "Accel 0 uncalibrated" and the vehicle never becomes armable. Taking over the autoconfig means
+        # supplying what it supplied; these are rcS's own values, and a boot that does run rcS overwrites them
+        # with the same numbers.
+        for name, value in SIM_SENSOR_CALIBRATION.items():
+            params.setdefault(name, value)
         write_param_file(inst.workdir, params, param_types)
     env = dict(os.environ)
     env["PX4_SIM_MODEL"] = model
