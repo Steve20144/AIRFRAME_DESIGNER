@@ -167,7 +167,10 @@ def cmd_vehicle(a) -> int:
     out = Path(a.out or f"airframes/{v.vehicle_id.replace('-', '_')}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(d, indent=2))
-    side = out.with_suffix(".provenance.json")
+    # Sidecars live in their own directory: everything directly under airframes/ is an airframe, and
+    # tests/test_geometry.py enforces that by loading every *.json it finds there.
+    side = out.parent / "provenance" / f"{out.stem}.json"
+    side.parent.mkdir(parents=True, exist_ok=True)
     side.write_text(json.dumps(sidecar, indent=2))
 
     af = Airframe.from_dict(d)
