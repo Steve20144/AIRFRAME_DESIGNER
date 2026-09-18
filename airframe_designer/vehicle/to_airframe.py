@@ -119,6 +119,32 @@ def _rotors(vehicle: CadVehicle, turn_loss: float, km_magnitude: float,
     return rotors, prov
 
 
+def _symmetrise(rotors: list[dict], donor: str) -> tuple[list[dict], list[dict]]:
+    """Mirror one side's fan positions onto the other, pairing fans by their spanwise station.
+
+    The aircraft is mirror-symmetric in CAD, but the two foil components are not identical: one carries bodies the
+    other does not, and the jet-exit points are read off the foil mesh, so the extra geometry moves them. The
+    result is a left/right offset in x and z that no allocator can remove, because it is a real asymmetry in the
+    numbers even though the aircraft it describes is symmetric.
+
+    This replaces the recipient side's x and z with the donor's, keeping each fan's own y. It is a correction to
+    the documents, not to the aircraft, and it is recorded as such: the honest fix is in CAD.
+    """
+    sign = 1.0 if donor == "right" else -1.0
+    given = [r for r in rotors if r["duct_axis"] and r["pos"][1] * sign > 0]
+    taken = [r for r in rotors if r["duct_axis"] and r["pos"][1] * sign < 0]
+    notes: list[dict] = []
+    for r in taken:
+        mate = min(given, key=lambda g: abs(abs(g["pos"][1]) - abs(r["pos"][1])), default=None)
+        if mate is None or abs(abs(mate["pos"][1]) - abs(r["pos"][1])) > 1e-3:
+            continue
+        before = list(r["pos"])
+        r["pos"] = [mate["pos"][0], r["pos"][1], mate["pos"][2]]
+        notes.append({"rotor": r["name"], "from": mate["name"],
+                      "moved_mm": [round(1000.0 * (a - b), 2) for a, b in zip(r["pos"], before)]})
+    return rotors, notes
+
+
 def _hover_pitch_deg(rotors: list[dict]) -> float:
     """The nose-up attitude at which the combined thrust axis points straight up.
 
@@ -205,7 +231,8 @@ def _legs(vehicle: CadVehicle, landed_pitch_deg: float, clearance_m: float,
 
 def airframe_from_cad(vehicle: CadVehicle, *, name: str | None = None, turn_loss: float = 0.1,
                       km_magnitude: float = 0.01, tau_s: float = 0.12, leg_clearance_m: float = 0.10,
-                      leg_splay_deg: float = 30.0) -> tuple[dict[str, Any], dict[str, Any]]:
+                      leg_splay_deg: float = 30.0,
+                      symmetrise: str = "none") -> tuple[dict[str, Any], dict[str, Any]]:
     """Build (airframe dict, provenance sidecar) from a loaded CAD vehicle.
 
     The keyword arguments are the values the documents do not carry. They are arguments rather than constants so a
@@ -213,6 +240,9 @@ def airframe_from_cad(vehicle: CadVehicle, *, name: str | None = None, turn_loss
     as ``assumed`` against the blocker that would close it.
     """
     rotors, rotor_prov = _rotors(vehicle, turn_loss, km_magnitude, tau_s)
+    symmetry_notes: list[dict] = []
+    if symmetrise in ("left", "right"):
+        rotors, symmetry_notes = _symmetrise(rotors, symmetrise)
     hover_pitch = round(_hover_pitch_deg(rotors), 3)
     body, body_prov = _body(vehicle)
     # Standing at the hover attitude means the aircraft lifts straight off without rotating on the ground first.
@@ -263,6 +293,12 @@ def airframe_from_cad(vehicle: CadVehicle, *, name: str | None = None, turn_loss
         "body": body_prov,
         "rotors": rotor_prov,
         "legs": leg_prov,
+        "symmetry_correction": (
+            {"donor_side": symmetrise, "moved": symmetry_notes,
+             "why": "the two foil components are not identical in CAD, so the jet-exit points read off their "
+                    "meshes do not mirror; this overrides the recipient side's x and z with the donor's. A "
+                    "correction to the documents, not to the aircraft."}
+            if symmetry_notes else None),
         "derived": {
             "hover_pitch_deg": Sourced(hover_pitch, "assumed",
                                        note="attitude at which the thrust-weighted mean axis is vertical; it moves "

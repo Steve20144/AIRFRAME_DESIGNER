@@ -162,7 +162,8 @@ def cmd_vehicle(a) -> int:
     from .vehicle import airframe_from_cad, load_vehicle
     v = load_vehicle(a.manifest, a.geometry)
     d, sidecar = airframe_from_cad(v, name=a.name, turn_loss=a.turn_loss, km_magnitude=a.km,
-                                   tau_s=a.tau, leg_clearance_m=a.leg_clearance, leg_splay_deg=a.leg_splay)
+                                   tau_s=a.tau, leg_clearance_m=a.leg_clearance, leg_splay_deg=a.leg_splay,
+                                   symmetrise=a.symmetrise)
     out = Path(a.out or f"airframes/{v.vehicle_id.replace('-', '_')}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(d, indent=2))
@@ -173,6 +174,9 @@ def cmd_vehicle(a) -> int:
     print(f"{v.display_name} rev {v.revision} [{v.declared_state}] -> {out}")
     print(f"  {af.mass.mass:.3f} kg, CG {af.mass.cg}, {len(af.rotors)} rotors, {len(af.legs)} legs, "
           f"hover pitch {af.hover_pitch_deg:g} deg")
+    if sidecar.get("symmetry_correction"):
+        moved = sidecar["symmetry_correction"]["moved"]
+        print(f"  symmetrised {len(moved)} foil fan(s) from the {a.symmetrise} side")
     if v.unweighed:
         print(f"  mass is INCOMPLETE: {len(v.unweighed)} unweighed part(s): {', '.join(v.unweighed)}")
     for w in af.validate():
@@ -252,6 +256,8 @@ def main(argv=None) -> int:
     p.add_argument("--tau", type=float, default=0.12, help="fan spool time constant, s")
     p.add_argument("--leg-clearance", type=float, default=0.10, dest="leg_clearance", help="ground clearance, m")
     p.add_argument("--leg-splay", type=float, default=30.0, dest="leg_splay", help="foot splay from vertical, deg")
+    p.add_argument("--symmetrise", choices=["none", "left", "right"], default="none",
+                   help="mirror one side's foil-fan positions onto the other (default none: follow the documents)")
     p = sub.add_parser("paths", help="list variable paths"); p.add_argument("--airframe", required=True)
     sub.add_parser("scenarios", help="list bundled scenarios")
     p = sub.add_parser("migrate", help="convert a schema-1 airframe"); p.add_argument("src"); p.add_argument("dst")

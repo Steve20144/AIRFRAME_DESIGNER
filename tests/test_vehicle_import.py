@@ -40,7 +40,7 @@ def _write_vehicle(root: Path, *, tensor=None, component_masses=None) -> Path:
              "rotation_direction": {"sense": "cw"}, "thrust_map_ref": "map",
              "duct": {"radius": {"value": 0.05, "provenance": _provenance()}}},
             {"id": "FOIL_R", "px4_actuator_index": 1,
-             "position": {"value": [-0.4, 0.3, 0.35], "provenance": _provenance()},
+             "position": {"value": [-0.38, 0.3, 0.32], "provenance": _provenance()},
              "reference_thrust_axis": {"value": [1.0, 0.0, 0.0], "provenance": _provenance()},
              "rotation_direction": {"sense": "cw"}, "thrust_map_ref": "map",
              "duct": {"radius": {"value": 0.05, "provenance": _provenance()}}},
@@ -130,6 +130,32 @@ def test_hover_pitch_makes_the_thrust_axis_vertical(tmp_path):
     world_up_in_body = np.array([math.sin(p), 0.0, -math.cos(p)])
     total /= np.linalg.norm(total)
     assert float(np.dot(total, world_up_in_body)) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_symmetry_correction_mirrors_one_side_onto_the_other(tmp_path):
+    """The two foil fans in the fixture share a spanwise station but differ in x and z, the way the real aircraft's
+    do because its two foil components are not identical. Symmetrising must copy the donor's x and z across while
+    leaving each fan's own y alone, and must say what it moved."""
+    path = _write_vehicle(tmp_path / "v")
+    plain, _ = airframe_from_cad(load_vehicle(path))
+    left, right = plain["rotors"][0], plain["rotors"][1]
+    assert left["pos"][0] != right["pos"][0] and left["pos"][2] != right["pos"][2]
+
+    fixed, side = airframe_from_cad(load_vehicle(path), symmetrise="right")
+    l, r = fixed["rotors"][0], fixed["rotors"][1]
+    assert l["pos"][0] == pytest.approx(r["pos"][0])
+    assert l["pos"][2] == pytest.approx(r["pos"][2])
+    assert l["pos"][1] == pytest.approx(-0.3), "the spanwise station must not be mirrored away"
+    assert side["symmetry_correction"]["donor_side"] == "right"
+    assert side["symmetry_correction"]["moved"][0]["rotor"] == "FOIL_L"
+
+
+def test_symmetry_correction_is_off_by_default(tmp_path):
+    """Following the documents is the default. A silent correction would make the airframe disagree with the CAD
+    without saying so."""
+    d, side = airframe_from_cad(load_vehicle(_write_vehicle(tmp_path / "v")))
+    assert side["symmetry_correction"] is None
+    assert d["rotors"][0]["pos"][0] != d["rotors"][1]["pos"][0]
 
 
 def test_unweighed_flight_parts_are_reported_but_ground_equipment_is_not(tmp_path):
