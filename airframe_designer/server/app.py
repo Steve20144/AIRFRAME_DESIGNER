@@ -143,7 +143,8 @@ def build_app(state: AppState) -> FastAPI:
         s["flashing"] = state.conn.firmware_job.running() and state.conn.firmware_job.action == "upload"
         # arm gating: PX4's last arming-check summary must report no system errors and a usable position
         ready, why = False, "waiting for PX4's arming check report"
-        for x in reversed(list(getattr(state.link, "recent_events", []) or [])):
+        events = getattr(state.link, "recent_events", None)       # a function on the placeholder link mid-reconnect
+        for x in reversed(list(events) if isinstance(events, (list, deque)) else []):
             if x.get("name") == "commander_arming_check_summary":
                 d = dict(zip(x.get("arg_names", []), x.get("args", [])))
                 # PX4 lists the modes it would arm in; the error mask also carries the always-failing

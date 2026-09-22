@@ -107,7 +107,7 @@ private:
 	float motor_thrust(float command) const;
 	float motor_command(float thrust) const;
 	float throttle() const;
-	bool lifted_off() const;
+	bool lifted_off();
 
 	void try_start(hrt_abstime now);
 	void step_sequence(hrt_abstime now, float dt, bool kill);
@@ -186,6 +186,7 @@ private:
 	float _cmd{0.f};
 	float _fade_from{0.f};
 	float _z0{NAN};
+	uint8_t _z_reset_counter{0};
 	bool _fading{false};
 	const char *_fade_reason{""};
 

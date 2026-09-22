@@ -99,9 +99,23 @@ float NoseLift::throttle() const
 	return _manual.valid ? 0.5f * (_manual.throttle + 1.f) : 1.f;
 }
 
-bool NoseLift::lifted_off() const
+bool NoseLift::lifted_off()
 {
-	return PX4_ISFINITE(_z0) && _lpos.z_valid && (_z0 - _lpos.z) > _param_nl_lift_dz.get();
+	if (!PX4_ISFINITE(_z0) || !_lpos.z_valid || !_lpos.v_z_valid) {
+		return false;
+	}
+
+	// the estimator shifted its height (a reset): shift the reference with it rather than read it as a climb
+	if (_lpos.z_reset_counter != _z_reset_counter) {
+		_z0 += _lpos.delta_z;
+		_z_reset_counter = _lpos.z_reset_counter;
+	}
+
+	// a real premature liftoff climbs; the height estimate on the legs can drift by tenths of a metre within seconds
+	// (after a kill drops the nose, for one), and a false alarm here cuts the motors and drops the nose from the hold
+	const bool high = (_z0 - _lpos.z) > _param_nl_lift_dz.get();
+	const bool climbing = -_lpos.vz > 0.3f;
+	return high && climbing;
 }
 
 // ------------------------------------------------------------------------------------------------- the loop
@@ -225,6 +239,7 @@ void NoseLift::try_start(hrt_abstime now)
 	_hold_since = 0;
 	_fading = false;
 	_z0 = _lpos.z_valid ? _lpos.z : NAN;
+	_z_reset_counter = _lpos.z_reset_counter;
 	_abort_reason = Abort::None;
 	set_state(State::Ramping, now);
 	mavlink_log_info(&_mavlink_log_pub, "Nose lift: raising the nose from %.1f to %.1f deg\t", (double)_pitch0,
@@ -366,15 +381,27 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 			if ((now - _state_since) * 1e-6f > _param_nl_tout.get()) { abort(Abort::LowerTimeout, false, now); return; }
 
 			if (!_fading) {
-				const float q_des = math::constrain(k_ang * (_target - _pitch), -rate, rate);
+				// ease the descent in over 1 s: a full-rate demand at once, through the stiffer lowering gain,
+				// dips the thrust and drops the nose for a moment (nose_lift.py NoseLower eases the same way)
+				const float ease = math::min(1.f, (now - _state_since) * 1e-6f / 1.f);
+				const float q_des = math::constrain(k_ang * (_target - _pitch), -rate * ease, rate);
 				const float eq = q_des - _q;
 				_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
 				_cmd = thrust_to_cmd(ff + _param_nl_low_kq.get() * eq + _param_nl_low_kqi.get() * _integral);
 
-				if (_pitch - _target < tol && fabsf(_q) < 3.f) {
-					_fading = true;
-					_fade_start = now;
-					_fade_from = _cmd;
+				// fade only once the nose sits on its front leg again: fading from further up drops the last degrees
+				// (one-sided: legs that compress a little more than before may leave it slightly below where it started)
+				if (_pitch - _target < math::min(tol, 0.5f) && fabsf(_q) < 1.f) {
+					if (_hold_since == 0) { _hold_since = now; }
+
+					if ((now - _hold_since) * 1e-6f >= _param_nl_hold_s.get()) {
+						_fading = true;
+						_fade_start = now;
+						_fade_from = _cmd;
+					}
+
+				} else {
+					_hold_since = 0;
 				}
 
 			} else {
@@ -405,6 +432,7 @@ void NoseLift::abort(Abort reason, bool controlled, hrt_abstime now)
 		_integral *= _param_nl_kqi.get() / math::max(_param_nl_low_kqi.get(), 1e-6f);
 		_target = _pitch0;
 		_fading = false;
+		_hold_since = 0;
 		set_state(State::Lowering, now);
 		mavlink_log_critical(&_mavlink_log_pub, "Nose lift cancelled (%s): lowering the nose to %.1f deg\t",
 				     abort_name(reason), (double)_target);

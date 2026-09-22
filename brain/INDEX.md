@@ -39,6 +39,7 @@ current task needs.
 - [2026-09-18 ATLAS_OG board tune (HITL)](experiments/2026-09-18-atlas-og-hitl-board-tune.md)
 - [2026-09-21 Stabilized baseline, flat vs as built](experiments/2026-09-21-stabilized-baseline-flat-vs-asbuilt.md)
 - [2026-09-21 ATLAS_OG flat gain sweeps and confirmation](experiments/2026-09-21-atlas-og-flat-gain-sweeps.md)
+- [2026-09-22 Firmware nose lift, park +4 to -8](experiments/2026-09-22-fw-nose-lift-park-sweep.md)
 - [2026-09-21 ATLAS_09B: from import to the tuned sequence](experiments/2026-09-21-atlas-09b-sequence-tuning.md)
 - [2026-09-21 ATLAS_09B rounds 4 and 5: the yaw loop and the hands-off drift](experiments/2026-09-21-atlas-09b-yaw-rounds.md)
 - [2026-09-21 First piloted HITL session](experiments/2026-09-21-hitl-pilot-session.md): RC setup, integrator wind-up on the legs, hover thrust, stick scale
