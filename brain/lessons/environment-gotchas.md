@@ -16,3 +16,14 @@
 - Landing on the +8 stand in Position mode: PX4 holds the hover attitude until land detection; the nose lower hook
   handles it; tip-overs fault the compass and need an estimator restart (on the board: reboot, never restart EKF2
   in place).
+
+## A live scenario's attitude block used to leak into headless work (fixed 2026-09-21)
+
+`POST /api/scenario/start` applies the scenario's `attitude` (or the Tuning card's Park/Hover) to the live airframe
+with `sim.set_airframe`, and that airframe stayed the app's airframe afterwards. Headless attempts, sweeps, study
+runs and `save` copied it, so a round on `stab_lab_native*` (no attitude block) silently ran at the last live
+scenario's stance (hover 26 / park -5 with re-solved legs instead of the file's 24 / +4) and every trial crashed.
+Fix: `state.attitude_base` remembers the pre-attitude airframe plus a fingerprint of what the scenario set;
+`base_airframe()` in `server/app.py` returns the base while the live airframe is still exactly that, and headless
+work and saves start from it. Check the first trial's `SENS_BOARD_Y_OFF` in `px4_params_verified` and the nose
+lift's `start_pitch_deg` when a sweep behaves unlike the model's history.

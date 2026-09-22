@@ -7,7 +7,8 @@ Added 2026-09-21. Server helpers in `airframe_designer/server/tuning.py`, routes
 
 `POST /api/tuning/run` `{name, scenario, params: {PX4 name: value}, variables: {path: value}, attitude:
 {park_pitch_deg, hover_pitch_deg}, options: {physics, seed, noise}, live: bool}`. Headless: copies the app's
-airframe, applies `px4.<name>` variables, reserves a PX4 instance (9 downward, skipping a running sweep's), runs
+airframe (via `base_airframe()`: the one from before a live scenario applied its attitude block, while the live
+one is still exactly that), applies `px4.<name>` variables, reserves a PX4 instance (9 downward, skipping a running sweep's), runs
 `run_once` with a time-series path, saves `results/tuning/<id>.json` + `<id>_ts.json` with `name`, `kind`,
 `params`. Live: pushes `params` to the connected PX4 and starts the scenario on the live simulator; the flight is
 saved when the scenario ends (`scenario_status` writes it, `tuning_id` in the status).

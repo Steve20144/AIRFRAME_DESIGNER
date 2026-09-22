@@ -96,6 +96,9 @@ class AppState:
         self.batch_jobs: dict[str, dict] = {}
         self.study_job: dict = {"running": False}
         self.scenario_job: dict = {"runner": None}
+        # the airframe as it was before a live scenario applied its attitude block, with a fingerprint of what the
+        # scenario put on the live simulator: (base Airframe, attitude'd airframe as dict). See base_airframe().
+        self.attitude_base: tuple | None = None
 
     @property
     def link(self):
@@ -241,6 +244,20 @@ def build_app(state: AppState) -> FastAPI:
         hc = af.hover_check()
         return json_safe({"ok": True, "airframe": af.to_dict(), "problems": af.validate() + hc["problems"], "hover": hc})
 
+    def base_airframe():
+        """The airframe headless work and saves start from: the live one, unless the live one is still exactly what a
+        scenario's attitude block made of it (re-legged, parked and hover pitch moved), in which case the airframe from
+        before that scenario. A scenario owns its stance for its own flight only; a later edit by the user (the
+        fingerprint no longer matches) makes the live airframe the base again."""
+        ab = state.attitude_base
+        if ab is None:
+            return sim.airframe
+        base, fp = ab
+        if sim.airframe.to_dict() == fp:
+            return base
+        state.attitude_base = None
+        return sim.airframe
+
     @app.post("/api/airframe/save")
     async def save_airframe(body: dict):
         name = body.get("name", "").strip()
@@ -250,7 +267,11 @@ def build_app(state: AppState) -> FastAPI:
             name += ".json"
         name = Path(name).name
         AIRFRAME_DIR.mkdir(exist_ok=True)
-        sim.airframe.save(AIRFRAME_DIR / name)
+        af = base_airframe()
+        if af is not sim.airframe:
+            state.log(f"[airframe] saved {name} at its own stance ({af.landed_pitch_deg:g}/{af.hover_pitch_deg:g} deg), "
+                      f"not the live scenario's ({sim.airframe.landed_pitch_deg:g}/{sim.airframe.hover_pitch_deg:g})")
+        af.save(AIRFRAME_DIR / name)
         return {"ok": True, "path": str(AIRFRAME_DIR / name)}
 
     # ------------------------------------------------------------------ CAD (STEP bodies -> masses, CG)
@@ -889,8 +910,10 @@ def build_app(state: AppState) -> FastAPI:
             sc.attitude = dict(sc.attitude or {}); sc.attitude.update(body["attitude"])
         if sc.attitude:
             try:
-                af2 = sc.apply_attitude(sim.airframe)
+                base = base_airframe()
+                af2 = sc.apply_attitude(base)
                 if af2 is not sim.airframe:
+                    state.attitude_base = (base, af2.to_dict())
                     sim.set_airframe(af2, keep_state=False)
                     state.log(f"[scenario] {sc.name}: parked at {af2.landed_pitch_deg:g} deg, hover at {af2.hover_pitch_deg:g} deg (legs re-solved)")
             except Exception as e:
@@ -1007,7 +1030,7 @@ def build_app(state: AppState) -> FastAPI:
         poll /api/batch/jobs. Never touches the interactive simulation."""
         from ..batch.worker import run_once
         scenario = body.get("scenario", "hover")
-        af = Airframe.from_dict(body["airframe"]) if body.get("airframe") else sim.airframe.copy()
+        af = Airframe.from_dict(body["airframe"]) if body.get("airframe") else base_airframe().copy()
         variables = body.get("variables") or {}
         opts = dict(body.get("options") or {})
         job_id = f"job{int(time.time() * 1000) % 100000000}"
@@ -1048,7 +1071,7 @@ def build_app(state: AppState) -> FastAPI:
             return JSONResponse({"ok": False, "error": "a study is already running"}, status_code=409)
         spec = load_study(body["spec"]) if isinstance(body.get("spec"), str) else dict(body.get("spec") or {})
         if body.get("use_current_airframe", False) or "airframe" not in spec:
-            spec["airframe"] = sim.airframe.to_dict()
+            spec["airframe"] = base_airframe().to_dict()
         return start_study(spec, body.get("workers"))
 
     def start_study(spec: dict, workers=None):
@@ -1134,7 +1157,7 @@ def build_app(state: AppState) -> FastAPI:
                 return r
             state.scenario_job["tuning"] = {"id": run_id, "name": name, "params": params}
             return {"ok": True, "id": run_id, "live": True, "phases": r.get("phases")}
-        af = sim.airframe.copy()
+        af = base_airframe().copy()
         opts = dict(body.get("options") or {})
         # reserve a PX4 instance now: two attempts started in the same second would otherwise both pick the first
         # free one and collide on its ports
@@ -1197,7 +1220,7 @@ def build_app(state: AppState) -> FastAPI:
         if not variables:
             return JSONResponse({"ok": False, "error": "no variables"}, status_code=400)
         workers = int(body.get("workers") or 4)
-        spec = tuning.sweep_spec(sim.airframe.to_dict(), str(body.get("scenario", "stab_lab")), variables, name=body.get("name"),
+        spec = tuning.sweep_spec(base_airframe().to_dict(), str(body.get("scenario", "stab_lab")), variables, name=body.get("name"),
                                  workers=workers, base_variables=body.get("base_variables"), objective=body.get("objective") or None,
                                  constraints=body.get("constraints") or None, algorithm=body.get("algorithm"))
         return start_study(spec, workers)

@@ -39,6 +39,7 @@ current task needs.
 - [2026-09-21 Stabilized baseline, flat vs as built](experiments/2026-09-21-stabilized-baseline-flat-vs-asbuilt.md)
 - [2026-09-21 ATLAS_OG flat gain sweeps and confirmation](experiments/2026-09-21-atlas-og-flat-gain-sweeps.md)
 - [2026-09-21 ATLAS_09B: from import to the tuned sequence](experiments/2026-09-21-atlas-09b-sequence-tuning.md)
+- [2026-09-21 ATLAS_09B rounds 4 and 5: the yaw loop and the hands-off drift](experiments/2026-09-21-atlas-09b-yaw-rounds.md)
 
 ## Research
 
@@ -76,8 +77,8 @@ pitch, rotate back; first in SITL, then HITL on the Pixhawk 6X Pro, then the rea
 SITL tuning complete for two models; HITL verification next.
 
 - ATLAS_OG with flat nose brackets (`airframes/atlas_og_flat.json`): tuned and confirmed hands-off in Stabilized.
-- ATLAS_09B (imported from upstream, corrected, `airframes/atlas_09b.json`): flies the full sequence; a 0.25 deg roll
-  bias and 0.2 to 0.3 m/s drift remain, an authority limit the pilot trims.
+- ATLAS_09B (imported from upstream, corrected, `airframes/atlas_09b.json`): flies the full sequence with the softened
+  yaw loop (set A); 0.12 deg roll bias and 1.8 m hands-off drift in 12 s remain, a yaw-authority limit the pilot trims.
 - The PHASE_0_V4 STEP is integrated (CAD bodies with masses, meshes in the 3D view) on ATLAS_09B, ATLAS_OG and
   ATLAS_OG_FLAT; STEP import needs OpenCascade (cadquery-ocp) in the venv.
 - ATLAS_OG as built (canted +-30 nose brackets): cannot hover hands-off in Stabilized, no gain fixes it.
@@ -86,7 +87,8 @@ SITL tuning complete for two models; HITL verification next.
 
 1. HITL session on the board with `atlas_og_flat.params` (or `atlas_09b.params`), comparing against the SITL
    confirmation numbers in the experiments notes.
-2. Measure the fans' reaction-torque coefficient on a thrust stand; it decides ATLAS_09B's controllability.
+2. Measure the fans' reaction-torque coefficient on a thrust stand; it decides ATLAS_09B's controllability. Ask
+   whether counter-rotating fan pairs are possible: they would remove the yaw-authority limit outright.
 3. Decide which model represents the aircraft that will fly (OG from Fusion vs 09B from upstream).
 4. Remote-switch takeoff and land sequences for Stabilized in HITL (see inbox).
 
