@@ -1,0 +1,17 @@
+{
+  "name": "stab_rate_p",
+  "description": "Stabilized lab flow on ATLAS_OG with flat nose brackets: roll and pitch rate P over a 4x4 grid. Objective: hover attitude tracking, quiet rates, gentle liftoff and landing attitude, soft touchdown, no saturation.",
+  "airframe": "airframes/atlas_og.json",
+  "base_variables": {"rotors[8:10].cant_deg": 0},
+  "scenario": "scenarios/stab_lab.json",
+  "variables": [
+    {"path": "px4.MC_ROLLRATE_P", "range": [0.1, 0.4]},
+    {"path": "px4.MC_PITCHRATE_P", "range": [0.1, 0.4]}
+  ],
+  "objective": "phases.hover.pitch_err_rms_deg + phases.hover.roll_err_rms_deg + 0.05 * phases.hover.rates_rms_deg_s + 0.2 * (phases.liftoff.pitch_max_deg + phases.liftoff.roll_max_deg) + 0.2 * (phases.landing.pitch_max_deg + phases.landing.roll_max_deg) + 2 * phases.nose_lower.touchdown_speed + 5 * metrics.saturation_fraction",
+  "constraints": ["ok", "not metrics.crashed", "phases.nose_lower.touchdown_speed < 0.8", "abs(phases.hover.yaw_drift_deg) < 10", "phases.hover.pos_drift < 2"],
+  "penalty": 100,
+  "algorithm": {"name": "grid", "budget": 16, "levels": 4, "batch": 4},
+  "workers": 4,
+  "sim": {"rate": 250, "substeps": 2, "noise": true, "speed": 0, "instances": [1, 2, 3, 4]}
+}

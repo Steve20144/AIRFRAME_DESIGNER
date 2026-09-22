@@ -11,3 +11,7 @@ results/
 airframes/_autosave.json
 *.egg-info/
 results/
+airframes/cad/*.bodies.json
+airframes/meshes/
+.claude/settings.local.json
+.claude/worktrees/

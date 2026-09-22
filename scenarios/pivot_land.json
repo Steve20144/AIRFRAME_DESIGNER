@@ -1,0 +1,58 @@
+{
+  "name": "pivot_land",
+  "description": "ATLAS lab flow: slow nose lift, PX4 Takeoff and hover, PX4 Land at 0.3 m/s, then the nose is lowered to the parked pitch with the front fans after touchdown.",
+  "max_time": 200,
+  "params": {
+    "MIS_TAKEOFF_ALT": 3,
+    "COM_DISARM_LAND": 3,
+    "MPC_LAND_SPEED": 0.3
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 60,
+    "crash_speed": 3.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 60,
+      "min_wait": 5
+    },
+    {
+      "type": "nose_lift",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 40,
+      "timeout_s": 40
+    },
+    {
+      "type": "takeoff",
+      "alt": 3,
+      "settle": 2,
+      "timeout": 40
+    },
+    {
+      "type": "hold",
+      "name": "hover",
+      "duration": 6
+    },
+    {
+      "type": "nose_lower",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 120,
+      "target_pitch_deg": 6,
+      "fade_s": 4
+    },
+    {
+      "type": "wait",
+      "duration": 3
+    }
+  ]
+}

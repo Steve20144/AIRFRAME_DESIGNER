@@ -58,26 +58,41 @@ cd ~/PX4-Autopilot && make px4_sitl_default     # cmake, ninja, ccache from Home
 * **Flight** tab: modes, takeoff/land, sim speed, wind, home, sensor noise, per-motor override, and the **nose lift**
   ground sequence for aircraft that park nose-down but hover nose-up: the chosen (front) motors raise the nose to
   the hover pitch while PX4 is still disarmed, then keep holding it while PX4 arms and spools up. Enable "Use for
-  Takeoff" and the Takeoff button runs it first. PX4 needs no changes.
+  Takeoff" and the Takeoff button runs it first. PX4 needs no changes. The **nose lower** does the reverse on landing:
+  at touchdown the other motors are cut and the same motors ease the nose down to the parked pitch. Both can sit on
+  transmitter switches: a channel number on the card starts the lift, a Land slot on the mode switch lands.
 * **Connect** tab: SITL/HITL switching, the HITL checklist, and the **USB remote** (RadioMaster over Web Serial,
   EdgeTX HID joystick, or any gamepad; Chrome/Edge) streaming `MANUAL_CONTROL` to PX4 at 50 Hz.
 * **Batch** tab: run any scenario headless on the current design in a private PX4 instance while you keep flying;
   run a study and apply its best design.
+* **Tuning** tab: try a PX4 parameter set on the takeoff / hover / landing scenario headless (a private PX4
+  instance) or **live** on the connected PX4 (SITL or the HITL board), sweep a few parameters over a grid, and chart
+  every flight: height, roll and pitch against PX4's own attitude setpoint, yaw, rates, position and motor use,
+  with the scenario phases shaded. Flights are kept under `results/tuning/`; a sweep trial can be applied to the
+  airframe with one click.
 
 HITL notes (real Pixhawk, `pwm_out_sim` firmware, `SYS_HITL`, estimator resets, telemetry throttling) are unchanged
 from AIRFRAME_SIMULATOR; see its README for the board-side details.
+
+Release firmware ships without `pwm_out_sim`, so a stock board never enters HIL mode and cannot arm (the checklist
+says so). `scripts/build_hitl_firmware.sh px4_fmu-v6x upload` builds and flashes a variant that has it. On Linux
+without root, unpack the xpack `arm-none-eabi-gcc` 13.2 tarball under `~/toolchains/` and pip-install PX4's
+`Tools/setup/requirements.txt` into the venv (`VENV_BIN=<venv>/bin`). Build from a clean checkout of the tag on
+the board (`PX4_DIR=...`). Under WSL the board must be attached with `usbipd attach --wsl --busid <id>
+--auto-attach` left running: the uploader reboots it into the bootloader, which re-enumerates, and a plain attach
+hands it back to Windows so the upload waits forever.
 
 ## Headless: simulate, batch, optimise
 
 ```bash
 .venv/bin/python -m airframe_designer scenarios                                   # bundled flight scripts
-.venv/bin/python -m airframe_designer run --airframe airframes/atlas_08.json --scenario hover --out r.json
-.venv/bin/python -m airframe_designer run --airframe airframes/atlas_08.json --scenario cruise \
+.venv/bin/python -m airframe_designer run --airframe airframes/atlas_og.json --scenario hover --out r.json
+.venv/bin/python -m airframe_designer run --airframe airframes/atlas_og.json --scenario cruise \
         --set "rotors[0:8].tilt_deg=30" --set "mass.cg[0]=0.03" --out r.json
 .venv/bin/python -m airframe_designer batch --tasks tasks.json --workers 6 --out results.jsonl
-.venv/bin/python -m airframe_designer study --spec studies/atlas08_hover_tilt.json --workers 6
-.venv/bin/python -m airframe_designer analyse --airframe airframes/atlas_08.json --speed-kmh 50   # static, no PX4
-.venv/bin/python -m airframe_designer paths --airframe airframes/atlas_08.json                    # every variable
+.venv/bin/python -m airframe_designer study --spec studies/plane_quad_wing_cruise.json --workers 6
+.venv/bin/python -m airframe_designer analyse --airframe airframes/atlas_og.json --speed-kmh 50   # static, no PX4
+.venv/bin/python -m airframe_designer paths --airframe airframes/atlas_og.json                    # every variable
 ```
 
 A **scenario** is a JSON list of phases (`wait_ready`, `takeoff`, `hold`, `offboard_velocity`, `offboard_position`,

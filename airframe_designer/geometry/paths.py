@@ -132,7 +132,9 @@ def apply_variables(airframe, values: dict[str, Any]):
     new = copy.deepcopy(airframe)
     for p, v in values.items():
         set_path(new, p, v)
-    if hasattr(new, "mass"):
+    if hasattr(new, "resolve_mass"):
+        new.resolve_mass()          # mass items and CAD bodies -> mass, CG, inertia when from_items is set
+    elif hasattr(new, "mass"):
         new.mass.resolve()
     return new
 

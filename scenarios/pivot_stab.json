@@ -1,0 +1,65 @@
+{
+  "name": "pivot_stab",
+  "description": "Stage 1: the simulator's pre-arm nose lift pivots the aircraft from its nose-down park to the hover pitch. Stage 2: the pilot arms in Stabilized with the throttle down (the nose lift hands over), raises the throttle smoothly to lift off, hovers in Stabilized, then switches to Position and hovers hands-off. Everything after the nose lift is what a pilot does with the remote.",
+  "max_time": 150,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 60,
+    "crash_speed": 3.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 60,
+      "min_wait": 15
+    },
+    {
+      "type": "nose_lift",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 8,
+      "timeout": 75,
+      "timeout_s": 70
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.53,
+      "ramp_s": 5,
+      "duration": 6
+    },
+    {
+      "type": "stick",
+      "name": "pilot_stabilized",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 1.0,
+      "duration": 12
+    },
+    {
+      "type": "stick",
+      "name": "pilot_position",
+      "mode": "position",
+      "throttle": 0.5,
+      "ramp_s": 1.0,
+      "duration": 12
+    }
+  ]
+}

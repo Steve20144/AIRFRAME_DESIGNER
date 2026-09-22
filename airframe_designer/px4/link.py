@@ -18,6 +18,7 @@ import os
 import socket
 import struct
 import threading
+import math
 import time
 from collections import deque
 from typing import Callable
@@ -196,6 +197,11 @@ class PX4Link:
             time.sleep(0.02)
         self.log("[link] board telemetry throttled for HITL")
 
+    def request_message(self, msg_id: int, hz: float) -> None:
+        """MAV_CMD_SET_MESSAGE_INTERVAL on the control link (e.g. ATTITUDE_TARGET = 83 at 50 Hz)."""
+        interval = -1.0 if hz <= 0 else 1e6 / float(hz)
+        self.send_command_long(mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, float(msg_id), interval)
+
     def send_manual_control(self, roll: float, pitch: float, throttle: float, yaw: float, buttons: int = 0,
                             aux: list[float] | None = None) -> None:
         """MAVLink MANUAL_CONTROL, the same message QGroundControl sends for a joystick.
@@ -267,10 +273,13 @@ class PX4Link:
             self.ctl.mav.param_set_send(self.target_system, self.target_component, name.encode()[:16], wire, ptype)
         return True
 
-    def can_arm_modes(self) -> str:
-        """PX4's last arming-check summary: the modes it would arm in ('' while unknown)."""
+    def can_arm_modes(self, since: float | None = None) -> str:
+        """PX4's last arming-check summary: the modes it would arm in ('' while unknown, or when the latest summary
+        is older than ``since`` (wall time): a summary from before a sim reset says nothing about now)."""
         for x in reversed(list(self.recent_events)):
             if x.get("name") == "commander_arming_check_summary":
+                if since is not None and float(x.get("t", 0.0)) < since:
+                    return ""
                 d = dict(zip(x.get("arg_names", []), x.get("args", [])))
                 return str(d.get("can_arm", ""))
         return ""
@@ -371,6 +380,16 @@ class PX4Link:
                         self._shell_buf += bytes(msg.data[:msg.count])
             elif t == "ATTITUDE":
                 self.board_att = {"roll": msg.roll, "pitch": msg.pitch, "yaw": msg.yaw, "t": time.time()}
+            elif t == "ATTITUDE_TARGET":
+                # the attitude controller's setpoint (PX4 body frame = the hover frame), for setpoint-vs-actual plots
+                w, x, y, z = (float(v) for v in msg.q)
+                sr = 2.0 * (w * x + y * z); cr = 1.0 - 2.0 * (x * x + y * y)
+                sp = max(-1.0, min(1.0, 2.0 * (w * y - z * x)))
+                sy = 2.0 * (w * z + x * y); cy = 1.0 - 2.0 * (y * y + z * z)
+                tb = getattr(msg, "thrust_body", None)
+                thr = -float(tb[2]) if tb is not None and len(tb) >= 3 else float(getattr(msg, "thrust", 0.0))
+                self.att_sp = {"roll": math.atan2(sr, cr), "pitch": math.asin(sp), "yaw": math.atan2(sy, cy),
+                               "thrust": thr, "time_boot_ms": int(msg.time_boot_ms), "t": time.time()}
             elif t == "RC_CHANNELS":
                 n = int(msg.chancount)
                 vals = [getattr(msg, f"chan{i}_raw") for i in range(1, 19)]

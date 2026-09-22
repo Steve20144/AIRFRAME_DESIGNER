@@ -3,8 +3,9 @@
 A study spec (JSON):
 {
   "name": "atlas08_hover_tilt",
-  "airframe": "airframes/atlas_08.json",
+  "airframe": "airframes/atlas_pivot16.json",
   "scenario": "scenarios/takeoff_hover_land.json",      # or "scenarios": [...] (all are run per candidate)
+  "base_variables": {"rotors[8:10].cant_deg": 0},              # optional: fixed paths applied first
   "variables": [{"path": "rotors[0:8].tilt_deg", "range": [10, 50]},
                 {"path": "hover_pitch_deg", "range": [0, 40]},
                 {"path": "px4.MC_PITCHRATE_P", "range": [0.05, 0.3]}],
@@ -69,6 +70,8 @@ def run_study(spec, workers: int | None = None, out_dir: str | Path | None = Non
     out = Path(out_dir) if out_dir else PROJECT_DIR / "results" / name
     out.mkdir(parents=True, exist_ok=True)
     af = Airframe.load(st["airframe"]) if isinstance(st["airframe"], str) else Airframe.from_dict(st["airframe"])
+    if st.get("base_variables"):        # fixed parameter paths applied before the search (a variant of the airframe)
+        af = apply_variables(af, dict(st["base_variables"]))
     sc_specs = st.get("scenarios") or [st["scenario"]]
     scenarios = [load_scenario(s) for s in sc_specs]
     sc_names = [s.name for s in scenarios]
@@ -126,8 +129,12 @@ def run_study(spec, workers: int | None = None, out_dir: str | Path | None = Non
         for k, x in todo:
             values = {p: (int(v) if ii else float(v)) for p, v, ii in zip(paths, x, is_int)}
             for si, sc in enumerate(scenarios):
-                tasks.append({"id": f"g{gen}_{keys.index(k)}_{si}", "airframe": af.to_dict(), "scenario": sc.to_dict(),
-                              "variables": values, "_key": k, "_si": si})
+                task = {"id": f"g{gen}_{keys.index(k)}_{si}", "airframe": af.to_dict(), "scenario": sc.to_dict(),
+                        "variables": values, "_key": k, "_si": si}
+                if st.get("timeseries"):          # keep every trial's flight for the Tuning tab's charts
+                    (out / "ts").mkdir(exist_ok=True)
+                    task["options"] = {"timeseries_path": str(out / "ts" / f"{task['id']}_ts.json")}
+                tasks.append(task)
         if tasks:
             log(f"[study] generation {gen}: {len(todo)} candidates x {len(scenarios)} scenario(s) on {workers} worker(s)")
             results = run_many(tasks, workers=workers, instances=instances, **sim_kw)
@@ -142,6 +149,7 @@ def run_study(spec, workers: int | None = None, out_dir: str | Path | None = Non
                          "objective": sc_["objective"], "feasible": sc_["feasible"], "violations": sc_["violations"],
                          "ok": merged.get("ok"), "status": merged.get("status"), "failures": merged.get("failures", [])[:5],
                          "metrics": {n: r.get("metrics", {}) for n, r in zip(sc_names, rs)},
+                         "timeseries_path": next((r.get("timeseries_path") for r in rs if r and r.get("timeseries_path")), None),
                          "timing": {n: r.get("timing", {}) for n, r in zip(sc_names, rs)}, "generation": gen, "t": round(time.time() - t_start, 1)}
                 cache[k] = trial
                 trials.append(trial)

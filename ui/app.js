@@ -24,14 +24,19 @@ let joyWs = null;          // websocket handle used by the USB remote (declared 
 let scene;
 try {
   scene = createScene($('#c'), {
-    onSelect: (i) => { selected = i; renderRotorTable(); renderReadout(); },
+    onSelect: (i) => { selected = i; if (i >= 0) cadSelected = null; renderRotorTable(); renderReadout(); if (i >= 0) renderCadTable(); },
     onRotorChanged: (i, r, commit) => { renderRotorRow(i); renderReadout(); if (commit) pushAirframe(); },
+    onCadSelect: (id) => { cadSelected = id; if (id !== null && selected >= 0) { selected = -1; renderRotorTable(); renderReadout(); } renderCadTable(); },
+    onCadGroupChanged: (changes, commit) => {
+      for (const { id, offset } of changes) { const b = cadBody(id); if (b) { b.offset = offset; renderCadRow(id); } }
+      renderCadTotals(); if (commit) pushAirframe(true);
+    },
   });
 } catch (e) {
   // no WebGL (hidden window, remote desktop, old GPU): keep the rest of the app working without the 3D view
   console.warn('3D view unavailable:', e.message);
   const noop = () => { };
-  scene = { setAirframe: noop, updateState: noop, select: noop, updateRotorNode: noop, setTheme: noop, setFollow: noop, setCameraMode: noop, setMode: noop, selected: -1, focusOrigin: noop };
+  scene = { setAirframe: noop, updateState: noop, select: noop, updateRotorNode: noop, setTheme: noop, setFollow: noop, setCameraMode: noop, setMode: noop, selected: -1, focusOrigin: noop, setCad: noop, selectCad: noop, syncCad: noop, selectedCad: null, selectedCadIds: [] };
   $('#viewport').insertAdjacentHTML('afterbegin', '<div class="hint" style="padding:18px">3D view unavailable in this window (no WebGL). Everything else works.</div>');
 }
 
@@ -44,6 +49,7 @@ $$('.tabs button').forEach(b => b.addEventListener('click', () => {
   if (b.dataset.tab === 'connect') refreshConnection();
   if (b.dataset.tab === 'design') refreshDesign();
   if (b.dataset.tab === 'batch') refreshBatch();
+  if (b.dataset.tab === 'tuning') refreshTuning();
 }));
 function openTab(name) { $$('.tabs button').find(b => b.dataset.tab === name)?.click(); }
 
@@ -63,7 +69,7 @@ function pushAirframe(immediate = false) {
       if (bad.length) logLine('[ui] empty or invalid number fields set to 0: ' + bad.join(', '));
       const res = await api('/api/airframe', { airframe, keep_state: true });
       // the server resolves mass.from_items and normalises rotor axes; take its mass block back so the card is right
-      if (res.airframe && res.airframe.mass && airframe.mass && airframe.mass.from_items) { airframe.mass = res.airframe.mass; fillMassCard(); scene.setAirframe(airframe); }
+      if (res.airframe && res.airframe.mass && airframe.mass && airframe.mass.from_items) { airframe.mass = res.airframe.mass; if (res.airframe.cad) airframe.cad = res.airframe.cad; fillMassCard(); renderCadTotals(); scene.setAirframe(airframe); }
       showProblems(res.problems);
       showHover(res.hover);
       markDirty();
@@ -117,6 +123,7 @@ function setAirframe(af) {
   $('#af-name').value = af.name;
   $('#title-name').textContent = af.name;
   fillMassCard();
+  fillCadCard();
   ['bx', 'by', 'bz'].forEach((k, i) => $('#af-' + k).value = af.body.size[i]);
   ['dragx', 'dragy', 'dragz'].forEach((k, i) => $('#af-' + k).value = af.body.drag_quadratic[i]);
   ['adragx', 'adragy', 'adragz'].forEach((k, i) => $('#af-' + k).value = af.body.drag_angular[i]);
@@ -157,6 +164,128 @@ function applyMotorCard(kindChanged) {
 }
 $('#m-kind').addEventListener('change', () => applyMotorCard(true));
 ['m-tmax', 'm-tau', 'm-km', 'm-dia', 'm-exp', 'm-ram', 'm-turnloss'].forEach(id => $('#' + id).addEventListener('change', () => applyMotorCard(false)));
+
+// ============================================================ CAD bodies (STEP)
+let cadSelected = null;              // body id highlighted in the table and the 3D view
+const cadCentroids = {};             // id -> centroid in the structural frame without the drag offset
+let cadMeshKey = null;               // file|rotation|origin|scale of the meshes currently in the scene
+const cadKey = (cad) => [cad.file, (cad.rotation_deg || []).join(','), (cad.origin || []).join(','), cad.scale].join('|');
+const cadBody = (id) => (airframe && airframe.cad && airframe.cad.bodies || []).find(b => b.id === id);
+const cadPos = (b) => { const c = cadCentroids[b.id]; return c ? c.map((v, i) => v + (b.offset ? b.offset[i] : 0)) : (b.pos || [0, 0, 0]); };
+function fillCadCard() {
+  const cad = airframe.cad;
+  $('#cad-use').checked = !!airframe.mass.from_items;
+  if (cad && cad.file) {
+    for (const b of cad.bodies || []) if (b.pos) cadCentroids[b.id] = b.pos.map((v, i) => v - (b.offset ? b.offset[i] : 0));
+    $('#cad-filename').textContent = cad.file.replace(/^airframes\/cad\//, '');
+    $('#cad-show').checked = cad.visible !== false;
+    ['rx', 'ry', 'rz'].forEach((k, i) => $('#cad-' + k).value = +(+(cad.rotation_deg || [0, 0, 0])[i]).toFixed(2));
+    ['ox', 'oy', 'oz'].forEach((k, i) => $('#cad-' + k).value = +(+(cad.origin || [0, 0, 0])[i]).toFixed(4));
+    $('#cad-scale').value = cad.scale ?? 1;
+    $('#cad-frame-row').style.display = '';
+    const key = cadKey(cad);
+    if (key !== cadMeshKey) loadCadMesh(key);
+  } else {
+    $('#cad-filename').textContent = '';
+    $('#cad-frame-row').style.display = 'none';
+    if (cadMeshKey) { cadMeshKey = null; scene.setCad(null); }
+    cadSelected = null;
+  }
+  renderCadTable();
+}
+async function loadCadMesh(key) {
+  cadMeshKey = key;
+  try {
+    const r = await api('/api/cad/mesh');
+    if (cadMeshKey !== key) return;      // superseded
+    for (const b of r.bodies || []) cadCentroids[b.id] = b.centroid;
+    scene.setCad(r);
+    if (cadSelected !== null) scene.selectCad(cadSelected);
+    renderCadTable();
+  } catch (e) { logLine('[cad] mesh: ' + e.message); }
+}
+function cadRowHtml(b, k) {
+  const p = cadPos(b);
+  const moved = (b.offset || [0, 0, 0]).some(v => Math.abs(v) > 1e-6);
+  return `<tr data-cad="${esc(b.id)}" class="${(scene.selectedCadIds || []).includes(b.id) ? 'selected' : ''}"><td class="idx">${k + 1}</td><td class="mono">${esc(b.name)}</td>
+  <td class="num" title="volume from the CAD solid">${(b.volume * 1e3).toFixed(3)}</td>
+  <td><input type="number" step="0.01" min="0" data-k="mass" value="${+(+b.mass || 0).toFixed(4)}" title="mass of this body, kg (0 = ignored)"></td>
+  <td class="num pos" title="centroid, structural frame, m${moved ? ' (dragged by ' + b.offset.map(v => v.toFixed(3)).join(', ') + ')' : ''}">${p.map(v => v.toFixed(3)).join('  ')}${moved ? ' <span class="warn" title="moved from the CAD position">•</span>' : ''}</td>
+  <td><button class="del" title="remove this body from the list">✕</button></td></tr>`;
+}
+function renderCadTable() {
+  const el = $('#cad-table'); const cad = airframe && airframe.cad;
+  if (!cad || !cad.file) { el.innerHTML = '<div class="hint">No CAD file. Import a STEP file to place its bodies and give them masses.</div>'; $('#cad-totals').innerHTML = ''; $('#cad-summary').textContent = ''; return; }
+  const live = (cad.bodies || []).filter(b => !b.removed);
+  el.innerHTML = `<table class="grid cad"><thead><tr><th>#</th><th>Body</th><th class="num" title="litres">Vol L</th><th>Mass kg</th><th title="centroid in the structural frame (x fwd, y right, z down), m: click a row to highlight the body, drag it in the 3D view along its axes">X Y Z</th><th></th></tr></thead><tbody>${live.map(cadRowHtml).join('') || '<tr><td colspan="6" class="hint">All bodies removed.</td></tr>'}</tbody></table>`;
+  el.querySelectorAll('tr[data-cad]').forEach(tr => {
+    const id = tr.dataset.cad;
+    tr.addEventListener('click', (e) => { if (['INPUT', 'BUTTON'].includes(e.target.tagName)) return; scene.selectCad(id, e.shiftKey); cadSelected = scene.selectedCad; if (cadSelected !== null && selected >= 0) { selected = -1; renderRotorTable(); renderReadout(); } renderCadTable(); });
+    tr.querySelector('input[data-k="mass"]').addEventListener('change', (e) => { const b = cadBody(id); b.mass = Math.max(0, parseFloat(e.target.value) || 0); scene.syncCad(); renderCadTotals(); pushAirframe(true); });
+    tr.querySelector('.del').addEventListener('click', () => { const b = cadBody(id); b.removed = true; if (cadSelected === id) { cadSelected = null; scene.selectCad(null); } scene.syncCad(); renderCadTable(); pushAirframe(true); });
+  });
+  renderCadTotals();
+}
+function renderCadRow(id) {
+  const tr = $(`#cad-table tr[data-cad="${CSS.escape(id)}"]`); const b = cadBody(id); if (!tr || !b) return;
+  const p = cadPos(b); const cell = tr.querySelector('td.pos'); if (cell) cell.innerHTML = p.map(v => v.toFixed(3)).join('  ') + ' <span class="warn" title="moved from the CAD position">•</span>';
+}
+function renderCadTotals() {
+  const cad = airframe && airframe.cad; const el = $('#cad-totals'); if (!cad || !cad.file) return;
+  const live = (cad.bodies || []).filter(b => !b.removed && (+b.mass || 0) > 0);
+  const removed = (cad.bodies || []).filter(b => b.removed).length;
+  const m = live.reduce((a, b) => a + (+b.mass), 0);
+  let cgTxt = 'no masses yet';
+  if (m > 0) { const cg = [0, 0, 0]; for (const b of live) { const p = cadPos(b); for (let i = 0; i < 3; i++) cg[i] += p[i] * b.mass / m; } cgTxt = `CG of bodies x ${cg[0].toFixed(3)}  y ${cg[1].toFixed(3)}  z ${cg[2].toFixed(3)} m`; }
+  el.innerHTML = `<b>${m.toFixed(2)} kg</b> in ${live.length} of ${(cad.bodies || []).length - removed} bodies · ${cgTxt}${airframe.mass.from_items ? ` · <span class="ok">aircraft CG follows the bodies</span>` : ' · tick "Mass, CG & inertia from bodies" to use it'}${removed ? ` · ${removed} removed <a href="#" id="cad-restore">restore</a>` : ''}`;
+  const shown = (cad.bodies || []).length - removed;
+  $('#cad-summary').textContent = `${cad.file.replace(/^airframes\/cad\//, '')} · ${shown} bodies${live.length ? ` (${live.length} with mass)` : ''} · ${m.toFixed(1)} kg`;
+  const rs = $('#cad-restore'); if (rs) rs.addEventListener('click', (e) => { e.preventDefault(); cad.bodies.forEach(b => b.removed = false); scene.syncCad(); renderCadTable(); pushAirframe(true); });
+}
+$('#cad-import').addEventListener('click', () => $('#cad-file').click());
+$('#cad-file').addEventListener('change', async (e) => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  const btn = $('#cad-import'); btn.disabled = true; btn.textContent = 'Importing…';
+  try {
+    await api('/api/airframe', { airframe, keep_state: true });    // the import attaches to the server's copy
+    const r = await fetch('/api/cad/import?filename=' + encodeURIComponent(f.name), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await f.arrayBuffer() });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) throw new Error((j && j.error) || r.statusText);
+    cadMeshKey = cadKey(j.airframe.cad);
+    for (const b of j.mesh.bodies || []) cadCentroids[b.id] = b.centroid;
+    scene.setCad(j.mesh);
+    selected = -1; cadSelected = null;
+    setAirframe(j.airframe); markDirty();
+    $('#cad-details').open = true;
+    logLine(`[cad] imported ${f.name}: ${j.bodies} bodies`);
+  } catch (err) { logLine('[cad] import failed: ' + err.message); alert('STEP import failed: ' + err.message); }
+  btn.disabled = false; btn.textContent = 'Import STEP…'; e.target.value = '';
+});
+$('#cad-show').addEventListener('change', (e) => { if (!airframe.cad) return; airframe.cad.visible = e.target.checked; scene.syncCad(); pushAirframe(true); });
+$('#cad-use').addEventListener('change', (e) => { const m = airframe.mass;
+  if (e.target.checked && !m.from_items) {
+    m.manual = structuredClone({ mass: m.mass, cg: m.cg, inertia: m.inertia, inertia_products: m.inertia_products || [0, 0, 0] });
+  } else if (!e.target.checked && m.manual) {
+    Object.assign(m, structuredClone(m.manual));
+  }
+  m.from_items = e.target.checked; fillMassCard(); renderCadTotals(); pushAirframe(true); });
+async function cadFrameChanged() {
+  const cad = airframe.cad; if (!cad) return;
+  cad.rotation_deg = ['rx', 'ry', 'rz'].map(k => parseFloat($('#cad-' + k).value) || 0);
+  cad.origin = ['ox', 'oy', 'oz'].map(k => parseFloat($('#cad-' + k).value) || 0); cad.scale = Math.max(1e-4, parseFloat($('#cad-scale').value) || 1);
+  try {
+    const res = await api('/api/airframe', { airframe, keep_state: true });
+    if (res.airframe) { airframe.mass = res.airframe.mass; airframe.cad = res.airframe.cad; }
+    fillMassCard(); markDirty();
+    for (const b of airframe.cad.bodies || []) if (b.pos) cadCentroids[b.id] = b.pos.map((v, i) => v - (b.offset ? b.offset[i] : 0));
+    scene.setAirframe(airframe);
+    loadCadMesh(cadKey(airframe.cad));
+  } catch (err) { logLine('[cad] ' + err.message); }
+}
+['cad-rx', 'cad-ry', 'cad-rz', 'cad-ox', 'cad-oy', 'cad-oz', 'cad-scale'].forEach(id => $('#' + id).addEventListener('change', cadFrameChanged));
+$('#cad-reset-offsets').addEventListener('click', () => { if (!airframe.cad) return; airframe.cad.bodies.forEach(b => b.offset = [0, 0, 0]); scene.syncCad(); renderCadTable(); pushAirframe(true); });
+$('#cad-remove-all').addEventListener('click', () => { if (!airframe.cad || !confirm('Remove the CAD file and all its bodies from this airframe?')) return; airframe.cad = null; cadSelected = null; scene.selectCad(null); setAirframe(airframe); pushAirframe(true); });
+
 
 function bindNumber(id, fn) {
   $('#' + id).addEventListener('change', (e) => { fn(parseFloat(e.target.value) || 0); scene.setAirframe(airframe); pushAirframe(true); });
@@ -721,7 +850,9 @@ function noseLiftCfg() {
   const d = airframe.design.nose_lift || {};
   const motors = $$('#nl-motors input[data-m]').filter(c => c.checked).map(c => +c.dataset.m);
   return { enabled: $('#nl-use').checked, motors: motors.length ? motors : (d.motors || []), target_pitch_deg: +$('#nl-target').value,
-           rate_deg_s: +$('#nl-rate').value || 8, assist_cmd: (+$('#nl-assist').value || 0) / 100 };
+           rate_deg_s: +$('#nl-rate').value || 8, assist_cmd: (+$('#nl-assist').value || 0) / 100,
+           rc_channel: +$('#nl-rc').value || 0, rc_active_low: $('#nl-rc-low').checked,
+           rc_threshold: $('#nl-rc-low').checked ? 1300 : 1700 };
 }
 function fillNoseLiftCard() {
   if (!airframe) return;
@@ -732,7 +863,18 @@ function fillNoseLiftCard() {
   $('#nl-rate').value = d.rate_deg_s ?? 8;
   $('#nl-assist').value = Math.round((d.assist_cmd ?? 0) * 100);
   $('#nl-use').checked = !!d.enabled;
-  $$('#nl-card input').forEach(inp => inp.addEventListener('change', () => { airframe.design.nose_lift = noseLiftCfg(); pushAirframe(true); }));
+  $('#nl-rc').value = d.rc_channel || 0;
+  $('#nl-rc-low').checked = !!d.rc_active_low;
+  const lo = (airframe.design && airframe.design.nose_lower) || {};
+  $('#nlo-use').checked = !!lo.enabled;
+  $('#nlo-rate').value = lo.rate_deg_s ?? 3;
+  $('#nlo-target').value = lo.target_pitch_deg ?? airframe.landed_pitch_deg ?? 0;
+  $$('#nl-card input').forEach(inp => inp.addEventListener('change', () => {
+    airframe.design.nose_lift = noseLiftCfg();
+    airframe.design.nose_lower = { enabled: $('#nlo-use').checked, motors: airframe.design.nose_lift.motors,
+                                   rate_deg_s: +$('#nlo-rate').value || 3, target_pitch_deg: +$('#nlo-target').value };
+    pushAirframe(true);
+  }));
 }
 async function startNoseLift() {
   const c = noseLiftCfg();
@@ -1454,7 +1596,7 @@ function joyTick() {
       if (val) val.textContent = v.toFixed(2);
     });
     const now = performance.now();
-    if (status.conn_mode === 'sitl' && joyWs && joyWs.readyState === 1 && now - joyLastSend > 20) {   // 50 Hz, SITL only
+    if (status.connected && joyWs && joyWs.readyState === 1 && now - joyLastSend > 20) {   // 50 Hz, SITL and HITL
       joyLastSend = now;
       const g = (k) => joyValue(src, joyMap.find(f => f.key === k));
       const aux = src.axes.slice(4, 10).map(v => +v.toFixed(3));
@@ -1490,7 +1632,8 @@ async function loadScenarios() {
   el.innerHTML = scenariosCache.length ? scenariosCache.map(s => `<div class="card sc"><div class="conn-row"><div><b>${esc(s.name)}</b> <span class="hint mono">${esc(s.file)}</span>
       <div class="hint">${esc(s.description || '')}</div><div class="phases">${(s.phases || []).map(p => `<span class="phase">${esc(p)}</span>`).join('')}</div></div>
       <div class="row tight"><select class="sc-physics" data-sc="${esc(s.file)}" title="physics engine for this headless run"><option value="python">Python</option><option value="jsbsim">JSBSim</option></select>
-      <button class="pill small primary" data-run="${esc(s.file)}">Run headless</button>
+      <button class="pill small primary" data-live="${esc(s.file)}" title="fly this scenario on the live simulator with the PX4 you are connected to (SITL or the HITL board): its parameters are pushed first, the vehicle is put back on its legs">Fly live</button>
+      <button class="pill small" data-run="${esc(s.file)}">Run headless</button>
       <button class="pill small" data-compare="${esc(s.file)}" title="run this scenario on BOTH engines and show the differences">Compare physics</button></div></div></div>`).join('')
     : '<div class="hint">No scenarios in scenarios/.</div>';
   const start = async (file, physics) => {
@@ -1505,6 +1648,15 @@ async function loadScenarios() {
     try { await start(b.dataset.run, physics); pollJobs(); } catch (e) { logLine('[batch] ' + e.message); }
     b.disabled = false; b.textContent = 'Run headless';
   }));
+  $$('#scenario-list button[data-live]').forEach(b => b.addEventListener('click', async () => {
+    b.disabled = true; b.textContent = 'Starting…';
+    try {
+      const r = await api('/api/scenario/start', { scenario: b.dataset.live.replace(/\.json$/, '') });
+      logLine(`[scenario] flying ${r.name} live: ${(r.phases || []).join(' > ')}`);
+      pollLiveScenario();
+    } catch (e) { logLine('[scenario] ' + e.message); }
+    b.disabled = false; b.textContent = 'Fly live';
+  }));
   $$('#scenario-list button[data-compare]').forEach(b => b.addEventListener('click', async () => {
     b.disabled = true; b.textContent = 'Starting…';
     try { const a = await start(b.dataset.compare, 'python'); const c = await start(b.dataset.compare, 'jsbsim'); comparePairs.push([a, c]); pollJobs(); }
@@ -1513,6 +1665,28 @@ async function loadScenarios() {
   }));
 }
 const comparePairs = [];   // [pythonJobId, jsbsimJobId] pairs started by "Compare physics"
+let liveScenarioTimer = null, liveScenarioLast = null;
+async function pollLiveScenario() {
+  clearTimeout(liveScenarioTimer);
+  let st;
+  try { st = await api('/api/scenario/status'); } catch (e) { return; }
+  const el = $('#live-scenario');
+  if (el) {
+    if (!st.running && !st.result) el.innerHTML = '';
+    else {
+      const m = st.result && st.result.metrics ? st.result.metrics : null;
+      const rows = m ? Object.entries(m.phases || {}).map(([ph, d]) => `<tr><td>${esc(ph)}</td><td class="num">${mnum(d.duration, 1)}</td><td class="num">${mnum(d.pitch_start_deg, 1)} → ${mnum(d.pitch_end_deg, 1)}</td><td class="num">${mnum(d.pitch_rate_max_deg_s, 1)}</td><td class="num">${mnum(d.roll_rms_deg, 2)}</td><td class="num">${mnum(d.alt_mean, 2)} ± ${mnum(d.alt_std, 3)}</td><td class="num">${mnum(d.util_max, 2)}</td></tr>`).join('') : '';
+      el.innerHTML = `<div class="card"><b>${esc(st.name || '')}</b> <span class="hint">${st.running ? `phase ${st.phase_index + 1}/${st.phase_count}: ${esc(st.phase || '')} · t=${mnum(st.sim_time, 1)} s · throttle ${mnum(st.throttle, 2)}` : `${esc(st.status)} · ${st.ok ? 'ok' : 'FAILED'}`}</span>
+        ${st.running ? '<button class="pill small" id="live-scenario-stop">Stop</button>' : ''}
+        ${(st.failures || []).map(f => `<div class="hint" style="color:var(--bad)">${esc(f)}</div>`).join('')}
+        ${rows ? `<table class="grid"><thead><tr><th>phase</th><th class="num">s</th><th class="num">pitch deg (hover frame)</th><th class="num">max q deg/s</th><th class="num">roll rms</th><th class="num">alt m</th><th class="num">max motor</th></tr></thead><tbody>${rows}</tbody></table>` : ''}</div>`;
+      const stop = $('#live-scenario-stop'); if (stop) stop.addEventListener('click', () => api('/api/scenario/stop', {}));
+    }
+  }
+  const key = JSON.stringify([st.running, st.phase_index, st.status]);
+  if (key !== liveScenarioLast && st.name) { liveScenarioLast = key; if (!st.running) logLine(`[scenario] ${st.name}: ${st.status} (${st.ok ? 'ok' : 'failed'})`); }
+  if (st.running) liveScenarioTimer = setTimeout(pollLiveScenario, 700);
+}
 const CMP_KEYS = ['alt_mean', 'alt_std', 'pos_std_xy', 'pos_drift', 'speed_mean', 'roll_rms_deg', 'pitch_rms_deg', 'pitch_mean_deg', 'yaw_drift_deg', 'rates_rms_deg_s', 'util_max', 'power_mean', 'lift_share_mean', 'time_to_alt', 'time_to_pitch'];
 function renderCompare(jobs) {
   const el = $('#batch-compare'); if (!el) return;
@@ -1629,4 +1803,320 @@ function renderStudy(j) {
       ab.textContent = 'Applied'; setTimeout(() => { ab.textContent = 'Apply best'; ab.disabled = false; }, 1500);
     } catch (e) { logLine('[study] apply failed: ' + e.message); ab.disabled = false; }
   });
+}
+
+// ============================================================ tuning tab
+// One place to try a PX4 parameter set on the takeoff / hover / landing scenario (headless or live), sweep a few
+// parameters over a grid, and chart every flight (height, attitude against PX4's own setpoint, yaw, rates,
+// position, motors) with the scenario phases shaded. Flights are kept under results/tuning/ and results/<sweep>/.
+let tuneParams = [], sweepVars = [], tuneDefaults = null, tuneRuns = null, tuneSweeps = null, tuneTimer = null;
+let tuneSel = [], tuneLastSig = '';   // selected flight keys (newest last, at most two); last rendered list signature
+const tuneLoaded = {};            // key -> {name, timeseries, brief, ...}
+const sweepOpen = new Set();
+const TUNE_FLIGHT = new Set(['arm', 'liftoff', 'takeoff', 'hover', 'hold', 'landing', 'land', 'cut', 'headwind', 'crosswind', 'recover1', 'recover2', 'pilot_stabilized', 'pilot_position']);
+const TUNE_GAINS = ['MC_ROLLRATE_P', 'MC_PITCHRATE_P', 'MC_ROLLRATE_D', 'MC_PITCHRATE_D', 'MC_ROLL_P', 'MC_PITCH_P', 'MC_YAWRATE_P', 'MC_YAW_P', 'MC_YAW_WEIGHT'];
+
+async function refreshTuning() {
+  clearTimeout(tuneTimer);
+  if (!$('#tab-tuning').classList.contains('active')) return;
+  if (!scenariosCache) await loadScenarios();
+  for (const id of ['#tune-scenario', '#sweep-scenario']) {
+    const sel = $(id); const cur = sel.value;
+    sel.innerHTML = (scenariosCache || []).map(s => `<option value="${esc(s.name)}" title="${esc(s.description || '')}">${esc(s.name)}</option>`).join('');
+    sel.value = cur || (scenariosCache.some(s => s.name === 'stab_lab') ? 'stab_lab' : (scenariosCache[0] || {}).name || '');
+  }
+  if (!tuneDefaults) {
+    try { tuneDefaults = await api('/api/tuning/defaults'); } catch (e) { tuneDefaults = { params: {}, overrides: {} }; }
+    if (!tuneParams.length) tuneLoadGains();
+    if (!sweepVars.length) { sweepVars = [{ param: 'MC_ROLLRATE_P', min: 0.1, max: 0.4, levels: 4 }, { param: 'MC_PITCHRATE_P', min: 0.1, max: 0.4, levels: 4 }]; renderSweepVars(); }
+    $('#sweep-objective').innerHTML = `objective (lower is better): <code>${esc(tuneDefaults.objective || '')}</code><br>feasible when: <code>${esc((tuneDefaults.constraints || []).join('; '))}</code>`;
+  }
+  renderTuneParams(); tuneScenarioAttitude();
+  await pollTuning();
+}
+async function pollTuning() {
+  clearTimeout(tuneTimer);
+  if (!$('#tab-tuning').classList.contains('active')) return;
+  try {
+    [tuneRuns, tuneSweeps] = await Promise.all([api('/api/tuning/runs'), api('/api/tuning/sweeps')]);
+    // re-render the list only when something changed, so a click is never lost to a redraw
+    const sig = JSON.stringify([(tuneRuns.runs || []).map(r => r.id + r.brief.status), (tuneRuns.jobs || []).map(j => j.id + j.running + (j.log || []).slice(-1)[0]),
+      (tuneSweeps.sweeps || []).map(s => s.name + s.trials.length), tuneSweeps.running, tuneSweeps.current]);
+    if (sig !== tuneLastSig) { tuneLastSig = sig; renderTuneRuns(); }
+    renderSweepStatus();
+  } catch (e) { $('#tune-runs').innerHTML = `<div class="hint">${esc(e.message)}</div>`; }
+  const busy = (tuneRuns && (tuneRuns.jobs || []).some(j => j.running)) || (tuneSweeps && tuneSweeps.running);
+  tuneTimer = setTimeout(pollTuning, busy ? 2500 : 8000);
+}
+function tuneCurrent(name) {
+  const ov = (tuneDefaults && tuneDefaults.overrides) || {};
+  if (name in ov) return ov[name];
+  if (params && params[name] && params[name].value != null) return params[name].value;
+  return (tuneDefaults && tuneDefaults.params && tuneDefaults.params[name]);
+}
+function tuneLoadGains() {
+  const p = (tuneDefaults && tuneDefaults.params) || {};
+  tuneParams = TUNE_GAINS.filter(g => p[g] != null).map(g => ({ name: g, value: p[g] }));
+  if (!tuneParams.length) tuneParams = [{ name: 'MC_ROLLRATE_P', value: 0.2 }, { name: 'MC_PITCHRATE_P', value: 0.2 }];
+  renderTuneParams();
+}
+function renderTuneParams() {
+  const tb = $('#tune-params tbody');
+  tb.innerHTML = tuneParams.map((p, i) => { const cur = tuneCurrent(p.name); return `<tr><td><input type="text" class="p-name" data-i="${i}" value="${esc(p.name)}" spellcheck="false"></td>
+    <td><input type="number" step="any" class="p-val" data-i="${i}" value="${esc(p.value)}"></td>
+    <td class="hint num">${cur == null ? '—' : esc(cur)}${cur != null && +cur !== +p.value ? ' <span class="warn">→</span>' : ''}</td>
+    <td><button class="x" data-i="${i}" title="remove">×</button></td></tr>`; }).join('');
+  $$('#tune-params .p-name').forEach(el => el.addEventListener('change', () => { tuneParams[+el.dataset.i].name = el.value.trim().toUpperCase(); renderTuneParams(); }));
+  $$('#tune-params .p-val').forEach(el => el.addEventListener('change', () => { tuneParams[+el.dataset.i].value = +el.value; renderTuneParams(); }));
+  $$('#tune-params .x').forEach(el => el.addEventListener('click', () => { tuneParams.splice(+el.dataset.i, 1); renderTuneParams(); }));
+}
+function tuneAttitude() {
+  const o = {};
+  if ($('#tune-park').value !== '') o.park_pitch_deg = +$('#tune-park').value;
+  if ($('#tune-hover').value !== '') o.hover_pitch_deg = +$('#tune-hover').value;
+  return o;
+}
+function tuneScenarioAttitude() {
+  // placeholders: what the selected scenario (or, failing that, the airframe) parks and hovers at
+  const sc = (scenariosCache || []).find(s => s.name === $('#tune-scenario').value) || {};
+  const a = sc.attitude || {};
+  $('#tune-park').placeholder = a.park_pitch_deg != null ? String(a.park_pitch_deg) : (airframe ? String(airframe.landed_pitch_deg ?? '') : '');
+  $('#tune-hover').placeholder = a.hover_pitch_deg != null ? String(a.hover_pitch_deg) : (airframe ? String(airframe.hover_pitch_deg ?? '') : '');
+}
+$('#tune-scenario').addEventListener('change', tuneScenarioAttitude);
+function tuneParamObject() {
+  const o = {};
+  for (const p of tuneParams) if (p.name && isFinite(+p.value)) o[p.name] = +p.value;
+  return o;
+}
+$('#tune-add').addEventListener('click', () => { tuneParams.push({ name: '', value: 0 }); renderTuneParams(); const last = $$('#tune-params .p-name').slice(-1)[0]; if (last) last.focus(); });
+$('#tune-load').addEventListener('click', () => { tuneDefaults = null; tuneParams = []; refreshTuning(); });
+$('#tune-run').addEventListener('click', async () => {
+  const b = $('#tune-run'); b.disabled = true;
+  try {
+    await api('/api/airframe', { airframe, keep_state: true });
+    const r = await api('/api/tuning/run', { name: $('#tune-name').value.trim(), scenario: $('#tune-scenario').value, params: tuneParamObject(),
+      attitude: tuneAttitude(), options: { physics: $('#tune-physics').value, seed: +$('#tune-seed').value || 1 } });
+    logLine(`[tuning] headless attempt ${r.id} started (${$('#tune-scenario').value})`);
+    pollTuning();
+  } catch (e) { logLine('[tuning] ' + e.message); }
+  b.disabled = false;
+});
+$('#tune-live').addEventListener('click', async () => {
+  const b = $('#tune-live'); b.disabled = true;
+  try {
+    const r = await api('/api/tuning/run', { name: $('#tune-name').value.trim(), scenario: $('#tune-scenario').value, params: tuneParamObject(), attitude: tuneAttitude(), live: true });
+    logLine(`[tuning] live flight ${r.id}: ${(r.phases || []).join(' > ')}`);
+    pollTuneLive(r.id);
+  } catch (e) { logLine('[tuning] ' + e.message); $('#tune-live-status').innerHTML = `<div class="err small">${esc(e.message)}</div>`; }
+  b.disabled = false;
+});
+let tuneLiveTimer = null;
+async function pollTuneLive(id) {
+  clearTimeout(tuneLiveTimer);
+  let st; try { st = await api('/api/scenario/status'); } catch (e) { return; }
+  const el = $('#tune-live-status');
+  if (st.running) {
+    el.innerHTML = `<div class="hint">live: phase ${st.phase_index + 1}/${st.phase_count} <b>${esc(st.phase || '')}</b> · t=${mnum(st.sim_time, 1)} s · throttle ${mnum(st.throttle, 2)} <button class="pill small" id="tune-live-stop">Stop</button></div>`;
+    $('#tune-live-stop').addEventListener('click', () => api('/api/scenario/stop', {}));
+    tuneLiveTimer = setTimeout(() => pollTuneLive(id), 700);
+  } else {
+    el.innerHTML = `<div class="hint">live flight ${esc(st.status || '')} · ${st.ok ? '<span class="ok">ok</span>' : '<span class="err">failed</span>'} ${(st.failures || []).map(esc).join('; ')}</div>`;
+    await pollTuning();
+    if (st.tuning_id) tuneSelect('run:' + st.tuning_id, true);
+  }
+}
+$('#tune-apply').addEventListener('click', async () => {
+  const b = $('#tune-apply'); b.disabled = true;
+  const o = tuneParamObject(); let n = 0;
+  for (const [name, value] of Object.entries(o)) {
+    try { await api('/api/params/set', { name, value }); n++; }
+    catch (e) { try { await api('/api/airframe/override', { name, value }); n++; } catch (e2) { logLine(`[tuning] ${name}: ${e2.message}`); } }
+    if (airframe && airframe.px4_overrides) airframe.px4_overrides[name] = value;
+  }
+  tuneDefaults = null; markDirty();
+  logLine(`[tuning] ${n}/${Object.keys(o).length} parameters applied to the airframe (Save to keep them)`);
+  await refreshTuning(); b.disabled = false;
+});
+
+// ---- sweep form
+function renderSweepVars() {
+  const tb = $('#sweep-vars tbody');
+  tb.innerHTML = sweepVars.map((v, i) => `<tr><td><input type="text" class="s-name" data-i="${i}" value="${esc(v.param)}" spellcheck="false"></td>
+    <td><input type="number" step="any" class="s-min" data-i="${i}" value="${esc(v.min)}"></td><td><input type="number" step="any" class="s-max" data-i="${i}" value="${esc(v.max)}"></td>
+    <td><input type="number" step="1" min="1" max="12" class="s-lv" data-i="${i}" value="${esc(v.levels)}" style="width:52px"></td><td><button class="x" data-i="${i}">×</button></td></tr>`).join('');
+  const upd = (cls, key, f) => $$('#sweep-vars .' + cls).forEach(el => el.addEventListener('change', () => { sweepVars[+el.dataset.i][key] = f(el.value); renderSweepVars(); }));
+  upd('s-name', 'param', v => v.trim().toUpperCase()); upd('s-min', 'min', Number); upd('s-max', 'max', Number); upd('s-lv', 'levels', v => Math.max(1, Math.round(+v)));
+  $$('#sweep-vars .x').forEach(el => el.addEventListener('click', () => { sweepVars.splice(+el.dataset.i, 1); renderSweepVars(); }));
+  const n = sweepVars.reduce((a, v) => a * Math.max(1, v.levels || 1), 1);
+  const w = +$('#sweep-workers').value || 4;
+  $('#sweep-count').textContent = sweepVars.length ? `${n} runs · about ${Math.ceil(n / w)} rounds of roughly a minute` : '';
+}
+$('#sweep-add').addEventListener('click', () => { sweepVars.push({ param: '', min: 0, max: 1, levels: 3 }); renderSweepVars(); });
+$('#sweep-workers').addEventListener('change', renderSweepVars);
+$('#sweep-start').addEventListener('click', async () => {
+  const b = $('#sweep-start'); b.disabled = true;
+  try {
+    await api('/api/airframe', { airframe, keep_state: true });
+    const vars = sweepVars.filter(v => v.param).map(v => ({ param: v.param, min: v.min, max: v.max, levels: v.levels }));
+    const r = await api('/api/tuning/sweep', { name: $('#sweep-name').value.trim() || undefined, scenario: $('#sweep-scenario').value, variables: vars, workers: +$('#sweep-workers').value || 4 });
+    logLine(`[tuning] sweep ${r.name} started`);
+    pollTuning();
+  } catch (e) { logLine('[tuning] ' + e.message); }
+  b.disabled = false;
+});
+function renderSweepStatus() {
+  const el = $('#sweep-status'); if (!tuneSweeps) return;
+  if (!tuneSweeps.running) { el.innerHTML = tuneSweeps.error ? `<div class="err small">${esc(tuneSweeps.error)}</div>` : ''; return; }
+  const cur = (tuneSweeps.sweeps || []).find(s => s.name === tuneSweeps.current);
+  const n = cur ? cur.trials.length : 0;
+  el.innerHTML = `<div class="hint"><span class="warn">running</span> <b>${esc(tuneSweeps.current || '')}</b> · ${n} trial${n === 1 ? '' : 's'} so far${cur && cur.best_k != null ? ` · best score ${mnum(cur.trials[cur.best_k].score, 3)}` : ''}</div><pre class="joblog">${(tuneSweeps.log || []).map(esc).join('\n')}</pre>`;
+}
+
+// ---- the flights list
+const tuneFmt = (v, d = 2) => (v == null || !isFinite(v)) ? '—' : (+v).toFixed(d);
+function tuneBriefCells(b) {
+  b = b || {};
+  const st = b.status == null ? '' : (b.ok ? `<span class="ok">ok</span>` : `<span class="err" title="${esc((b.failures || []).join('; '))}">${esc(b.status || 'failed')}</span>`);
+  return `<td>${st}</td><td class="num">${tuneFmt(b.hover_pitch_err)}</td><td class="num">${tuneFmt(b.hover_roll_err)}</td><td class="num">${tuneFmt(b.hover_yaw_drift, 1)}</td>
+    <td class="num">${tuneFmt(b.hover_drift)}</td><td class="num">${tuneFmt(b.liftoff_max, 1)}</td><td class="num">${tuneFmt(b.landing_max, 1)}</td><td class="num">${tuneFmt(b.touchdown)}</td>
+    <td class="num">${b.saturation == null ? '—' : (b.saturation * 100).toFixed(1) + '%'}</td>`;
+}
+const TUNE_HEAD = `<tr><th></th><th>flight</th><th>scenario</th><th>parameters</th><th>status</th><th class="num" title="hover pitch tracking error RMS, deg">pitch</th><th class="num" title="hover roll tracking error RMS, deg">roll</th><th class="num" title="hover yaw drift, deg">yaw</th><th class="num" title="hover position drift, m">drift</th><th class="num" title="largest attitude excursion during liftoff, deg">liftoff</th><th class="num" title="largest attitude excursion during the landing, deg">landing</th><th class="num" title="touchdown speed, m/s">touch</th><th class="num" title="fraction of the flight with a motor above 95%">sat</th></tr>`;
+function paramSummary(p) {
+  const e = Object.entries(p || {}); if (!e.length) return '<span class="hint">airframe as is</span>';
+  return `<span class="mono" title="${esc(e.map(([k, v]) => k + '=' + v).join('\n'))}">${esc(e.slice(0, 3).map(([k, v]) => k.replace(/^px4\./, '').replace(/^MC_/, '') + ' ' + (+v).toPrecision(3)).join(', '))}${e.length > 3 ? ` +${e.length - 3}` : ''}</span>`;
+}
+function renderTuneRuns() {
+  const el = $('#tune-runs'); if (!tuneRuns) return;
+  const rows = [];
+  for (const j of (tuneRuns.jobs || []).filter(j => j.running))
+    rows.push(`<tr><td></td><td>${esc(j.name || j.id)} <span class="kind">running</span></td><td>${esc(j.scenario)}</td><td>${paramSummary(j.params)}</td><td colspan="9" class="hint">${esc((j.log || []).slice(-1)[0] || 'starting a private PX4…')}</td></tr>`);
+  for (const r of tuneRuns.runs || []) {
+    const key = 'run:' + r.id, sel = tuneSel.includes(key);
+    rows.push(`<tr data-run="${esc(key)}" class="${sel ? 'sel' : ''}"><td><input type="checkbox" data-cmp="${esc(key)}" ${sel ? 'checked' : ''} title="compare"></td><td>${esc(r.name)} <span class="kind">${esc(r.kind)}</span>${r.physics === 'jsbsim' ? ' <span class="kind">jsbsim</span>' : ''}</td><td>${esc(r.scenario || '')}</td><td>${paramSummary(r.params)}</td>${tuneBriefCells(r.brief)}</tr>`);
+  }
+  for (const s of (tuneSweeps && tuneSweeps.sweeps) || []) {
+    const open = sweepOpen.has(s.name);
+    const best = s.best_k != null ? s.trials[s.best_k] : null;
+    rows.push(`<tr class="sweep-head" data-sweep="${esc(s.name)}"><td>${open ? '▾' : '▸'}</td><td>${esc(s.name)} <span class="kind">sweep</span>${tuneSweeps.running && tuneSweeps.current === s.name ? ' <span class="warn">running</span>' : ''}</td><td>${esc(String(s.scenario || '').replace(/^scenarios\//, '').replace(/\.json$/, ''))}</td>
+      <td colspan="10" class="hint">${s.trials.length} trials · ${(s.variables || []).map(v => esc(String(v.path).replace(/^px4\./, ''))).join(', ')}${best ? ` · best ${mnum(best.score, 3)}: ${esc(Object.entries(best.values || {}).map(([k, v]) => k.replace(/^px4\./, '') + ' ' + (+v).toPrecision(3)).join(', '))}` : ''}</td></tr>`);
+    if (!open) continue;
+    const order = s.trials.map((t, i) => i).sort((a, b) => s.trials[a].score - s.trials[b].score);
+    for (const i of order) {
+      const t = s.trials[i], key = `trial:${s.name}:${t.k}`, sel = tuneSel.includes(key);
+      rows.push(`<tr data-run="${esc(key)}" class="${sel ? 'sel' : ''} ${t.feasible ? '' : 'infeasible'}"><td><input type="checkbox" data-cmp="${esc(key)}" ${sel ? 'checked' : ''}></td><td class="num">trial ${t.k + 1} · score ${mnum(t.score, 3)} ${t.feasible ? '' : `<span class="err" title="${esc((t.violations || []).concat(t.failures || []).join('; '))}">infeasible</span>`}</td><td></td>
+        <td>${paramSummary(t.values)} <button class="pill small" data-apply="${esc(key)}" title="apply these values to the live airframe">apply</button></td>${tuneBriefCells(t.brief)}</tr>`);
+    }
+  }
+  el.innerHTML = rows.length ? `<div class="tbl"><table class="grid"><thead>${TUNE_HEAD}</thead><tbody>${rows.join('')}</tbody></table></div>${tuneRuns.free_instances ? `<div class="hint">free PX4 instances: ${tuneRuns.free_instances.join(', ')}</div>` : ''}`
+    : `<div class="hint">No flights yet. Run an attempt or a sweep above.</div>`;
+  $$('#tune-runs tr.sweep-head').forEach(tr => tr.addEventListener('click', () => { const n = tr.dataset.sweep; if (sweepOpen.has(n)) sweepOpen.delete(n); else sweepOpen.add(n); renderTuneRuns(); }));
+  $$('#tune-runs tr[data-run]').forEach(tr => tr.addEventListener('click', (ev) => { if (ev.target.closest('input,button')) return; tuneSelect(tr.dataset.run, true); }));
+  $$('#tune-runs input[data-cmp]').forEach(cb => cb.addEventListener('change', () => tuneSelect(cb.dataset.cmp, false, cb.checked)));
+  $$('#tune-runs button[data-apply]').forEach(b => b.addEventListener('click', async () => {
+    const [, sname, k] = b.dataset.apply.split(':'); const s = (tuneSweeps.sweeps || []).find(x => x.name === sname); const t = s && s.trials.find(x => String(x.k) === k);
+    if (!t) return; b.disabled = true;
+    try { const r = await api('/api/airframe/apply_variables', { variables: t.values }); selected = -1; setAirframe(r.airframe); markDirty(); tuneDefaults = null; logLine('[tuning] applied ' + JSON.stringify(t.values)); b.textContent = 'applied'; }
+    catch (e) { logLine('[tuning] apply failed: ' + e.message); b.disabled = false; }
+  }));
+}
+async function tuneSelect(key, exclusive, on = true) {
+  if (exclusive) tuneSel = [key];
+  else if (on) { tuneSel = tuneSel.filter(k => k !== key).concat(key); if (tuneSel.length > 2) tuneSel = tuneSel.slice(-2); }
+  else tuneSel = tuneSel.filter(k => k !== key);
+  renderTuneRuns();
+  for (const k of tuneSel) if (!tuneLoaded[k]) {
+    try {
+      const parts = k.split(':');
+      tuneLoaded[k] = parts[0] === 'run' ? await api(`/api/tuning/run/${encodeURIComponent(parts[1])}`) : await api(`/api/tuning/sweep/${encodeURIComponent(parts[1])}/trial/${parts[2]}`);
+    } catch (e) { logLine('[tuning] ' + e.message); tuneSel = tuneSel.filter(x => x !== k); }
+  }
+  drawTuneCharts();
+}
+$('#tune-zoom').addEventListener('change', drawTuneCharts);
+
+// ---- charts (inline SVG, theme colours through CSS variables)
+const TUNE_W = 900, TUNE_H = 190, TUNE_PL = 46, TUNE_PR = 10, TUNE_PT = 16, TUNE_PB = 22;
+function niceTicks(lo, hi, n = 5) {
+  if (!(hi > lo)) return [lo];
+  const raw = (hi - lo) / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(s => s * mag).reduce((a, s) => Math.abs(s - raw) < Math.abs(a - raw) ? s : a);
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10)); return out;
+}
+function tuneChart(title, unit, runs, curves, opts = {}) {
+  // runs: [{t, phases, ts}], curves: [{label, col, get(ts) -> values, sp?: get(ts) -> setpoint values}]
+  const t0 = Math.min(...runs.map(r => r.t[0])), t1 = Math.max(...runs.map(r => r.t[r.t.length - 1]));
+  let vals = [];
+  for (const r of runs) for (const c of curves) { vals = vals.concat(c.get(r.ts).filter(Number.isFinite)); if (c.sp) vals = vals.concat(c.sp(r.ts).filter(Number.isFinite)); }
+  if (!vals.length) return '';
+  let lo = opts.ylim ? opts.ylim[0] : Math.min(...vals), hi = opts.ylim ? opts.ylim[1] : Math.max(...vals);
+  if (opts.hline != null) { lo = Math.min(lo, opts.hline); hi = Math.max(hi, opts.hline); }
+  if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+  const m = 0.06 * (hi - lo); lo -= m; hi += m;
+  const iw = TUNE_W - TUNE_PL - TUNE_PR, ih = TUNE_H - TUNE_PT - TUNE_PB;
+  const sx = x => TUNE_PL + (x - t0) / Math.max(t1 - t0, 1e-9) * iw, sy = y => TUNE_PT + (hi - y) / (hi - lo) * ih;
+  let s = `<svg viewBox="0 0 ${TUNE_W} ${TUNE_H}" xmlns="http://www.w3.org/2000/svg" font-size="11">`;
+  const ph = runs[0].phases, tt = runs[0].t;
+  if (ph && ph.length) {
+    let i0 = 0, k = 0;
+    for (let i = 1; i <= ph.length; i++) if (i === ph.length || ph[i] !== ph[i0]) {
+      const x0 = sx(tt[i0]), x1 = sx(tt[i - 1]);
+      s += `<rect x="${x0.toFixed(1)}" y="${TUNE_PT}" width="${Math.max(x1 - x0, 0.5).toFixed(1)}" height="${ih}" fill="${k % 2 ? 'var(--ov-6)' : 'var(--ov-35)'}"/>`;
+      if (x1 - x0 > 34) s += `<text x="${((x0 + x1) / 2).toFixed(1)}" y="${TUNE_PT + 11}" text-anchor="middle" fill="var(--text-3)">${esc(ph[i0])}</text>`;
+      i0 = i; k++;
+    }
+  }
+  s += `<rect x="${TUNE_PL}" y="${TUNE_PT}" width="${iw}" height="${ih}" fill="none" stroke="var(--line)"/>`;
+  for (const yv of niceTicks(lo + m, hi - m)) { const y = sy(yv); s += `<line x1="${TUNE_PL}" x2="${TUNE_W - TUNE_PR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--line)"/><text x="${TUNE_PL - 4}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" fill="var(--text-2)">${+yv.toPrecision(4)}</text>`; }
+  for (const xv of niceTicks(t0, t1, 9)) s += `<text x="${sx(xv).toFixed(1)}" y="${TUNE_H - 7}" text-anchor="middle" fill="var(--text-2)">${+xv.toPrecision(4)}</text>`;
+  if (opts.hline != null) { const y = sy(opts.hline); s += `<line x1="${TUNE_PL}" x2="${TUNE_W - TUNE_PR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--text-3)" stroke-dasharray="2,3"/>`; }
+  const poly = (t, ys, col, dash, width) => {
+    let out = '', pts = [];
+    const flush = () => { if (pts.length) out += `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="${width}"${dash ? ` stroke-dasharray="${dash}"` : ''} stroke-linejoin="round"/>`; pts = []; };
+    for (let i = 0; i < t.length; i++) { const y = ys[i]; if (!Number.isFinite(y)) { flush(); continue; } pts.push(`${sx(t[i]).toFixed(1)},${sy(Math.min(Math.max(y, lo), hi)).toFixed(1)}`); }
+    flush(); return out;
+  };
+  runs.forEach((r, ri) => {
+    for (const c of curves) {
+      if (c.sp && ri === 0) s += poly(r.t, c.sp(r.ts), 'var(--text-3)', '4,3', 1.2);
+      s += poly(r.t, c.get(r.ts), c.col, ri === 1 ? '6,3' : '', ri === 1 ? 1.3 : 1.5);
+    }
+  });
+  s += `<text x="${TUNE_W - TUNE_PR}" y="${TUNE_PT - 4}" text-anchor="end" fill="var(--text)" font-weight="600">${esc(title)}${unit ? ' [' + unit + ']' : ''}</text></svg>`;
+  return s;
+}
+function tuneSeries(ts, name) { const i = ts.columns.indexOf(name); return i < 0 ? ts.rows.map(() => NaN) : ts.rows.map(r => r[i]); }
+function tuneUnwrap(a) { const out = []; let off = 0, prev = null; for (const v of a) { if (prev != null && Number.isFinite(v) && Number.isFinite(prev)) { if (v - prev > 180) off -= 360; else if (v - prev < -180) off += 360; } out.push(Number.isFinite(v) ? v + off : v); prev = v; } return out; }
+function drawTuneCharts() {
+  const el = $('#tune-charts');
+  const runs = tuneSel.map(k => tuneLoaded[k]).filter(r => r && r.timeseries && r.timeseries.rows && r.timeseries.rows.length);
+  $('#tune-chart-title').innerHTML = runs.map((r, i) => `<span class="tune-legend"><i style="background:var(--text);${i ? 'height:0;border-top:2px dashed var(--text)' : ''}"></i>${esc(r.name || r.id)}</span>`).join(' ');
+  if (!runs.length) { el.innerHTML = tuneSel.length ? '<div class="hint">no time series for this flight</div>' : ''; return; }
+  const zoom = $('#tune-zoom').checked;
+  const prep = (r) => {
+    let ts = r.timeseries; let rows = ts.rows, phases = ts.phase || [];
+    if (zoom && phases.length) {
+      const idx = phases.map((p, i) => TUNE_FLIGHT.has(p) ? i : -1).filter(i => i >= 0);
+      if (idx.length > 10) { const a = idx[0], b = idx[idx.length - 1] + 1; rows = rows.slice(a, b); phases = phases.slice(a, b); }
+    }
+    ts = { columns: ts.columns, rows, phase: phases };
+    return { ts, t: tuneSeries(ts, 't'), phases };
+  };
+  const R = runs.map(prep);
+  const d2 = a => a.map(v => Number.isFinite(v) ? v * 180 / Math.PI : NaN);
+  const parts = [];
+  parts.push(tuneChart('height', 'm', R, [{ label: 'altitude', col: 'var(--accent)', get: ts => tuneSeries(ts, 'd').map(v => -v) }]));
+  parts.push(tuneChart('attitude, hover frame (dashed grey: PX4 setpoint)', 'deg', R, [
+    { label: 'roll', col: 'var(--accent)', get: ts => d2(tuneSeries(ts, 'roll')), sp: ts => d2(tuneSeries(ts, 'roll_sp')) },
+    { label: 'pitch', col: 'var(--red)', get: ts => d2(tuneSeries(ts, 'pitch')), sp: ts => d2(tuneSeries(ts, 'pitch_sp')) }], { hline: 0, ylim: zoom ? [-5, 5] : null }));
+  parts.push(tuneChart('yaw', 'deg', R, [{ label: 'yaw', col: 'var(--green)', get: ts => tuneUnwrap(d2(tuneSeries(ts, 'yaw'))) }]));
+  parts.push(tuneChart('body rates', 'deg/s', R, [
+    { label: 'p', col: 'var(--accent)', get: ts => d2(tuneSeries(ts, 'p')) }, { label: 'q', col: 'var(--red)', get: ts => d2(tuneSeries(ts, 'q')) },
+    { label: 'r', col: 'var(--green)', get: ts => d2(tuneSeries(ts, 'r')) }], { hline: 0, ylim: zoom ? [-30, 30] : null }));
+  parts.push(tuneChart('horizontal position', 'm', R, [{ label: 'north', col: 'var(--accent)', get: ts => tuneSeries(ts, 'n') }, { label: 'east', col: 'var(--red)', get: ts => tuneSeries(ts, 'e') }], { hline: 0 }));
+  parts.push(tuneChart('motors: max utilisation, mean command, thrust setpoint (dashed)', '0..1', R, [
+    { label: 'util max', col: 'var(--amber)', get: ts => tuneSeries(ts, 'util_max') }, { label: 'cmd mean', col: '#8e44ad', get: ts => tuneSeries(ts, 'cmd_mean'), sp: ts => tuneSeries(ts, 'thr_sp') }], { ylim: [0, 1] }));
+  const legend = `<div class="tune-legend"><span><i style="background:var(--accent)"></i>roll / p / north / altitude</span><span><i style="background:var(--red)"></i>pitch / q / east</span><span><i style="background:var(--green)"></i>yaw / r</span><span><i style="background:var(--amber)"></i>motor utilisation</span><span><i style="background:#8e44ad"></i>mean command</span><span><i style="background:var(--text-3)"></i>PX4 setpoint (dashed)</span>${runs.length > 1 ? '<span>second flight dashed</span>' : ''}</div>`;
+  el.innerHTML = `<div class="card">${legend}${parts.join('')}</div>`;
 }

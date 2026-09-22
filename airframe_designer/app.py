@@ -33,7 +33,7 @@ from .sim.simulator import Simulator
 from .server.app import AppState, build_app
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_AIRFRAME = "atlas_08.json"
+DEFAULT_AIRFRAME = "atlas_og.json"
 
 
 def free_http_port(host: str, port: int, log, tries: int = 20) -> int:

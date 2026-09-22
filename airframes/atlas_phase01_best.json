@@ -378,5 +378,12 @@
   "landed_pitch_deg": 25.824,
   "px4_overrides": {},
   "design": {},
-  "notes": "Best configuration found by scripts/km_margin.py plus a closed-loop sweep, validated on both physics engines. Flat front-jet brackets (the CAD's FRONT_JET_TILT30 replaced by straight mounts), hover pitch 26.0 deg, centre of gravity exactly as the CAD gives it. Tolerates a reaction-torque coefficient up to 0.008 against 0.002 as built, holds position five times tighter, and runs the motors cooler. Moving the centre of gravity scores better on a static allocation check and is worse in flight: see the commit that added this file."
+  "notes": "Best configuration found by scripts/km_margin.py plus a closed-loop sweep, validated on both physics engines. Flat front-jet brackets (the CAD's FRONT_JET_TILT30 replaced by straight mounts), hover pitch 26.0 deg, centre of gravity exactly as the CAD gives it. Tolerates a reaction-torque coefficient up to 0.008 against 0.002 as built, holds position five times tighter, and runs the motors cooler. Moving the centre of gravity scores better on a static allocation check and is worse in flight: see the commit that added this file.",
+  "mesh": {
+    "file": "atlas_phase01.stl",
+    "frame": "flu",
+    "scale": 1.0,
+    "opacity": 0.85,
+    "source": "mujoco-vibe vehicles/atlas-phase01/meshes/visual/airframe.stl (PHASE_0.1_ASSY_copy, model FLU, metres)"
+  }
 }

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,16 +49,26 @@ class Scenario:
     wind: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     abort: dict = field(default_factory=dict)
     description: str = ""
+    attitude: dict = field(default_factory=dict)     # {"park_pitch_deg": -10, "hover_pitch_deg": 25}: the flight starts
+                                                     # parked at the first, PX4 levels at the second (legs re-solved)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Scenario":
         return cls(name=d.get("name", "scenario"), phases=list(d.get("phases", [])), max_time=float(d.get("max_time", 120.0)),
                    params=dict(d.get("params", {}) or {}), wind=list(d.get("wind", [0, 0, 0]) or [0, 0, 0]),
-                   abort=dict(d.get("abort", {}) or {}), description=str(d.get("description", "")))
+                   abort=dict(d.get("abort", {}) or {}), description=str(d.get("description", "")),
+                   attitude=dict(d.get("attitude", {}) or {}))
 
     def to_dict(self) -> dict:
         return {"name": self.name, "description": self.description, "max_time": self.max_time, "params": self.params,
-                "wind": self.wind, "abort": self.abort, "phases": self.phases}
+                "wind": self.wind, "abort": self.abort, "phases": self.phases, "attitude": self.attitude}
+
+    def apply_attitude(self, airframe):
+        """The airframe as this scenario wants it parked and hovering (unchanged when the scenario says nothing)."""
+        a = self.attitude or {}
+        if a.get("park_pitch_deg") is None and a.get("hover_pitch_deg") is None:
+            return airframe
+        return airframe.with_attitude(park_pitch_deg=a.get("park_pitch_deg"), hover_pitch_deg=a.get("hover_pitch_deg"))
 
 
 def load_scenario(spec: str | Path | dict) -> Scenario:
@@ -140,7 +151,13 @@ class ScenarioRunner:
         s = simr.sim
         if not self._started:
             self._started = True
+            self._t_start = simr.t          # a live simulator may have been running for a long time already
             self._rest_alt = -float(s.pos[2])
+            if self.link is not None and hasattr(self.link, "request_message"):
+                try:
+                    self.link.request_message(83, 50.0)          # ATTITUDE_TARGET for setpoint-vs-actual metrics
+                except Exception:
+                    pass
             if any(abs(v) > 0 for v in self.sc.wind):
                 simr.sim.wind_ned = np.array(self.sc.wind, float)
             self._next(simr)
@@ -152,7 +169,7 @@ class ScenarioRunner:
         airborne = not s.on_ground
         if airborne:
             self._airborne_once = True
-        if simr.t > self.max_time:
+        if simr.t - getattr(self, "_t_start", 0.0) > self.max_time:
             self.fail(simr, f"scenario exceeded max_time {self.max_time}s", fatal=True); return
         if self._airborne_once and s.tilt_deg > float(ab.get("max_tilt_deg", 110.0)):
             self.metrics.crashed = True; self.metrics.crash_reason = f"tilt {s.tilt_deg:.0f} deg"
@@ -178,9 +195,21 @@ class ScenarioRunner:
 
     def _p_wait_ready(self, simr) -> None:
         link = self.link
-        can = link.can_arm_modes() if link is not None else ""
-        ready = link is not None and link.ctl_connected and ("takeoff" in can or "loiter" in can or "posctl" in can)
-        if ready:
+        st = self._state
+        st.setdefault("wall_t0", time.time())
+        # only a summary PX4 issued after this phase began counts: the vehicle may just have been put back on
+        # its legs, and a HITL estimator needs a few seconds to accept that
+        can = link.can_arm_modes(since=st["wall_t0"]) if link is not None else ""
+        if self._elapsed(simr) < float(self.phase.get("min_wait", 0.0)):
+            return
+        want = [str(m) for m in (self.phase.get("modes") or ["takeoff", "loiter", "posctl"])]
+        ready = link is not None and link.ctl_connected and any(m in can for m in want)
+        if not can and link is not None and link.ctl_connected and self._elapsed(simr) > float(self.phase.get("summary_wait", 12.0)):
+            # a HITL board whose event metadata is not loaded never yields a decoded arming summary: go on and let
+            # the arm/takeoff phase report what PX4 says
+            self.log(f"[scenario] no arming-check summary from PX4 after {self._elapsed(simr):.0f}s (event metadata missing?), proceeding")
+            self._next(simr)
+        elif ready:
             self.log(f"[scenario] PX4 ready after {simr.t:.1f}s sim time (can arm: {can.replace('|', ', ')})")
             self._next(simr)
         elif self._elapsed(simr) > float(self.phase.get("timeout", 60.0)):
@@ -193,6 +222,12 @@ class ScenarioRunner:
         target = float(self.phase.get("alt", 2.5))
         self.targets[self._name()] = {"alt": target + (self._rest_alt or 0.0)}
         if "sent" not in st:
+            if not link.armed and link.main_mode in (1, 2, 7) and "premode" not in st:
+                # PX4 refuses to arm in a manual mode without stick input: ask for Hold first, then arm
+                link.set_mode("hold"); st["premode"] = simr.t
+                return
+            if "premode" in st and simr.t - st["premode"] < 0.7:
+                return
             if not link.armed:
                 link.arm()
             st["sent"] = simr.t
@@ -201,9 +236,10 @@ class ScenarioRunner:
         if st["mode_at"] is None and link.armed and simr.t - st["sent"] > 0.2:
             link.set_mode("takeoff"); st["mode_at"] = simr.t
         elif st["mode_at"] is None and simr.t - st["sent"] > 3.0 and not link.armed:
+            # a HITL estimator can take a while to accept the attitude change of a nose lift: keep asking
             link.arm(); st["sent"] = simr.t; st["arm_retries"] = st.get("arm_retries", 0) + 1
-            if st["arm_retries"] > 5:
-                self.fail(simr, "PX4 refused to arm", fatal=True)
+            if el > float(self.phase.get("arm_timeout", 40.0)):
+                self.fail(simr, f"PX4 refused to arm for {el:.0f}s (can arm: '{link.can_arm_modes()}')", fatal=True)
             return
         if st["mode_at"] is not None and not link.mode_is("takeoff") and not link.mode_is("hold") and simr.t - st["mode_at"] > 2.0 and "retry" not in st:
             link.set_mode("takeoff"); st["retry"] = True
@@ -285,6 +321,98 @@ class ScenarioRunner:
         if self._elapsed(simr) >= float(self.phase.get("duration", 5.0)):
             self._next(simr)
 
+    def _p_stick(self, simr) -> None:
+        """A pilot's sticks, streamed at 50 Hz: the mode is selected once the stream is up, PX4 is armed if asked,
+        and the throttle follows a smooth (cosine) ramp from ``throttle_from`` to ``throttle`` over ``ramp_s``
+        (default: the whole phase). ``alt_hold`` {target, kp, kv, max_corr, min, max} makes the scripted pilot work
+        the throttle around that value to hold a height (Stabilized has no altitude loop). Ends after ``duration`` s,
+        or as soon as the hover-frame pitch has been within
+        ``until_pitch_tol_deg`` of ``until_pitch_deg`` for ``settle`` s. Roll/pitch/yaw sticks are held constant."""
+        st, link = self._state, self.link
+        el = self._elapsed(simr)
+        thr1 = float(self.phase.get("throttle", 0.0))
+        thr0 = float(self.phase.get("throttle_from", st.get("thr_prev", thr1)))
+        ramp = float(self.phase.get("ramp_s", self.phase.get("duration", 5.0)))
+        if ramp > 1e-6 and el < ramp:
+            thr = thr0 + (thr1 - thr0) * 0.5 * (1.0 - math.cos(math.pi * el / ramp))
+        else:
+            thr = thr1
+        ah = self.phase.get("alt_hold")
+        if ah:
+            # a pilot's throttle hand in a mode without altitude control: nudge the stick around the phase throttle
+            # by the height error and the climb rate (alt above the rest altitude, m; vz up, m/s). Attitude stays
+            # entirely with PX4; this only keeps the aircraft in the band a pilot would.
+            alt = -float(simr.sim.pos[2]) - (self._rest_alt or 0.0)
+            vz_up = -float(simr.sim.vel[2])
+            target = float(ah.get("target", 3.0))
+            rate = ah.get("rate")
+            if rate is not None:                 # slew the height target from where the phase started, like a pilot
+                if "ah_from" not in st:
+                    st["ah_from"] = alt
+                tgt0 = st["ah_from"]
+                target = tgt0 + max(-abs(float(rate)) * el, min(abs(float(rate)) * el, target - tgt0))
+            st["ah_target"] = target
+            corr = float(ah.get("kp", 0.05)) * (target - alt) - float(ah.get("kv", 0.08)) * vz_up
+            lim = float(ah.get("max_corr", 0.15))
+            thr = min(float(ah.get("max", 0.85)), max(float(ah.get("min", 0.2)), thr + max(-lim, min(lim, corr))))
+        every = max(1, int(round(simr.sensor_rate / 50.0)))
+        if simr.step_count % every == 0:
+            link.send_manual_control(float(self.phase.get("roll", 0)), float(self.phase.get("pitch", 0)), thr,
+                                     float(self.phase.get("yaw", 0)))
+        self.last_throttle = thr
+        mode = self.phase.get("mode", "stabilized")
+        if "mode_at" not in st and el > 0.3:
+            link.set_mode(mode); st["mode_at"] = simr.t
+        elif "mode_at" in st and not link.mode_is(mode) and simr.t - st["mode_at"] > 1.5:
+            link.set_mode(mode); st["mode_at"] = simr.t          # PX4 refused or was not listening yet: ask again
+        if self.phase.get("arm") and not link.armed and link.mode_is(mode):
+            if "arm_at" not in st or simr.t - st["arm_at"] > 1.5:
+                link.arm(force=bool(self.phase.get("force", False))); st["arm_at"] = simr.t
+                st["arm_tries"] = st.get("arm_tries", 0) + 1
+            if st.get("arm_tries", 0) > int(self.phase.get("arm_tries", 6)):
+                self.fail(simr, f"PX4 did not arm (can arm: '{link.can_arm_modes()}')", fatal=True); return
+        if self.phase.get("arm") and link.armed and "armed_at" not in st:
+            st["armed_at"] = simr.t
+            self.metrics.note(simr.t, f"armed after {el:.1f}s")
+            self.metrics.phases[self._name()]["time_to_arm"] = round(el, 2)
+        if self.phase.get("disarm") and link.armed and el > 0.5 and ("disarm_at" not in st or simr.t - st["disarm_at"] > 1.5):
+            link.disarm(force=bool(self.phase.get("force", False))); st["disarm_at"] = simr.t
+        target = self.phase.get("until_pitch_deg")
+        if target is not None:
+            _, p, _ = simr.sim.hover_frame_euler()
+            pitch_deg = math.degrees(p)
+            if abs(pitch_deg - float(target)) <= float(self.phase.get("until_pitch_tol_deg", 2.0)):
+                st.setdefault("in_tol_since", simr.t)
+                if simr.t - st["in_tol_since"] >= float(self.phase.get("settle", 0.5)):
+                    self.metrics.note(simr.t, f"pitch at {pitch_deg:.1f} deg (hover frame) after {el:.1f}s")
+                    self.metrics.phases[self._name()]["time_to_pitch"] = round(el, 2)
+                    self._finish_stick(simr, thr); return
+            else:
+                st.pop("in_tol_since", None)
+        if self.phase.get("until_ground"):
+            # a landing under the sticks: end once the vehicle has been airborne and is back on its legs for settle s
+            if not simr.sim.on_ground:
+                st["ug_air"] = True
+            if st.get("ug_air") and simr.sim.on_ground:
+                st.setdefault("ug_since", simr.t)
+                if simr.t - st["ug_since"] >= float(self.phase.get("settle", 0.5)):
+                    self.metrics.note(simr.t, f"on the ground after {el:.1f}s of the stick landing")
+                    self.metrics.phases[self._name()]["time_to_ground"] = round(el, 2)
+                    self._finish_stick(simr, thr); return
+            else:
+                st.pop("ug_since", None)
+        if el >= float(self.phase.get("duration", 5.0)):
+            if target is not None and self.phase.get("require", True):
+                self.fail(simr, f"pitch did not settle at {target} deg within {el:.0f}s", fatal=bool(self.phase.get("fatal", True))); return
+            if self.phase.get("until_ground") and self.phase.get("require", True):
+                self.fail(simr, f"did not touch down within {el:.0f}s", fatal=bool(self.phase.get("fatal", True))); return
+            self._finish_stick(simr, thr)
+
+    def _finish_stick(self, simr, thr: float) -> None:
+        self._next(simr)
+        if not self.done:
+            self._state["thr_prev"] = thr        # the next stick phase ramps from where this one left the throttle
+
     def _p_wind(self, simr) -> None:
         simr.sim.wind_ned = np.array(self.phase.get("ned", [0, 0, 0]), float)
         self.metrics.note(simr.t, f"wind set to {simr.sim.wind_ned.tolist()}")
@@ -319,9 +447,21 @@ class ScenarioRunner:
         phase arms PX4 and the sequence hands over by itself."""
         st = self._state
         if "nl" not in st:
+            # a live simulator was just put back on its legs: let it settle on the ground first, or the sequence
+            # sees a vehicle "in the air" at its first step and gives up
+            if not simr.sim.on_ground:
+                st.pop("settled_since", None)
+                if self._elapsed(simr) > 10.0:
+                    self.fail(simr, "vehicle never settled on the ground before the nose lift", fatal=True)
+                return
+            st.setdefault("settled_since", simr.t)
+            if simr.t - st["settled_since"] < 0.5:
+                return
             motors = self.phase.get("motors") or []
-            kw = {k: self.phase[k] for k in ("rate_deg_s", "kp", "ki", "kd", "max_cmd", "tolerance_deg", "hold_s", "fade_s", "k_ang", "kq", "kqi", "assist_motors", "assist_cmd") if k in self.phase}
-            st["nl"] = simr.start_nose_lift(motors, float(self.phase.get("target_pitch_deg", simr.airframe.hover_pitch_deg)), **kw)
+            kw = {k: self.phase[k] for k in ("rate_deg_s", "kp", "ki", "kd", "max_cmd", "tolerance_deg", "hold_s", "fade_s", "k_ang", "kq", "kqi", "assist_motors", "assist_cmd", "timeout_s", "handover_timeout_s") if k in self.phase}
+            design_nl = ((getattr(simr.airframe, "design", None) or {}).get("nose_lift") or {})
+            target = self.phase.get("target_pitch_deg", design_nl.get("target_pitch_deg", simr.airframe.hover_pitch_deg))
+            st["nl"] = simr.start_nose_lift(motors, float(target), **kw)
             self.targets[self._name()] = {}
             return
         nl = st["nl"]
@@ -336,6 +476,44 @@ class ScenarioRunner:
             self.fail(simr, f"nose lift failed: {nl.reason}", fatal=bool(self.phase.get("fatal", True)))
         elif self._elapsed(simr) > float(self.phase.get("timeout", 30.0)):
             self.fail(simr, f"nose lift did not reach the target (at {nl.pitch:.1f} deg)", fatal=True)
+
+    def _p_nose_lower(self, simr) -> None:
+        """Land the way the aircraft took off: PX4 lands at the hover attitude (unless px4_land is false), the
+        simulator takes over at touchdown, cuts the other motors and lowers the nose with ``motors`` to
+        target_pitch_deg (default: the airframe's landed pitch) at rate_deg_s. Ends when the nose is down."""
+        st = self._state
+        if "nl" not in st:
+            motors = self.phase.get("motors") or []
+            kw = {k: self.phase[k] for k in ("rate_deg_s", "min_airborne_alt", "fade_s", "tolerance_deg", "timeout_s", "wait_timeout_s", "wait_touchdown", "k_ang", "kq", "kqi", "max_cmd", "takeover_boost", "rear_fade_s") if k in self.phase}
+            cur = getattr(simr, "nose_lift", None)
+            if cur is not None and getattr(cur, "kind", "") == "lower" and cur.state in ("waiting", "lowering", "settling", "done"):
+                st["nl"] = cur          # design.nose_lower.enabled already armed one in the air (it may already be
+                                        # lowering after a stick landing): adopt it
+            else:
+                design_lo = ((getattr(simr.airframe, "design", None) or {}).get("nose_lower") or {})
+                target = self.phase.get("target_pitch_deg", design_lo.get("target_pitch_deg", simr.airframe.landed_pitch_deg))
+                st["nl"] = simr.start_nose_lower(motors, float(target), **kw)
+            if self.phase.get("px4_land", True):
+                self.link.set_mode("land")
+            self.targets[self._name()] = {}
+            return
+        nl = st["nl"]
+        if nl.state in ("lowering", "settling", "done") and "td" not in st and nl.touchdown_speed is not None:
+            st["td"] = simr.t
+            self.metrics.note(simr.t, f"touchdown at {nl.touchdown_speed:.2f} m/s, pitch {nl.touchdown_pitch:.1f} deg; nose lower started")
+            self.metrics.phases[self._name()]["touchdown_speed"] = round(nl.touchdown_speed, 3)
+            self.metrics.phases[self._name()]["touchdown_pitch_deg"] = round(nl.touchdown_pitch, 2)
+        if nl.state == "done":
+            self.metrics.note(simr.t, f"nose down: {nl.reason}")
+            ph = self.metrics.phases[self._name()]
+            ph["final_pitch_deg"] = round(nl.pitch, 2)
+            ph["lower_rate_max_deg_s"] = round(nl.rate_max, 2)
+            ph["lower_duration"] = round(simr.t - st.get("td", simr.t), 2)
+            self._next(simr)
+        elif nl.state == "failed":
+            self.fail(simr, f"nose lower failed: {nl.reason}", fatal=bool(self.phase.get("fatal", True)))
+        elif self._elapsed(simr) > float(self.phase.get("timeout", 120.0)):
+            self.fail(simr, f"nose lower did not finish (state {nl.state}, pitch {nl.pitch:.1f} deg)", fatal=True)
 
     def _p_arm(self, simr) -> None:
         st, link = self._state, self.link

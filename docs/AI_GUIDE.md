@@ -6,8 +6,8 @@ in parallel. The contract is JSON in, JSON out.
 ## One run
 
 ```bash
-.venv/bin/python -m airframe_designer run --airframe airframes/atlas_08.json --scenario hover --out r.json
-.venv/bin/python -m airframe_designer run --airframe airframes/atlas_08.json --scenario cruise \
+.venv/bin/python -m airframe_designer run --airframe airframes/atlas_og.json --scenario hover --out r.json
+.venv/bin/python -m airframe_designer run --airframe airframes/atlas_og.json --scenario cruise \
     --set "rotors[0:8].tilt_deg=30" --set "hover_pitch_deg=20" --set "px4.MC_PITCHRATE_P=0.12" --out r.json
 ```
 
@@ -53,7 +53,7 @@ Bundled in `scenarios/` (`airframe-designer scenarios` lists them): `hover`, `ta
 (offboard velocity 12 m/s), `box` (offboard position, 20 m square), `gust` (6 m/s wind switches on), `motor_out`
 (rotor 1 dies), `manual_push` (full forward stick in Position mode), `nose_lift_takeoff` (nose-up hoverer:
 raise the nose with the front motors before arming). Write your own: a JSON with phases
-`wait_ready`, `nose_lift`, `takeoff`, `hold`, `land`, `offboard_velocity`, `offboard_position`, `manual`, `wait`,
+`wait_ready`, `nose_lift`, `nose_lower`, `takeoff`, `hold`, `land`, `offboard_velocity`, `offboard_position`, `manual`, `wait`,
 `wind`, `motor_failure`, `param`, `arm`, `mode` (documented in `airframe_designer/sim/scenario.py`).
 
 `nose_lift` (`{"type": "nose_lift", "motors": [8, 9], "target_pitch_deg": 25, "rate_deg_s": 8, "assist_motors": [...],
@@ -62,8 +62,54 @@ disarmed the simulator drives the listed motors to raise the nose to the hover p
 PX4, and the sequence keeps holding the nose until PX4's own commands take over, then fades out. PX4 needs no
 changes (it only sees its attitude change, as if tilted by hand). The metrics report `time_to_pitch` and `max_cmd`
 (how close to full thrust the lifting motors came). The same sequence is available interactively on the Flight tab
-and, when enabled for an airframe (`design.nose_lift`), the Takeoff button runs it first. Give phases a
+and, when enabled for an airframe (`design.nose_lift`), the Takeoff button runs it first. `design.nose_lift.rc_channel` (1-based, 0 = off) names a transmitter switch: a rising edge above `rc_threshold` (1500) while disarmed and on the ground starts the lift in the interactive app (SITL or HITL), a falling edge before arming stops it.
+
+`nose_lower` is the landing counterpart (`{"type": "nose_lower", "motors": [8, 9], "target_pitch_deg": 6,
+"rate_deg_s": 3, "fade_s": 4}`): it requests PX4 Land (unless `px4_land` is false), and at touchdown the simulator
+takes over every motor: the others are cut, the chosen ones lower the nose to the target with the lift's
+balance-plus-rate loop (`kq`, `kqi`, `takeover_boost`, `rear_fade_s`), then fade out; PX4 is force-disarmed when the
+nose is down. Metrics: `touchdown_speed`, `touchdown_pitch_deg`, `final_pitch_deg`, `lower_rate_max_deg_s`,
+`lower_duration`. With `design.nose_lower.enabled` the interactive app arms the same sequence by itself on every
+flight, so a landing on a transmitter switch (a Land slot on the mode channel, `COM_FLTMODEn = 11`) or a
+throttle-down ends nose-down on the legs. `POST /api/sim/nose_lower` starts or stops it by hand. Give phases a
 `"name"` to group metrics; scenario `"params"` seed PX4 parameters for that scenario.
+
+
+### The scenario owns the parked and hover attitude
+
+A scenario may carry `"attitude": {"park_pitch_deg": -10, "hover_pitch_deg": 25}`. Before the run the airframe is
+re-stood at the parked pitch (the legs are re-solved under the same hard points, so it is the stand that changes,
+not the aircraft) and its hover pitch, i.e. PX4's level and `SENS_BOARD_Y_OFF`, is set to the second value; the nose
+lift and nose lower targets in the airframe's `design` block follow. Every ATLAS flight then runs the same way: rotate
+from the parked pitch to the hover pitch and hold until stable, arm, fly, land at the hover pitch, rotate back down.
+If the CG would sit outside the feet at that parked pitch the run fails immediately with "attitude: ... this stand
+tips over" instead of flipping the model. The Tuning tab's Park / Hover fields override the block per attempt.
+
+## Tuning a manual mode (Stabilized) and reading the result
+
+`scenarios/stab_lab.json` is the indoor flow in Stabilized: nose lift, arm with the throttle down, a scripted pilot
+lifts off and holds a height with the **throttle only**, hovers, descends to touchdown and holds zero throttle while
+the nose-lower sequence parks the aircraft. Two `stick` phase options make that possible:
+
+* `"alt_hold": {"target": 2.5, "rate": 0.4, "kp": 0.05, "kv": 0.08, "max_corr": 0.15, "min": 0.2, "max": 0.85}`
+  nudges the throttle stick around the phase value from the height error and climb rate (a pilot's throttle hand;
+  attitude stays entirely with PX4). With `rate` the target slews from the phase's starting height, i.e. a descent.
+* `"until_ground": true` (with `settle`) ends the phase once the vehicle has been airborne and is back on its legs,
+  recording `time_to_ground`. Follow it with a zero-throttle `stick` phase and a `nose_lower` phase with
+  `"px4_land": false`; a `design.nose_lower.enabled` airframe arms the landing hook by itself.
+
+Every run records PX4's own attitude setpoint (ATTITUDE_TARGET, requested at 50 Hz) as the `roll_sp`, `pitch_sp`,
+`yaw_sp` and `thr_sp` time-series columns, and each phase gets `roll_err_rms_deg` / `pitch_err_rms_deg` (tracking
+error against that setpoint) next to the plain attitude statistics. A study spec accepts `"base_variables"` (fixed
+parameter paths applied before the search, e.g. `{"rotors[8:10].cant_deg": 0}`) and `"timeseries": true` (every
+trial keeps its flight under `results/<study>/ts/`). `python scripts/report_runs.py --out r.html --study results/<study>
+results/*.json` writes a self-contained HTML report (charts with phase bands, setpoint overlays, sweep tables).
+
+The same machinery sits behind the app's **Tuning** tab (`/api/tuning/run`, `/api/tuning/sweep`, `/api/tuning/runs`,
+`/api/tuning/run/<id>`, `/api/tuning/sweeps`, `/api/tuning/sweep/<name>/trial/<k>`): an attempt is `{name, scenario,
+params: {PX4 name: value}, options: {physics, seed}}` (add `live: true` to fly it on the connected PX4 and have the
+flight saved when the scenario ends), a sweep is `{scenario, variables: [{param, min, max, levels}], workers}` and
+uses the default objective in `server/tuning.py`.
 
 ## Many runs in parallel
 
@@ -91,7 +137,7 @@ the UI or run it again), `summary.json`. Interrupted studies resume from `trials
 ```jsonc
 {
   "name": "atlas08_hover_tilt",
-  "airframe": "airframes/atlas_08.json",
+  "airframe": "airframes/atlas_og.json",
   "scenario": "hover",
   "variables": [{"path": "rotors[0:8].tilt_deg", "range": [10, 45]}, {"path": "hover_pitch_deg", "range": [0, 35]}],
   "objective": "phases.hover.pos_std_xy + 0.05 * phases.hover.pitch_rms_deg + 0.5 * phases.hover.util_max",
@@ -113,10 +159,10 @@ clip hypot`, conditional expressions. A missing value or a violated constraint a
 from airframe_designer.batch import run_once, run_many, run_study
 from airframe_designer.geometry import Airframe, apply_variables
 
-r = run_once("airframes/atlas_08.json", "hover", variables={"mass.cg[0]": 0.03})
+r = run_once("airframes/atlas_og.json", "hover", variables={"mass.cg[0]": 0.03})
 print(r["ok"], r["metrics"]["phases"]["hover"]["pos_std_xy"])
 
-rs = run_many([{"id": f"cg{i}", "airframe": "airframes/atlas_08.json", "scenario": "hover",
+rs = run_many([{"id": f"cg{i}", "airframe": "airframes/atlas_og.json", "scenario": "hover",
                 "variables": {"mass.cg[0]": x}} for i, x in enumerate([-0.05, 0, 0.05])], workers=3)
 ```
 
@@ -199,7 +245,7 @@ of JSBSim, but not at the coefficient data.
 prints both runs' per-phase metrics side by side with deltas and the RMS/max differences of the state histories
 (altitude, speed, attitude, rates, thrust); the Batch tab's **Compare physics** button does the same for the live
 design. Reference numbers for the quad preset in hover: altitude 7 mm RMS, thrust 0.06 N, attitude ~0.2 degrees.
-For atlas_08 in hover, over three repeats of each engine (PX4 is a real process in the loop, so read the
+For the ATLAS in hover, over three repeats of each engine (PX4 is a real process in the loop, so read the
 spread, not one run): position spread 0.096 +-0.010 m on Python against 0.117 +-0.023 m on JSBSim, body rates
 0.85 +-0.05 against 0.93 +-0.18 deg/s. The engines agree horizontally to about their own run-to-run scatter.
 
@@ -236,3 +282,18 @@ Three ways, from most to least capable:
 
 The app has no authentication: only expose it through a tunnel while you use it, and never on a public URL you
 leave running.
+
+## Flying a scenario on the live simulator (SITL or the HITL board)
+
+`POST /api/scenario/start {"scenario": "<name or path>"}` attaches the scenario runner to the app's own simulator,
+after pushing the airframe's PX4 export (only what differs) and the scenario's `params` to whatever PX4 the app is
+connected to, disarming it and putting the vehicle back on its legs. `GET /api/scenario/status` reports the phase,
+the scripted throttle and, when done, the same metrics as a headless run; `POST /api/scenario/stop` aborts. The
+Batch tab has a "Fly live" button per scenario. The USB remote is forwarded to PX4 in HITL as well as SITL.
+
+Scenario phase `stick` scripts a pilot: `mode` (default stabilized), `arm`/`disarm`, `throttle` reached by a cosine
+ramp over `ramp_s` from where the previous stick phase left it, constant `roll`/`pitch`/`yaw`, and an optional
+`until_pitch_deg` (hover frame) that ends the phase once the attitude has settled. `wait_ready` accepts `modes`
+(substrings of PX4's arming summary) and proceeds after `summary_wait` seconds when a HITL board yields no summary.
+Per-phase metrics now include `pitch_start_deg`, `pitch_end_deg`, `pitch_rate_max_deg_s`, `pitch_overshoot_deg` and
+`thrust_rate_max_n_s`. See `scenarios/pivot_stab.json` and `scripts/atlas_pivot_stance.py`.

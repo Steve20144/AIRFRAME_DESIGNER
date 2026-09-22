@@ -1,0 +1,103 @@
+{
+  "name": "stab_lab_fast",
+  "description": "stab_lab with a decisive liftoff: the throttle ramps in 1 s and the throttle hand may add up to 0.25, so the aircraft leaves the ground in one motion instead of skidding on one leg at unity thrust-to-weight. The 'attitude' block owns the parked pitch (the stand) and the hover pitch (PX4's level): the legs are re-solved and SENS_BOARD_Y_OFF follows, so the same scenario can start from -10 deg and hover at 25.",
+  "max_time": 160,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "nose_lift",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 40,
+      "timeout_s": 40
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 1.0,
+      "duration": 8,
+      "alt_hold": {
+        "target": 2.5,
+        "max_corr": 0.25
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 12,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 30,
+      "alt_hold": {
+        "target": -0.5,
+        "rate": 0.4,
+        "min": 0.2
+      },
+      "until_ground": true,
+      "settle": 0.3
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "stabilized",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ],
+  "attitude": {
+    "park_pitch_deg": 8,
+    "hover_pitch_deg": 26
+  }
+}

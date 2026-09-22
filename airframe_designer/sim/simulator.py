@@ -146,6 +146,33 @@ class Simulator:
         with self.lock:
             self.nose_lift = None
 
+    def start_nose_lower(self, motors, target_pitch_deg: float, **kw):
+        """The landing counterpart: waits for touchdown (unless wait_touchdown=False), then cuts every other motor and
+        lowers the nose with ``motors`` to target_pitch_deg. Shares the nose_lift slot: one ground sequence at a time."""
+        from .nose_lift import NoseLower
+        with self.lock:
+            self.nose_lift = NoseLower(motors, target_pitch_deg, **kw)
+            self.log(f"[sim] nose lower: motors {[m + 1 for m in self.nose_lift.motors]} to {target_pitch_deg:g} deg at "
+                     f"{self.nose_lift.rate:g} deg/s" + (" after touchdown" if self.nose_lift.wait_touchdown else ""))
+            return self.nose_lift
+
+    def _auto_nose_lower(self, link) -> None:
+        """design.nose_lower.enabled: arm the landing sequence by itself whenever the vehicle is airborne with PX4
+        armed, so any landing (Land mode, a throttle-down in Position mode, a switch) ends nose-down on the legs."""
+        if self.nose_lift is not None or link is None or not getattr(link, "armed", False):
+            return
+        design = getattr(self.airframe, "design", None) or {}
+        d = design.get("nose_lower") or {}
+        if not d.get("enabled") or self.sim.on_ground or -float(self.sim.pos[2]) < 1.0:
+            return
+        if self.time_usec / 1e6 - getattr(self, "_nose_lower_done_t", -1e9) < 5.0:
+            return
+        motors = [int(m) for m in d.get("motors") or (design.get("nose_lift") or {}).get("motors") or []]
+        if not motors:
+            return
+        kw = {k: float(d[k]) for k in ("rate_deg_s", "min_airborne_alt", "fade_s", "tolerance_deg", "timeout_s", "kq", "kqi", "takeover_boost", "rear_fade_s") if k in d}
+        self.start_nose_lower(motors, float(d.get("target_pitch_deg", self.airframe.landed_pitch_deg)), **kw)
+
     def set_rotor_health(self, scales) -> None:
         with self.lock:
             self.sim.set_rotor_health(scales)
@@ -183,8 +210,18 @@ class Simulator:
                 fl = nl.floor(self.sim.rotors.n)
                 if fl is None:
                     self.nose_lift_last = nl.status()
-                    self.log(f"[sim] nose lift {nl.state}: {nl.reason}")
+                    self.log(f"[sim] nose {getattr(nl, 'kind', 'lift')} {nl.state}: {nl.reason}")
                     self.nose_lift = None
+                    if getattr(nl, "kind", "lift") == "lower":
+                        self._nose_lower_done_t = self.time_usec / 1e6
+                        if getattr(link, "armed", False):
+                            try:
+                                link.disarm(force=True)
+                                self.log("[sim] nose lower finished: PX4 force-disarmed (it still believed it was flying)")
+                            except Exception as e:
+                                self.log(f"[sim] nose lower: could not disarm PX4: {e}")
+                elif getattr(nl, "override_all", False):
+                    cmd = fl                                                           # landing sequence: it owns every motor
                 else:
                     cmd = np.maximum(np.asarray(cmd, float)[: self.sim.rotors.n], fl)   # the sequence holds a floor under PX4
             self.sim.set_motor_commands(cmd)
@@ -207,6 +244,10 @@ class Simulator:
                 link.clear_actuators()
             self.time_usec += int(round(dt * 1e6))
             t_us = self.time_usec
+            try:
+                self._auto_nose_lower(link)
+            except Exception as e:
+                self.log(f"[sim] auto nose lower: {e}")
             if self.nose_lift is not None:
                 try:
                     self.nose_lift(self)

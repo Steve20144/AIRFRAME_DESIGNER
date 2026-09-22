@@ -49,7 +49,7 @@ class FakeLink:
     def main_mode(self) -> int:
         return (self.custom_mode >> 16) & 0xFF
 
-    def can_arm_modes(self) -> str:
+    def can_arm_modes(self, since=None) -> str:
         return "takeoff|loiter|posctl" if self.ready else ""
 
     def arm(self, force: bool = False) -> None:
@@ -248,7 +248,7 @@ def test_takeoff_times_out_when_altitude_never_rises():
 def test_takeoff_retries_arming_then_gives_up():
     simr = make_sim()
     link = FakeLink(arms=False)
-    sc = Scenario(phases=[{"type": "takeoff", "alt": 3, "timeout": 60}], max_time=120)
+    sc = Scenario(phases=[{"type": "takeoff", "alt": 3, "timeout": 60, "arm_timeout": 17}], max_time=120)
     runner = ScenarioRunner(sc, link)
     advance(simr, runner, 30.0, physics=False)
     assert runner.done and not runner.ok

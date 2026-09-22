@@ -62,6 +62,7 @@
       <button data-tab="px4">PX4</button>
       <button data-tab="design">Optimize</button>
       <button data-tab="batch">Batch</button>
+      <button data-tab="tuning">Tuning</button>
       <button data-tab="sim">Flight</button>
       <button data-tab="connect">Connect</button>
     </nav>
@@ -89,6 +90,32 @@
         <button id="af-estimate" class="pill small" title="Estimate inertia from mass, rotor layout, wings and legs">Estimate</button>
         <label title="Nose-up pitch of the airframe in hover. PX4 treats this attitude as level: the geometry is exported rotated into that frame and SENS_BOARD_Y_OFF is set to match.">Hover pitch° <input id="af-hover" type="number" step="1" min="-90" max="90"></label>
         <label title="Nose-up pitch of the airframe when it stands on its legs; the simulator rests the vehicle at this attitude.">Landed pitch° <input id="af-landed" type="number" step="1" min="-90" max="90"></label>
+      </div>
+
+      <div class="card">
+      <details id="cad-details">
+        <summary>CAD bodies (STEP) <span id="cad-summary" class="hint"></span></summary>
+        <div class="row tight">
+          <input id="cad-file" type="file" accept=".step,.stp,.STEP,.STP" hidden>
+          <button id="cad-import" class="pill small primary" title="Import a STEP file: every solid becomes a body you can give a mass; their centroids and inertia come from the CAD geometry">Import STEP…</button>
+          <span id="cad-filename" class="hint mono" style="align-self:center"></span>
+          <label class="row" style="align-self:end;padding-bottom:6px" title="Show CAD bodies instead of generic motor-to-CG tubes. Heavier bodies are redder; the heaviest is red."><input id="cad-show" type="checkbox" checked> Show in 3D</label>
+          <label class="row" style="align-self:end;padding-bottom:6px" title="compute the aircraft mass, CG and inertia from the CAD bodies (plus any mass items) instead of the numbers typed above"><input id="cad-use" type="checkbox"> Mass, CG &amp; inertia from bodies</label>
+        </div>
+        <div class="row tight" id="cad-frame-row">
+          <label title="rotation of the whole CAD model about the aircraft x axis (roll), degrees; applied first">Rot x° <input id="cad-rx" type="number" step="1" value="0"></label>
+          <label title="rotation about the aircraft y axis (pitch), degrees; applied second">Rot y° <input id="cad-ry" type="number" step="1" value="0"></label>
+          <label title="rotation about the aircraft z axis (yaw), degrees; applied last. A Y-up CAD export usually needs Rot x = -90">Rot z° <input id="cad-rz" type="number" step="1" value="0"></label>
+          <label title="where the CAD origin sits in the structural frame, m">Origin x <input id="cad-ox" type="number" step="0.005" value="0"></label>
+          <label>y <input id="cad-oy" type="number" step="0.005" value="0"></label>
+          <label>z <input id="cad-oz" type="number" step="0.005" value="0"></label>
+          <label title="extra scale on the CAD geometry (1 = the file's units were read correctly)">Scale <input id="cad-scale" type="number" step="0.001" min="0.0001" value="1"></label>
+          <button id="cad-reset-offsets" class="pill small" title="put every body back where the CAD file has it">Reset drags</button>
+          <button id="cad-remove-all" class="pill small" title="forget the CAD file and all its bodies">Remove CAD</button>
+        </div>
+        <div id="cad-table"><div class="hint">No CAD file. Import a STEP file to place its bodies and give them masses.</div></div>
+        <div id="cad-totals" class="hint"></div>
+      </details>
       </div>
 
       <h3>Rotors</h3>
@@ -220,6 +247,7 @@
     <!-- ============================ BATCH ============================ -->
     <section id="tab-batch" class="tab">
       <h3>Scenarios <small>· headless runs of the current airframe in a private PX4 instance; the interactive sim keeps running</small></h3>
+      <div id="live-scenario"></div>
       <div id="scenario-list"></div>
 
       <h3>Jobs</h3>
@@ -229,6 +257,58 @@
       <h3>Studies</h3>
       <div id="study-list"></div>
       <div id="study-status"></div>
+    </section>
+
+    <!-- ============================ TUNING ============================ -->
+    <section id="tab-tuning" class="tab">
+      <h3>Attempt <small>· one PX4 parameter set through the takeoff, hover and landing scenario</small></h3>
+      <div class="card" id="tune-attempt">
+        <div class="row">
+          <label>Name <input id="tune-name" type="text" placeholder="e.g. rate P 0.3" style="width:150px"></label>
+          <label title="the flight to judge the parameters on; stab_lab is the Stabilized indoor flow: nose lift, arm, lift off, hover, land, nose down">Scenario <select id="tune-scenario"></select></label>
+          <label>Physics <select id="tune-physics"><option value="python">Python</option><option value="jsbsim">JSBSim</option></select></label>
+          <label title="sensor-noise seed of the headless run; fly two or three seeds before trusting a small difference">Seed <input id="tune-seed" type="number" value="1" min="1" style="width:52px"></label>
+          <label title="parked pitch, deg nose-up: the flight starts on a stand that rests the aircraft here (legs re-solved under the same hard points); blank = the scenario's or the airframe's own">Park ° <input id="tune-park" type="number" step="1" style="width:56px" placeholder="scen."></label>
+          <label title="hover pitch, deg nose-up: PX4's level (SENS_BOARD_Y_OFF), the nose lift target and the landing attitude; blank = the scenario's or the airframe's own">Hover ° <input id="tune-hover" type="number" step="1" style="width:56px" placeholder="scen."></label>
+        </div>
+        <table class="grid tune" id="tune-params"><thead><tr><th>PX4 parameter</th><th>value</th><th title="value in the airframe's overrides (or on the vehicle) right now">current</th><th></th></tr></thead><tbody></tbody></table>
+        <div class="row tight">
+          <button class="pill small" id="tune-add">+ parameter</button>
+          <button class="pill small" id="tune-load" title="fill the table with the attitude and rate gains the airframe carries now">Load current gains</button>
+          <span class="panel-spacer"></span>
+          <button class="pill small" id="tune-apply" title="write these values into the airframe's PX4 overrides (pushed to the vehicle when connected); Save the airframe to keep them">Apply to airframe</button>
+          <button class="pill small" id="tune-run" title="fly the scenario headless in a private PX4 instance; the live simulation is untouched">Run headless</button>
+          <button class="pill small primary" id="tune-live" title="push these parameters to the connected PX4 (SITL or the HITL board) and fly the scenario on the live simulator, in the 3D view">Fly live</button>
+        </div>
+        <div id="tune-live-status"></div>
+      </div>
+
+      <h3>Sweep <small>· a grid over a few parameters, headless, in parallel; every trial is kept with its flight</small></h3>
+      <div class="card" id="tune-sweep">
+        <div class="row">
+          <label>Name <input id="sweep-name" type="text" placeholder="auto" style="width:140px"></label>
+          <label>Scenario <select id="sweep-scenario"></select></label>
+          <label title="parallel PX4 instances (1 to 8)">Workers <input id="sweep-workers" type="number" value="4" min="1" max="8" style="width:52px"></label>
+        </div>
+        <table class="grid tune" id="sweep-vars"><thead><tr><th>PX4 parameter</th><th>min</th><th>max</th><th>levels</th><th></th></tr></thead><tbody></tbody></table>
+        <div class="row tight">
+          <button class="pill small" id="sweep-add">+ variable</button>
+          <span id="sweep-count" class="hint"></span>
+          <span class="panel-spacer"></span>
+          <button class="pill small primary" id="sweep-start">Start sweep</button>
+        </div>
+        <div class="hint" id="sweep-objective"></div>
+        <div id="sweep-status"></div>
+      </div>
+
+      <h3>Flights <small>· attempts, live flights and sweep trials; click a row to chart it, tick two to compare</small></h3>
+      <div id="tune-runs"><div class="hint">No flights yet.</div></div>
+      <div class="row tight" id="tune-chart-bar">
+        <label class="row" title="show only the flown part (from arming to the nose lower) with the attitude axis clamped, so hover tracking is readable"><input id="tune-zoom" type="checkbox" checked> flight only, ±5°</label>
+        <span class="panel-spacer"></span>
+        <span id="tune-chart-title" class="hint"></span>
+      </div>
+      <div id="tune-charts"></div>
     </section>
 
     <!-- ============================ FLIGHT / SIM ============================ -->
@@ -276,7 +356,14 @@
           <label title="structural pitch to reach before arming (default: hover pitch)">Target° <input id="nl-target" type="number" step="1" style="width:64px"></label>
           <label title="how fast the nose rises">Rate °/s <input id="nl-rate" type="number" step="1" value="8" style="width:56px"></label>
           <label title="idle command for all other motors during the lift, % (0 = off); helps when the front motors alone are marginal">Others idle % <input id="nl-assist" type="number" step="5" min="0" max="60" value="0" style="width:56px"></label>
+          <label title="transmitter switch that starts the lift while disarmed (RC channel number as in the Connect tab's RC card; 0 = off). Flip it up: the nose rises and holds; then arm and take off. Flip it down before arming to abort.">RC switch ch <input id="nl-rc" type="number" step="1" min="0" max="18" value="0" style="width:52px"></label>
+          <label class="row" style="align-self:end;padding-bottom:6px" title="the switch is on when its value is low (below the threshold), e.g. a three-position switch in its up position"><input id="nl-rc-low" type="checkbox"> on = low</label>
           <label class="row" style="align-self:end;padding-bottom:6px" title="the Takeoff button runs the nose lift first"><input id="nl-use" type="checkbox"> Use for Takeoff</label>
+        </div>
+        <div class="row">
+          <label class="row" title="landing counterpart: when the aircraft touches down at its hover attitude, the other motors are cut and the lift motors lower the nose to the parked pitch, then fade out. Armed automatically on every flight when checked; PX4 is force-disarmed when the nose is down."><input id="nlo-use" type="checkbox"> Lower nose on touchdown</label>
+          <label title="how fast the nose comes down">Lower °/s <input id="nlo-rate" type="number" step="0.5" value="3" style="width:56px"></label>
+          <label title="pitch to end at (default: the airframe's landed pitch)">To° <input id="nlo-target" type="number" step="1" style="width:56px"></label>
         </div>
         <div class="row tight">
           <button id="nl-start" class="pill small primary">Lift nose</button>

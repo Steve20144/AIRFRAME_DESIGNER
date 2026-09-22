@@ -57,6 +57,59 @@ class Leg:
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
+def legs_for_park_pitch(legs: list[Leg], park_pitch_deg: float, min_length: float = 0.03, cg=None,
+                        front_margin: float = 0.08, old_park_pitch_deg: float | None = None) -> list[Leg]:
+    """A stand that rests the structure at ``park_pitch_deg`` nose-up, built under the same hard points: every foot
+    lies on the ground plane and the mean leg length is kept. With ``cg`` given, the stand is also made to *stand*:
+    the front feet are moved forward along the ground until they sit ``front_margin`` ahead of the CG's ground
+    projection whenever they would be closer (a nose-down park otherwise puts the CG ahead of them), and the rear
+    feet keep the horizontal arm they had behind the CG at ``old_park_pitch_deg`` (that arm is the lever the nose
+    lift has to work against, so it is not allowed to grow with the tilt). Legs are rebuilt attachment-to-foot, so
+    their lean changes; contact properties are kept."""
+    active = [l for l in legs if l.enabled]
+    if not active:
+        return [Leg.from_dict(l.to_dict()) for l in legs]
+    phi = math.radians(park_pitch_deg)
+    n = np.array([-math.sin(phi), 0.0, math.cos(phi)])          # world "down" seen in the structural frame
+    ex = np.array([math.cos(phi), 0.0, math.sin(phi)])          # world forward (horizontal) in the structural frame
+    a = np.array([l.attach for l in active], float)
+    d = np.array([l.direction() for l in active], float)
+    nd = d @ n
+    if np.any(nd < 0.2):
+        raise ValueError("a leg is nearly parallel to the ground at that parked pitch")
+    na = a @ n
+    mean_len = float(np.mean([l.length for l in active]))
+    # feet on the plane n.f = c, lengths L_i = (c - n.a_i) / (n.d_i), mean(L) = mean_len
+    c = (mean_len + float(np.mean(na / nd))) / float(np.mean(1.0 / nd))
+    lengths = (c - na) / nd
+    if np.any(lengths < min_length):
+        raise ValueError(f"parked pitch {park_pitch_deg:g} deg needs a leg shorter than {min_length} m")
+    feet = a + lengths[:, None] * d
+    if cg is not None:
+        cg = np.asarray(cg, float)
+        fx = (feet - cg) @ ex                                   # horizontal distance of each foot ahead of the CG
+        front = fx > np.median(fx) if len(fx) % 2 else fx >= np.median(fx)   # the forward leg(s): one on a tricycle, a pair on four
+        if fx[front].min() < front_margin:
+            feet[front] += (front_margin - fx[front].min()) * ex   # slide the front feet forward on the ground
+        if old_park_pitch_deg is not None:
+            # the rear feet keep their old horizontal arm behind the CG (the nose lift pivots about them)
+            phi0 = math.radians(old_park_pitch_deg)
+            ex0 = np.array([math.cos(phi0), 0.0, math.sin(phi0)])
+            f0 = np.array([l.foot() for l in active], float)
+            arm0 = ((f0 - cg) @ ex0)[~front].mean()
+            arm = fx[~front].mean()
+            feet[~front] += (arm0 - arm) * ex
+    out = []
+    k = 0
+    for l in legs:
+        if not l.enabled:
+            out.append(Leg.from_dict(l.to_dict())); continue
+        props = {q: getattr(l, q) for q in ("foot_radius", "stiffness", "damping", "friction", "enabled")}
+        out.append(Leg.from_points(l.attach, feet[k], name=l.name, **props))
+        k += 1
+    return out
+
+
 def generate_legs(height: float, spread_x: float, spread_y: float, landed_pitch_deg: float = 0.0,
                   attach_z: float = 0.0, cg=(0.0, 0.0, 0.0), mass: float | None = None, **kw) -> list[Leg]:
     """Four legs whose feet lie on a plane perpendicular to gravity when the airframe stands at

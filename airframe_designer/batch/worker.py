@@ -76,6 +76,11 @@ def run_once(airframe, scenario, *, variables: dict | None = None, px4_dir: str 
     from ..aero.airfoils import ensure_polars
     ensure_polars(af)
     sc = scenario if isinstance(scenario, Scenario) else load_scenario(scenario)
+    try:
+        af = sc.apply_attitude(af)      # the scenario may own the parked and hover pitch (legs, SENS_BOARD_Y_OFF)
+    except Exception as e:
+        return {"id": task_id, "ok": False, "status": "error", "airframe_name": af.name, "scenario": sc.name,
+                "variables": variables or {}, "physics": physics, "failures": [f"attitude: {e}"], "metrics": {}, "timing": {}}
     result: dict = {"id": task_id, "ok": False, "status": "error", "airframe_name": af.name, "scenario": sc.name,
                     "variables": variables or {}, "physics": physics, "failures": [], "metrics": {}, "timing": {}}
     if instance is None:

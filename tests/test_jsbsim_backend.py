@@ -42,7 +42,7 @@ def test_hover_thrust_climb_matches_python():
 
 def test_soft_legs_settle_to_spring_equilibrium():
     """The Python body used to hover above its spring equilibrium on soft legs (a damping hack); JSBSim exposed it."""
-    af = Airframe.load("airframes/atlas_mvp_01.json")
+    af = Airframe.load("airframes/atlas_pivot16.json")
     py = RigidBody(af); py.reset(); jb = JSBSimBody(af); jb.reset()
     for _ in range(4000):
         py.step(0.001, False); jb.step(0.001, False)
@@ -89,8 +89,8 @@ STATIC_STATES = [
 ]
 
 
-@pytest.mark.parametrize("path", ["airframes/atlas_08.json",          # CG at the origin, wings, fans canted +-30
-                                  "airframes/atlas_phase01_legs.json"])  # CG 17 cm off the origin, products of inertia
+@pytest.mark.parametrize("path", ["tests/data/atlas_08.json",          # CG at the origin, wings, fans canted +-30
+                                  "tests/data/atlas_phase01_legs.json"])  # CG 17 cm off the origin, products of inertia
 def test_static_force_and_moment_match_python(path):
     """No flying, no PX4: one airframe, one known state, one known set of rotor commands, and the total body
     force and moment JSBSim ends up with must be the ones RigidBody computes. This is what pins the frame and
@@ -117,7 +117,7 @@ def test_horizontal_position_is_a_signed_displacement():
     """pos must be the displacement from the reset point with its sign, because the GPS handed to PX4 is built
     from it. Reading JSBSim's unsigned distance-from-start instead reported every metre flown west as a metre
     east, so PX4's correction to the west grew the reported easting and asked for more: a runaway, not a hover."""
-    af = Airframe.load("airframes/atlas_08.json")
+    af = Airframe.load("tests/data/atlas_08.json")
     jb = JSBSimBody(af)
     for vned in ((4.0, 3.0), (-4.0, -3.0), (0.0, -5.0), (-5.0, 0.0)):
         _place(jb, alt_ft=500.0, vned=(vned[0], vned[1], 0.0))

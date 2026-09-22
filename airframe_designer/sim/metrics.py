@@ -76,14 +76,20 @@ class MetricsRecorder:
         if simr.step_count % self._every == 0:
             r, p, y = s.hover_frame_euler()
             util = float((s.thrust / np.maximum(s.rotors.tmax * s.rotors.scale, 1e-9)).max()) if len(s.thrust) else 0.0
+            link = getattr(simr, "link", None)
+            sp = getattr(link, "att_sp", None)
+            sp_cols = [sp["roll"], sp["pitch"], sp["yaw"], sp["thrust"]] if sp else [float("nan")] * 4
+            est = getattr(link, "board_att", None)          # PX4's own attitude estimate (ATTITUDE), PX4 body frame
+            sp_cols += [est["roll"], est["pitch"], est["yaw"]] if est else [float("nan")] * 3
             self.rows.append([t, *s.pos.tolist(), *s.vel.tolist(), r, p, y, *s.rates.tolist(), tilt,
                               float(bd.get("thrust", 0.0)), power, float(bd.get("lift", 0.0)), float(bd.get("airspeed", 0.0)),
-                              util, float(cmd.mean()) if len(cmd) else 0.0, 1.0 if airborne else 0.0])
+                              util, float(cmd.mean()) if len(cmd) else 0.0, 1.0 if airborne else 0.0, *sp_cols])
             self.phase_of_row.append(self.current_phase)
 
     # ------------------------------------------------------------ summary
     COLS = ["t", "n", "e", "d", "vn", "ve", "vd", "roll", "pitch", "yaw", "p", "q", "r", "tilt", "thrust", "power", "lift",
-            "airspeed", "util_max", "cmd_mean", "airborne"]
+            "airspeed", "util_max", "cmd_mean", "airborne", "roll_sp", "pitch_sp", "yaw_sp", "thr_sp", "roll_est", "pitch_est", "yaw_est"]
+    # *_sp: PX4's attitude setpoint (ATTITUDE_TARGET, hover frame), NaN until the first one arrives
 
     def array(self) -> np.ndarray:
         return np.array(self.rows, float).reshape(-1, len(self.COLS))
@@ -128,11 +134,27 @@ class MetricsRecorder:
                 d[f"{k}_rms_deg"] = round(float(np.sqrt((v ** 2).mean())), 3)
                 d[f"{k}_std_deg"] = round(float(v.std()), 3)
                 d[f"{k}_max_deg"] = round(float(np.abs(v).max()), 3)
+            for k in ("roll", "pitch"):           # PX4's estimate against the truth (estimator bias), when known
+                e = np.degrees(x[:, col[k + "_est"]] - x[:, col[k]])
+                if np.isfinite(e).sum() > 2:
+                    d[f"{k}_est_bias_deg"] = round(float(np.nanmean(e)), 3)
+            for k in ("roll", "pitch"):           # attitude tracking error against PX4's own setpoint, when known
+                e = np.degrees(x[:, col[k]] - x[:, col[k + "_sp"]])
+                if np.isfinite(e).sum() > 2:
+                    d[f"{k}_err_rms_deg"] = round(float(np.sqrt(np.nanmean(e ** 2))), 3)
+                    d[f"{k}_err_max_deg"] = round(float(np.nanmax(np.abs(e))), 3)
             yaw = np.degrees(np.unwrap(x[:, col["yaw"]]))
             d["yaw_drift_deg"] = round(float(yaw[-1] - yaw[0]), 3)
             d["yaw_std_deg"] = round(float(yaw.std()), 3)
             rates = np.degrees(x[:, col["p"]:col["r"] + 1])
             d["rates_rms_deg_s"] = round(float(np.sqrt((rates ** 2).sum(axis=1).mean())), 3)
+            pitch = np.degrees(x[:, col["pitch"]])
+            d["pitch_start_deg"] = round(float(pitch[0]), 3); d["pitch_end_deg"] = round(float(pitch[-1]), 3)
+            d["pitch_rate_max_deg_s"] = round(float(np.abs(rates[:, 1]).max()), 3)
+            d["pitch_overshoot_deg"] = round(float(pitch.max() - pitch[-1]), 3) if pitch[-1] > pitch[0] else round(float(pitch[-1] - pitch.min()), 3)
+            if len(x) > 2:
+                dt = np.diff(x[:, 0]); dt[dt <= 0] = np.nan
+                d["thrust_rate_max_n_s"] = round(float(np.nanmax(np.abs(np.diff(x[:, col["thrust"]]) / dt))), 2)
             d["tilt_max_deg"] = round(float(x[:, col["tilt"]].max()), 3)
             d["tilt_mean_deg"] = round(float(x[:, col["tilt"]].mean()), 3)
             d["thrust_mean"] = round(float(x[:, col["thrust"]].mean()), 3)

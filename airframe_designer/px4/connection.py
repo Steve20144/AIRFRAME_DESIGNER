@@ -123,6 +123,7 @@ class FirmwareJob:
         if ref:
             env["PX4_REF"] = ref
         env["PATH"] = venv_bin + ":" + env.get("PATH", "")
+        env["VENV_BIN"] = venv_bin
         self.action, self.board, self.result, self.exit_code = action, board, None, None
         self.log(f"[firmware] {action} {board} (this takes a few minutes; watch the log)")
         self.proc = subprocess.Popen(["/bin/bash", str(script), board, action], env=env, cwd=str(PROJECT_DIR),
@@ -326,7 +327,14 @@ class ConnectionManager:
 
     def toolchain_present(self) -> bool:
         from shutil import which
-        return which("arm-none-eabi-gcc") is not None or any(Path(d, "arm-none-eabi-gcc").is_file() for d in self.TOOLCHAIN_DIRS)
+        dirs = list(self.TOOLCHAIN_DIRS) + [str(p) for p in Path.home().glob("toolchains/*/bin")]   # rootless Linux install
+        return which("arm-none-eabi-gcc") is not None or any(Path(d, "arm-none-eabi-gcc").is_file() for d in dirs)
+
+    @staticmethod
+    def _venv_bin() -> str:
+        """The bin dir of the interpreter running the app: the one with PX4's python build requirements."""
+        import sys
+        return str(Path(sys.executable).parent)
 
     def firmware_variant(self, target: str | None) -> str:
         """Same choice as scripts/build_hitl_firmware.sh: 'multicopter' when the board offers it, else 'default'."""
@@ -347,9 +355,10 @@ class ConnectionManager:
         if not target:
             return {"ok": False, "error": "could not tell the board type from USB; pass the target, e.g. px4_fmu-v6x"}
         if not self.toolchain_present():
-            return {"ok": False, "error": "ARM toolchain missing. Run:  brew tap osx-cross/arm; brew trust osx-cross/arm && brew install osx-cross/arm/arm-gcc-bin@13 && brew link --overwrite --force arm-gcc-bin@13   then try again."}
-        venv_bin = str(PROJECT_DIR / ".venv" / "bin")
-        return self.firmware_job.start(target, "build", self.args.px4_dir, venv_bin, ref=self.board_release_tag())
+            return {"ok": False, "error": "ARM toolchain missing. macOS: brew tap osx-cross/arm; brew trust osx-cross/arm && brew install "
+                                          "osx-cross/arm/arm-gcc-bin@13 && brew link --overwrite --force arm-gcc-bin@13. Linux: sudo apt install "
+                                          "gcc-arm-none-eabi, or unpack the xpack arm-none-eabi-gcc tarball under ~/toolchains/. Then try again."}
+        return self.firmware_job.start(target, "build", self.args.px4_dir, self._venv_bin(), ref=self.board_release_tag())
 
     def board_release_tag(self) -> str | None:
         """'1.17.0 release' on the board -> 'v1.17.0', so the HITL build matches what is flashed."""
@@ -370,8 +379,7 @@ class ConnectionManager:
             if was_hitl:
                 self._close_link()
                 time.sleep(1.0)   # let the OS release the device
-        venv_bin = str(PROJECT_DIR / ".venv" / "bin")
-        r = self.firmware_job.start(target, "upload", self.args.px4_dir, venv_bin, ref=ref)
+        r = self.firmware_job.start(target, "upload", self.args.px4_dir, self._venv_bin(), ref=ref)
         if r.get("ok") and was_hitl:
             def reconnect():
                 while self.firmware_job.running():

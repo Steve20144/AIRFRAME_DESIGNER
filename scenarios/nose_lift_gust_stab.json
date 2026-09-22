@@ -1,0 +1,132 @@
+{
+  "name": "nose_lift_gust_stab",
+  "description": "Stabilized-mode twin of nose_lift_gust: nose lift, then a pilot arms in Stabilized with the throttle down, lifts off and works the throttle to stay near 4 m (a scripted throttle hand: Stabilized has no altitude loop), sticks otherwise centred, then the same 6 m/s headwind and crosswind for 10 s each with recovery in between. Nobody corrects attitude or drift: PX4's Stabilized response and the hands-off drift are the result.",
+  "max_time": 130,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 60,
+    "crash_speed": 3.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "nose_lift",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 8,
+      "timeout": 30
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 3,
+      "duration": 8,
+      "alt_hold": {
+        "target": 4.0
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 6,
+      "alt_hold": {
+        "target": 4.0
+      }
+    },
+    {
+      "type": "wind",
+      "ned": [
+        -6,
+        0,
+        0
+      ]
+    },
+    {
+      "type": "stick",
+      "name": "headwind",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 10,
+      "alt_hold": {
+        "target": 4.0
+      }
+    },
+    {
+      "type": "wind",
+      "ned": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "type": "stick",
+      "name": "recover1",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 5,
+      "alt_hold": {
+        "target": 4.0
+      }
+    },
+    {
+      "type": "wind",
+      "ned": [
+        0,
+        -6,
+        0
+      ]
+    },
+    {
+      "type": "stick",
+      "name": "crosswind",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 10,
+      "alt_hold": {
+        "target": 4.0
+      }
+    },
+    {
+      "type": "wind",
+      "ned": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "type": "stick",
+      "name": "recover2",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 5,
+      "alt_hold": {
+        "target": 4.0
+      }
+    }
+  ]
+}

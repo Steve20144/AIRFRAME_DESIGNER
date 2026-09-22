@@ -1,0 +1,17 @@
+{
+  "name": "stab_asbuilt_yaw",
+  "description": "As-built ATLAS_OG (canted nose fans), Stabilized lab flow with a decisive liftoff: does asking less of the yaw axis (yaw weight, yaw P, yaw rate limit) leave the allocator enough roll authority to hold the attitude setpoint? 2x2x2 grid.",
+  "airframe": "airframes/atlas_og.json",
+  "scenario": "scenarios/stab_lab_fast.json",
+  "variables": [
+    {"path": "px4.MC_YAW_WEIGHT", "range": [0.1, 0.6]},
+    {"path": "px4.MC_YAW_P", "range": [0.5, 1.5]},
+    {"path": "px4.MC_YAWRATE_MAX", "range": [10, 30]}
+  ],
+  "objective": "phases.hover.pitch_err_rms_deg + phases.hover.roll_err_rms_deg + 0.05 * phases.hover.rates_rms_deg_s + 0.2 * (phases.liftoff.pitch_max_deg + phases.liftoff.roll_max_deg) + 0.2 * (phases.landing.pitch_max_deg + phases.landing.roll_max_deg) + 2 * phases.nose_lower.touchdown_speed + 5 * metrics.saturation_fraction",
+  "constraints": ["ok", "not metrics.crashed", "phases.nose_lower.touchdown_speed < 0.8", "abs(phases.hover.yaw_drift_deg) < 10", "phases.hover.pos_drift < 2"],
+  "penalty": 100,
+  "algorithm": {"name": "grid", "budget": 8, "levels": [2, 2, 2], "batch": 2},
+  "workers": 2,
+  "sim": {"rate": 250, "substeps": 2, "noise": true, "speed": 0, "instances": [5, 6]}
+}

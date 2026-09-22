@@ -1,0 +1,102 @@
+{
+  "name": "stab_lab_pivot14",
+  "description": "stab_lab from a 14 deg nose-down park: the stand is re-solved so the aircraft rests at -14 deg with the front feet ahead of the CG and the rear feet at their usual arm, the nose lift pivots it to the 26 deg hover pitch and holds until stable, the pilot lifts off and hovers in Stabilized, lands at 26 deg and the nose is lowered back to -14 deg.",
+  "max_time": 200,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "nose_lift",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "timeout_s": 60
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 3,
+      "duration": 8,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 12,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 30,
+      "alt_hold": {
+        "target": -0.5,
+        "rate": 0.4,
+        "min": 0.2
+      },
+      "until_ground": true,
+      "settle": 0.3
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "stabilized",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 80,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ],
+  "attitude": {
+    "park_pitch_deg": -14,
+    "hover_pitch_deg": 26
+  }
+}

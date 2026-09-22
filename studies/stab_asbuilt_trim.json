@@ -1,0 +1,17 @@
+{
+  "name": "stab_asbuilt_trim",
+  "description": "As-built ATLAS_OG (canted nose fans) in the Stabilized lab flow with a decisive liftoff: can more integrator authority (rate I and its limit) or full airmode trim out the roll offset PX4 cannot close with the sticks centred? 2x2x2 grid.",
+  "airframe": "airframes/atlas_og.json",
+  "scenario": "scenarios/stab_lab_fast.json",
+  "variables": [
+    {"path": "px4.MC_RR_INT_LIM", "range": [0.3, 1.0]},
+    {"path": "px4.MC_ROLLRATE_I", "range": [0.2, 0.6]},
+    {"path": "px4.MC_AIRMODE", "range": [1, 2], "type": "int"}
+  ],
+  "objective": "phases.hover.pitch_err_rms_deg + phases.hover.roll_err_rms_deg + 0.05 * phases.hover.rates_rms_deg_s + 0.2 * (phases.liftoff.pitch_max_deg + phases.liftoff.roll_max_deg) + 0.2 * (phases.landing.pitch_max_deg + phases.landing.roll_max_deg) + 2 * phases.nose_lower.touchdown_speed + 5 * metrics.saturation_fraction",
+  "constraints": ["ok", "not metrics.crashed", "phases.nose_lower.touchdown_speed < 0.8", "abs(phases.hover.yaw_drift_deg) < 10", "phases.hover.pos_drift < 2"],
+  "penalty": 100,
+  "algorithm": {"name": "grid", "budget": 8, "levels": [2, 2, 2], "batch": 2},
+  "workers": 2,
+  "sim": {"rate": 250, "substeps": 2, "noise": true, "speed": 0, "instances": [5, 6]}
+}

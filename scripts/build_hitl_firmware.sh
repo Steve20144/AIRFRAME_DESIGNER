@@ -18,13 +18,17 @@ ACTION="${2:-build}"
 VARIANT="${3:-${VARIANT:-}}"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-export PATH="$HERE/.venv/bin:$PATH"
-# Homebrew's arm-gcc-bin@13 is keg-only unless linked; use it directly when present.
-for d in /opt/homebrew/opt/arm-gcc-bin@13/bin /usr/local/opt/arm-gcc-bin@13/bin; do [ -d "$d" ] && export PATH="$d:$PATH"; done
+# The python that has PX4's build requirements (kconfiglib, empy, jinja2 ...): the app passes its own interpreter's
+# bin dir as VENV_BIN; by hand, .venv/bin next to this repo or whatever is on PATH.
+export PATH="${VENV_BIN:-$HERE/.venv/bin}:$PATH"
+# Homebrew's arm-gcc-bin@13 is keg-only unless linked; on Linux without root the toolchain lives under
+# ~/toolchains (Arm's or xpack's tarball). Use whichever is present.
+for d in /opt/homebrew/opt/arm-gcc-bin@13/bin /usr/local/opt/arm-gcc-bin@13/bin "$HOME"/toolchains/*/bin; do [ -d "$d" ] && export PATH="$d:$PATH"; done
 
 if ! command -v arm-none-eabi-gcc >/dev/null; then
   echo "arm-none-eabi-gcc not found. Install the toolchain first:"
-  echo "  brew tap osx-cross/arm; brew trust osx-cross/arm && brew install osx-cross/arm/arm-gcc-bin@13 && brew link --overwrite --force arm-gcc-bin@13"
+  echo "  macOS:  brew tap osx-cross/arm; brew trust osx-cross/arm && brew install osx-cross/arm/arm-gcc-bin@13 && brew link --overwrite --force arm-gcc-bin@13"
+  echo "  Linux:  sudo apt install gcc-arm-none-eabi   (or, without root, unpack the xpack arm-none-eabi-gcc 13.2 tarball under ~/toolchains/)"
   exit 1
 fi
 cd "$PX4_DIR"

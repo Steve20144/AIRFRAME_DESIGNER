@@ -1,0 +1,21 @@
+{
+  "name": "nose_lift_gust",
+  "description": "Nose-up hoverer disturbance rejection: nose lift, PX4 takeoff to 4 m, hover in still air, then a 6 m/s wind from the north for 10 s and a 6 m/s crosswind from the east for 10 s (position excursion, attitude, motor headroom and saturation).",
+  "max_time": 130,
+  "params": {"MIS_TAKEOFF_ALT": 4},
+  "abort": {"max_tilt_deg": 100, "max_alt": 60, "crash_speed": 3.0},
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "nose_lift", "motors": [8, 9], "rate_deg_s": 8, "timeout": 30},
+    {"type": "takeoff", "alt": 4, "settle": 2, "timeout": 30},
+    {"type": "hold", "name": "hover", "duration": 6},
+    {"type": "wind", "ned": [-6, 0, 0]},
+    {"type": "hold", "name": "headwind", "duration": 10},
+    {"type": "wind", "ned": [0, 0, 0]},
+    {"type": "hold", "name": "recover1", "duration": 5},
+    {"type": "wind", "ned": [0, -6, 0]},
+    {"type": "hold", "name": "crosswind", "duration": 10},
+    {"type": "wind", "ned": [0, 0, 0]},
+    {"type": "hold", "name": "recover2", "duration": 5}
+  ]
+}

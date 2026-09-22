@@ -1,0 +1,92 @@
+{
+  "name": "stab_lab_nolift",
+  "description": "Diagnostic: the aircraft is parked already at its hover pitch on a re-solved stand, so there is no rotation stage and no nose-lift handover; arm in Stabilized, lift off, hover, land. Separates the ground-sequence handover from PX4's own liftoff behaviour.",
+  "max_time": 200,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 3,
+      "duration": 8,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 12,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 30,
+      "alt_hold": {
+        "target": -0.5,
+        "rate": 0.4,
+        "min": 0.2
+      },
+      "until_ground": true,
+      "settle": 0.3
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "stabilized",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ],
+  "attitude": {
+    "park_pitch_deg": 23,
+    "hover_pitch_deg": 23
+  }
+}

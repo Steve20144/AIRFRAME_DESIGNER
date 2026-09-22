@@ -19,8 +19,9 @@ from typing import Any
 import numpy as np
 
 from .body import Body
+from .cad import CadModel
 from .frames import unit
-from .gear import Leg, generate_legs
+from .gear import Leg, generate_legs, legs_for_park_pitch
 from .mass import MassProperties, estimate_inertia
 from .propulsion import Rotor
 from .wings import Wing, wing_panels
@@ -43,7 +44,10 @@ class Airframe:
     landed_pitch_deg: float = 0.0   # nose-up pitch when standing on its legs (initial attitude of a simulation)
     px4_overrides: dict = field(default_factory=dict)   # PX4 parameters set by hand, saved with the airframe
     design: dict = field(default_factory=dict)          # optimiser / analysis settings (cruise speed, groups...)
+    cad: CadModel | None = None                         # STEP bodies with masses (geometry/cad.py)
     notes: str = ""
+    mesh: dict = field(default_factory=dict)   # optional CAD visual: {"file": "<name>.stl" under airframes/meshes,
+                                               #   "frame": "flu"|"frd", "scale": 1.0, "opacity": 0.85}
 
     # ------------------------------------------------------------ helpers
     @property
@@ -121,7 +125,14 @@ class Airframe:
             "legs": [l.to_dict() for l in self.legs],
             "hover_pitch_deg": self.hover_pitch_deg, "landed_pitch_deg": self.landed_pitch_deg,
             "px4_overrides": dict(self.px4_overrides), "design": copy.deepcopy(self.design), "notes": self.notes,
+            "mesh": dict(self.mesh),
+            "cad": self.cad.to_dict() if self.cad else None,
         }
+
+    def resolve_mass(self) -> "Airframe":
+        """Recompute mass / CG / inertia from mass items and CAD bodies when ``mass.from_items`` is set."""
+        self.mass.resolve(self.cad.mass_items() if self.cad else None)
+        return self
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Airframe":
@@ -134,10 +145,12 @@ class Airframe:
                  hover_pitch_deg=float(d.get("hover_pitch_deg", 0.0) or 0.0),
                  landed_pitch_deg=float(d.get("landed_pitch_deg", 0.0) or 0.0),
                  px4_overrides=dict(d.get("px4_overrides", {}) or {}), design=dict(d.get("design", {}) or {}),
-                 notes=str(d.get("notes", "") or ""))
+                 notes=str(d.get("notes", "") or ""), mesh=dict(d.get("mesh", {}) or {}),
+                 cad=CadModel.from_dict(d.get("cad")))
         for i, r in enumerate(af.rotors):
             if not r.name:
                 r.name = f"M{i + 1}"
+        af.resolve_mass()
         return af
 
     @classmethod
@@ -195,6 +208,41 @@ class Airframe:
                 problems.append(f"wing '{w.name}' has no chord")
         return problems
 
+    # -------------------------------------------------------- parked / hover attitude
+    def with_attitude(self, park_pitch_deg: float | None = None, hover_pitch_deg: float | None = None) -> "Airframe":
+        """A copy standing at ``park_pitch_deg`` (legs re-solved under the same hard points, ``landed_pitch_deg``
+        updated) and hovering at ``hover_pitch_deg`` (PX4's level, SENS_BOARD_Y_OFF, the rotor export). The nose
+        lift / lower targets in ``design`` follow, keeping their offsets from the old values (the lower target sits
+        a little below the parked pitch because the front legs compress)."""
+        af = self.copy()
+        design = af.design if isinstance(getattr(af, "design", None), dict) else None
+        if hover_pitch_deg is not None and abs(float(hover_pitch_deg) - af.hover_pitch_deg) > 1e-9:
+            old = af.hover_pitch_deg
+            af.hover_pitch_deg = float(hover_pitch_deg)
+            nl = (design or {}).get("nose_lift") or {}
+            if "target_pitch_deg" in nl:
+                nl["target_pitch_deg"] = round(float(nl["target_pitch_deg"]) - old + af.hover_pitch_deg, 2)
+        if park_pitch_deg is not None and abs(float(park_pitch_deg) - af.landed_pitch_deg) > 1e-9:
+            old = af.landed_pitch_deg
+            af.legs = legs_for_park_pitch(af.legs, float(park_pitch_deg), cg=af.mass.cg, old_park_pitch_deg=old)
+            af.landed_pitch_deg = float(park_pitch_deg)
+            # does it stand? the CG must project inside the feet when pitched by the parked angle, or the stand tips
+            phi = math.radians(af.landed_pitch_deg)
+            n = np.array([-math.sin(phi), 0.0, math.cos(phi)]); ex = np.array([math.cos(phi), 0.0, math.sin(phi)])
+            cg = np.asarray(af.mass.cg, float)
+            feet = np.array([l.foot() for l in af.active_legs()], float)
+            fx = (feet - cg) @ ex; fy = feet[:, 1] - cg[1]
+            if fx.min() > -0.005 or fx.max() < 0.005:
+                where = "behind the rear" if fx.min() > 0 else "ahead of the front"
+                raise ValueError(f"parked at {af.landed_pitch_deg:g} deg the CG is {min(abs(fx.min()), abs(fx.max())):.3f} m {where} feet: "
+                                 f"this stand tips over (move the hard points or choose another parked pitch)")
+            if fy.min() > -0.005 or fy.max() < 0.005:
+                raise ValueError(f"parked at {af.landed_pitch_deg:g} deg the CG is outside the feet sideways")
+            lo = (design or {}).get("nose_lower") or {}
+            if "target_pitch_deg" in lo:
+                lo["target_pitch_deg"] = round(float(lo["target_pitch_deg"]) - old + af.landed_pitch_deg, 2)
+        return af
+
     # -------------------------------------------------------- PX4 export
     def px4_params(self, hitl: bool = True) -> dict[str, float | int]:
         """Parameters that make PX4 fly this exact geometry. Rotor i (enabled ones, in order) is PX4 Motor i+1."""
@@ -204,6 +252,7 @@ class Airframe:
         rotors = self.active_rotors()
         p["CA_AIRFRAME"] = 0
         p["CA_ROTOR_COUNT"] = len(rotors)
+        ct_ref = max((r.effective_max_thrust() for r in rotors), default=1.0) or 1.0
         for i, (r, (pos, ax)) in enumerate(zip(rotors, self.rotors_in_px4_frame())):
             p[f"CA_ROTOR{i}_PX"] = round(pos[0], 4)
             p[f"CA_ROTOR{i}_PY"] = round(pos[1], 4)
@@ -212,6 +261,10 @@ class Airframe:
             p[f"CA_ROTOR{i}_AY"] = round(ax[1], 4)
             p[f"CA_ROTOR{i}_AZ"] = round(ax[2], 4)
             p[f"CA_ROTOR{i}_KM"] = round(r.km, 4)
+            # relative thrust coefficient: a jetfoil fan whose jet is bent loses thrust (turn_loss), and PX4 must know
+            # that the rear fans push less than the front ones for the same command, or every hover carries a
+            # steady pitch moment the rate loop has to trim out (and cannot, once the allocator flags saturation)
+            p[f"CA_ROTOR{i}_CT"] = round(6.5 * r.effective_max_thrust() / ct_ref, 3)
         # The flight controller is mounted in the structural frame; PX4 reads its IMU in the hover frame.
         p["SENS_BOARD_Y_OFF"] = round(float(self.hover_pitch_deg), 2)
         for n in range(1, 17):
@@ -340,6 +393,7 @@ def migrate(d: dict) -> dict:
     out["px4_overrides"] = dict(d.get("px4_overrides", {}) or {})
     out["design"] = dict(d.get("design", {}) or {})
     out["notes"] = str(d.get("notes", "") or "")
+    out["mesh"] = dict(d.get("mesh", {}) or {})
     return out
 
 

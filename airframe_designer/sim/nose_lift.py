@@ -218,3 +218,138 @@ class NoseLift:
         return {"state": self.state, "reason": self.reason, "pitch_deg": round(self.pitch, 2), "target_deg": self.target,
                 "ramp_target_deg": None if self.ramp_target is None else round(self.ramp_target, 2), "cmd": round(self.cmd, 3),
                 "motors": self.motors}
+
+
+class NoseLower(NoseLift):
+    """The takeoff sequence run backwards, for landing. The aircraft touches down at its hover attitude (rear feet
+    first); at that moment the sequence takes over *all* motor commands: every motor except the chosen (front) ones
+    is cut, and the chosen ones lower the nose to ``target_pitch_deg`` (the parked attitude) at ``rate_deg_s`` with
+    the same balance-plus-rate loop as the lift, then fade out. States:
+
+      waiting   armed in the air, no influence on the motors; triggers when the vehicle has been airborne above
+                ``min_airborne_alt`` and touches the ground (or immediately with ``wait_touchdown=False``)
+      lowering  overriding PX4: rear motors 0, front motors on the loop, nose descending at the rate
+      settling  at the target: fade the front motors out over ``fade_s``
+      done / failed
+
+    PX4 still believes it is flying when the takeover happens, so the simulator force-disarms it when the sequence
+    finishes; a real aircraft needs the same logic in firmware.
+    """
+
+    def __init__(self, motors: list[int], target_pitch_deg: float, rate_deg_s: float = 3.0, wait_touchdown: bool = True,
+                 min_airborne_alt: float = 0.8, wait_timeout_s: float = 180.0, timeout_s: float = 40.0, fade_s: float = 2.0,
+                 tolerance_deg: float = 1.5, takeover_boost: float = 1.15, kq: float = 0.3, kqi: float = 0.1,
+                 rear_fade_s: float = 0.0, **kw):
+        super().__init__(motors, target_pitch_deg, rate_deg_s=rate_deg_s, timeout_s=timeout_s, fade_s=fade_s,
+                         tolerance_deg=tolerance_deg, kq=kq, kqi=kqi, **kw)
+        self.kind = "lower"
+        self.rear_fade_s = float(rear_fade_s)           # the other motors fade from their PX4 command to 0 over this
+                                                        # (0 = cut at once; a fade pushes the tail up and the nose down)
+        self.rear_cmd0 = None
+        self.takeover_boost = float(takeover_boost)     # front thrust above static balance at the takeover instant,
+                                                        # so cutting the rear motors does not drop the nose
+        self.wait_touchdown = bool(wait_touchdown)
+        self.min_airborne_alt = float(min_airborne_alt)
+        self.wait_timeout = float(wait_timeout_s)
+        self.override_all = not self.wait_touchdown          # the simulator replaces PX4's commands while True
+        self.state = "waiting" if self.wait_touchdown else "lowering"
+        self.was_airborne = not self.wait_touchdown
+        self.touchdown_t = None
+        self.touchdown_speed = None
+        self.touchdown_pitch = None
+        self.touchdown_alt = None
+        self.t_wait0 = None
+        self.rate_max = 0.0
+
+    def floor(self, n: int) -> np.ndarray | None:
+        if self.state in ("done", "failed"):
+            return None
+        f = np.zeros(n)
+        if not self.override_all:
+            return f                                          # waiting: max(PX4, 0) leaves PX4 alone
+        if self.rear_cmd0 is not None and self.t0 is not None:
+            k = 1.0 - (self._t - self.t0) / max(self.rear_fade_s, 1e-3)
+            if k > 0.0:
+                f[:] = np.asarray(self.rear_cmd0, float)[:n] * k
+        split = getattr(self, "split", None)
+        for k, m in enumerate(self.motors):
+            if 0 <= m < n:
+                f[m] = self.cmd * (split[k] if split is not None and k < len(split) else 1.0)
+        return f
+
+    def __call__(self, simr) -> None:
+        if self.state in ("done", "failed"):
+            return
+        s = simr.sim
+        t = simr.t
+        self._t = t
+        dt = 1.0 / simr.sensor_rate
+        self.pitch = math.degrees(s.euler[1])
+        q = math.degrees(s.rates[1])
+        alt = float(-s.pos[2])
+        if self.rear_cmd0 is None and self.state == "waiting":
+            link = simr.link
+            px4 = np.asarray(getattr(link, "actuators", [0.0] * 16), float) if link is not None else np.zeros(16)
+            self._px4_last = np.array(px4[: s.rotors.n], float)
+        self._update_split(s, s.rates)
+        if self.t_wait0 is None:
+            self.t_wait0 = t
+        if simr.step_count % 10 == 0:
+            self.history.append((round(t, 3), round(self.pitch, 2), round(self.cmd, 3)))
+            if len(self.history) > 4000:
+                self.history = self.history[-4000:]
+
+        if self.state == "waiting":
+            if not s.on_ground and alt > self.min_airborne_alt:
+                self.was_airborne = True
+            if self.was_airborne and s.on_ground:
+                self.touchdown_t, self.touchdown_speed = t, float(np.linalg.norm(s.vel))
+                self.touchdown_pitch, self.touchdown_alt = self.pitch, alt
+                self.state, self.override_all, self.t0, self.integral = "lowering", True, t, 0.0
+                self.rear_cmd0 = getattr(self, "_px4_last", np.zeros(s.rotors.n)).copy()
+                for m in self.motors:
+                    if 0 <= m < len(self.rear_cmd0):
+                        self.rear_cmd0[m] = 0.0
+                self.ff = self._balance_fraction(s)
+                self.cmd = self._thrust_to_cmd(s, self.ff * self.takeover_boost)
+                self.integral = (self.takeover_boost - 1.0) * self.ff / max(self.kqi, 1e-6)   # loop starts where the boost is
+            elif t - self.t_wait0 > self.wait_timeout:
+                self._finish("failed", f"no touchdown within {self.wait_timeout:g} s")
+            return
+        if self.t0 is None:
+            self.t0, self.integral = t, 0.0
+            self.touchdown_pitch, self.touchdown_alt = self.pitch, alt
+        if self.state == "lowering":
+            self.rate_max = max(self.rate_max, abs(q))
+            if t - self.t0 > self.timeout:
+                self._finish("failed", f"nose did not come down to {self.target:g} deg in {self.timeout:g} s (at {self.pitch:.1f})"); return
+            if self.pitch < self.target - 10.0:
+                self._finish("failed", f"nose dropped to {self.pitch:.1f} deg (target {self.target:g})"); return
+            if self.touchdown_alt is not None and alt > self.touchdown_alt + 0.6:
+                self._finish("failed", "vehicle lifted off again during the nose lower"); return
+            self.ff = self._balance_fraction(s)
+            ease = min(1.0, (t - self.t0) / 1.0)
+            q_des = float(np.clip(self.k_ang * (self.target - self.pitch), -self.rate * ease, self.rate))
+            eq = q_des - q
+            self.integral = float(np.clip(self.integral + eq * dt, -40.0, 40.0))
+            self.frac = self.ff + self.kq * eq + self.kqi * self.integral
+            self.cmd = self._thrust_to_cmd(s, self.frac)
+            if abs(self.pitch - self.target) < self.tol and abs(q) < 3.0:
+                self.hold_since = self.hold_since or t
+                if t - self.hold_since >= self.hold_s:
+                    self.state, self.fade_start, self.fade_from = "settling", t, self.cmd
+            else:
+                self.hold_since = None
+            return
+        if self.state == "settling":
+            k = (t - self.fade_start) / max(self.fade_s, 1e-3)
+            self.cmd = float(self.fade_from * max(0.0, 1.0 - k))
+            if k >= 1.0:
+                self._finish("done", f"nose down at {self.pitch:.1f} deg, {t - self.t0:.1f} s after touchdown")
+
+    def status(self) -> dict:
+        d = super().status()
+        d.update({"kind": "lower", "touchdown_speed": None if self.touchdown_speed is None else round(self.touchdown_speed, 2),
+                  "touchdown_pitch_deg": None if self.touchdown_pitch is None else round(self.touchdown_pitch, 1),
+                  "rate_max_deg_s": round(self.rate_max, 1)})
+        return d

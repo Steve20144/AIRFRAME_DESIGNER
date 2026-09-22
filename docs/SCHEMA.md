@@ -76,9 +76,26 @@ CG never means re-entering positions. Angles are degrees in JSON.
   "landed_pitch_deg": -10,        // attitude when standing on the legs (initial state of a simulation)
   "px4_overrides": {"MPC_THR_HOVER": 0.6},   // PX4 parameters set by hand, exported and seeded with the geometry
   "design": {"cruise_speed_kmh": 50},        // analysis / optimiser settings
-  "notes": ""
+  "notes": "",
+  "mesh": {"file": "atlas_og.stl", "frame": "frd", "scale": 1.0, "opacity": 0.85}
+                                  // optional CAD visual: an STL under airframes/meshes/, served at /meshes/<file>,
+                                  // drawn by the 3D view in place of the body box. frame = the mesh coordinates:
+                                  // "flu" (Gazebo model frame, x fwd y left z up) or "frd" (this schema's frame);
+                                  // same origin as the structural frame, metres after scale. Visual only.
 }
 ```
+
+### What the jetfoil model is, and is not
+
+A rotor with a `duct_axis` is a fan blowing along that axis whose jet a foil bends into `axis`. The simulator
+applies **one force: the rotor thrust along `axis`, at `pos`**, so `pos` must be the jet exit on the foil (where
+the turned jet leaves), not the fan. The turning reaction on the foil is not modelled separately because, for the
+rigid vehicle, fan thrust plus foil reaction equals the exit momentum flux, which is that single vector; the only
+explicit turning parameter is `turn_loss`, which scales `max_thrust` by `1 - turn_loss * deflection / 90 deg`.
+The ram drag of a ducted rotor (the inlet mass flow `sqrt(rho A T)` times the local airspeed) also acts at `pos`.
+Not modelled: any dependence of the deflection angle on airspeed or thrust, jet-induced lift on the foil, or
+losses beyond the linear `turn_loss`. The foil as a lifting body in the outside flow is a separate `wings` entry
+(strip theory); `airframes/atlas_og.json` carries one with an estimated planform measured on the CAD mesh.
 
 Schema 1 files (the AIRFRAME_SIMULATOR format) load transparently: `Airframe.from_dict()` migrates them (mass number
 → `mass`, `prop_diameter` → `diameter`, generated feet → four `legs`, the area/span delta wing → a `polhamus`

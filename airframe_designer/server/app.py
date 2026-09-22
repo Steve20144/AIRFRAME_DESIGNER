@@ -8,7 +8,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -22,6 +22,8 @@ from ..px4.link import mavlink
 from ..px4 import param_meta
 from ..px4.sitl import instance_is_free
 from ..aero import airfoils
+from ..geometry import cad as cadmod
+from . import tuning
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 UI_DIR = PROJECT_DIR / "ui"
@@ -93,6 +95,7 @@ class AppState:
         self.opt_job: dict = {"running": False, "progress": 0.0, "message": "", "result": None, "error": None}
         self.batch_jobs: dict[str, dict] = {}
         self.study_job: dict = {"running": False}
+        self.scenario_job: dict = {"runner": None}
 
     @property
     def link(self):
@@ -102,6 +105,8 @@ class AppState:
 def build_app(state: AppState) -> FastAPI:
     app = FastAPI(title="AIRFRAME_DESIGNER")
     app.mount("/static", StaticFiles(directory=str(UI_DIR)), name="static")
+    (AIRFRAME_DIR / "meshes").mkdir(exist_ok=True)
+    app.mount("/meshes", StaticFiles(directory=str(AIRFRAME_DIR / "meshes")), name="meshes")   # CAD visuals
 
     @app.middleware("http")
     async def no_cache(request, call_next):
@@ -199,7 +204,7 @@ def build_app(state: AppState) -> FastAPI:
         except Exception as e:
             return JSONResponse({"ok": False, "error": f"invalid airframe ({type(e).__name__}: {e}); an empty number field?"}, status_code=400)
         keep = bool(body.get("keep_state", True))
-        af.mass.resolve()
+        af.resolve_mass()
         try:
             await run_in_threadpool(airfoils.ensure_polars, af, state.log)   # polar wings: section tables ready before the physics
         except Exception as e:
@@ -247,6 +252,57 @@ def build_app(state: AppState) -> FastAPI:
         AIRFRAME_DIR.mkdir(exist_ok=True)
         sim.airframe.save(AIRFRAME_DIR / name)
         return {"ok": True, "path": str(AIRFRAME_DIR / name)}
+
+    # ------------------------------------------------------------------ CAD (STEP bodies -> masses, CG)
+    CAD_DIR = AIRFRAME_DIR / "cad"
+
+    def cad_file_path(model) -> Path:
+        p = Path(model.file)
+        return p if p.is_absolute() else PROJECT_DIR / p
+
+    @app.post("/api/cad/import")
+    async def cad_import(request: Request, filename: str = "model.step"):
+        """Upload a STEP file (raw bytes): it is copied to airframes/cad/, every solid measured and meshed, and the
+        bodies attached to the live airframe (masses/offsets of bodies with the same id are kept on re-import)."""
+        data = await request.body()
+        if not data:
+            return JSONResponse({"ok": False, "error": "empty upload"}, status_code=400)
+        CAD_DIR.mkdir(parents=True, exist_ok=True)
+        stem = cadmod._safe_stem(filename)
+        suffix = ".stp" if filename.lower().endswith(".stp") else ".step"
+        dst = CAD_DIR / (stem + suffix)
+        dst.write_bytes(data)
+        try:
+            imported = await run_in_threadpool(cadmod.import_step, dst, state.log)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"STEP import failed: {e}"}, status_code=400)
+        af = sim.airframe.copy()
+        af.cad = cadmod.model_from_import(imported, str(dst.relative_to(PROJECT_DIR)), af.cad)
+        af.resolve_mass()
+        sim.set_airframe(af, keep_state=True)
+        autosave(af)
+        return {"ok": True, "airframe": json_safe(af.to_dict()), "bodies": len(af.cad.bodies),
+                "mesh": cadmod.mesh_payload(af.cad, imported)}
+
+    @app.get("/api/cad/mesh")
+    async def cad_mesh():
+        """Meshes of the live airframe's CAD bodies in the structural frame (axes/origin/scale applied, offsets not)."""
+        m = sim.airframe.cad
+        if not m:
+            return {"ok": True, "file": None, "bodies": []}
+        path = cad_file_path(m)
+        if not path.exists():
+            return JSONResponse({"ok": False, "error": f"CAD file missing: {m.file}"}, status_code=404)
+        try:
+            imported = await run_in_threadpool(cadmod.import_step, path, state.log)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"STEP import failed: {e}"}, status_code=400)
+        return cadmod.mesh_payload(m, imported)
+
+    @app.get("/api/cad/totals")
+    async def cad_totals():
+        m = sim.airframe.cad
+        return {"ok": True, "totals": m.totals() if m else None}
 
     @app.post("/api/airframe/estimate_inertia")
     async def estimate_inertia():
@@ -722,6 +778,82 @@ def build_app(state: AppState) -> FastAPI:
         nl = sim.start_nose_lift(motors, float(body.get("target_pitch_deg", sim.airframe.hover_pitch_deg)), **kw)
         return {"ok": True, "status": nl.status()}
 
+    @app.post("/api/sim/nose_lower")
+    async def sim_nose_lower(body: dict):
+        """Start the landing ground sequence ({"motors": [8, 9], "target_pitch_deg": 8, "rate_deg_s": 3,
+        "wait_touchdown": true}) or stop it ({"stop": true}). With wait_touchdown it arms in the air and takes over
+        at touchdown (rear motors cut, front motors lower the nose); with design.nose_lower.enabled the simulator
+        arms it by itself on every flight."""
+        if body.get("stop"):
+            sim.stop_nose_lift()
+            return {"ok": True}
+        motors = [int(m) for m in body.get("motors") or []]
+        if not motors:
+            return JSONResponse({"ok": False, "error": "choose the motors that hold the nose"}, status_code=400)
+        kw = {k: float(body[k]) for k in ("rate_deg_s", "min_airborne_alt", "fade_s", "tolerance_deg", "timeout_s", "wait_timeout_s", "k_ang", "kq", "kqi", "max_cmd", "takeover_boost", "rear_fade_s") if k in body}
+        kw["wait_touchdown"] = bool(body.get("wait_touchdown", True))
+        if not kw["wait_touchdown"] and not sim.sim.on_ground:
+            return JSONResponse({"ok": False, "error": "the vehicle is not on the ground; use wait_touchdown"}, status_code=409)
+        nl = sim.start_nose_lower(motors, float(body.get("target_pitch_deg", sim.airframe.landed_pitch_deg)), **kw)
+        return {"ok": True, "status": nl.status()}
+
+    def rc_switch_loop() -> None:
+        """A transmitter switch that runs the nose-lift ground sequence before arming. The switch is
+        design.nose_lift.rc_channel (1-based RC_CHANNELS index, 0 = off); the switch is "on" above rc_threshold
+        (1500), or below it with rc_active_low. An off-to-on edge while PX4 is disarmed and the vehicle is on its
+        legs starts the lift with the card's settings, an on-to-off edge while still disarmed stops it. When the
+        pilot arms with the switch still on and the nose holding, Takeoff mode is requested (rc_takeoff, default
+        true): that makes the switch a complete takeoff sequence. Edge-triggered, so a switch that is already on
+        at start does nothing."""
+        last: bool | None = None
+        takeoff_sent = False
+        while True:
+            time.sleep(0.1)
+            try:
+                d = (getattr(sim.airframe, "design", None) or {}).get("nose_lift") or {}
+                ch = int(d.get("rc_channel") or 0)
+                if ch <= 0:
+                    last = None
+                    continue
+                rc = getattr(state.link, "rc", {}) or {}
+                vals = rc.get("channels") or []
+                if not rc or time.time() - rc.get("t", 0) > 1.0 or ch > len(vals):
+                    continue
+                v = float(vals[ch - 1])
+                high = v < float(d.get("rc_threshold", 1500)) if d.get("rc_active_low") else v > float(d.get("rc_threshold", 1500))
+                if last is None:
+                    last = high
+                    continue
+                nl = sim.nose_lift
+                if high and last and nl is not None and getattr(nl, "kind", "lift") == "lift" and link.armed                         and nl.state in ("holding", "handover") and d.get("rc_takeoff", True) and not takeoff_sent:
+                    # the pilot armed while the switch is still on: this is the takeoff sequence, climb to MIS_TAKEOFF_ALT
+                    link.set_mode("takeoff")
+                    takeoff_sent = True
+                    state.log(f"[rc] channel {ch} on and PX4 armed with the nose holding: Takeoff requested")
+                if not high:
+                    takeoff_sent = False
+                if high and not last:
+                    motors = [int(m) for m in d.get("motors") or []]
+                    if link.armed or not sim.sim.on_ground or sim.nose_lift is not None or not motors:
+                        state.log(f"[rc] channel {ch} high but the nose lift cannot start "
+                                  f"({'armed' if link.armed else 'airborne' if not sim.sim.on_ground else 'already running' if sim.nose_lift is not None else 'no motors chosen'})")
+                    else:
+                        kw: dict = {"rate_deg_s": float(d.get("rate_deg_s", 8))}
+                        if float(d.get("assist_cmd", 0) or 0) > 0:
+                            kw["assist_motors"] = [i for i in range(len(sim.airframe.rotors)) if i not in motors]
+                            kw["assist_cmd"] = float(d["assist_cmd"])
+                        sim.start_nose_lift(motors, float(d.get("target_pitch_deg", sim.airframe.hover_pitch_deg)), **kw)
+                        state.log(f"[rc] channel {ch} high: nose lift started, arm when it reports holding")
+                elif last and not high and sim.nose_lift is not None and not link.armed:
+                    sim.stop_nose_lift()
+                    state.log(f"[rc] channel {ch} low: nose lift stopped")
+                last = high
+            except Exception as e:  # never let a transmitter glitch kill the watcher
+                state.log(f"[rc] switch watcher: {e}")
+
+    import threading
+    threading.Thread(target=rc_switch_loop, name="rc-switch", daemon=True).start()
+
     @app.post("/api/sim/wind")
     async def sim_wind(body: dict):
         sim.set_wind(float(body.get("north", 0)), float(body.get("east", 0)), float(body.get("down", 0)))
@@ -737,6 +869,112 @@ def build_app(state: AppState) -> FastAPI:
         sim.sensors.set_home(float(body["lat"]), float(body["lon"]), float(body.get("alt", 0.0)))
         return {"ok": True}
 
+    # ------------------------------------------------------------ live scenario on the app's simulator (SITL or HITL)
+    @app.post("/api/scenario/start")
+    async def scenario_start(body: dict | None = None):
+        """Fly a scenario on the live simulator, i.e. on whatever PX4 the app is connected to (the HITL board
+        included). The scenario's params are pushed to PX4 first; the vehicle is put back on its legs unless
+        reset is false. Progress and the final result come from GET /api/scenario/status."""
+        from ..sim.scenario import load_scenario, ScenarioRunner
+        from ..sim.metrics import MetricsRecorder
+        body = body or {}
+        if not link.ctl_connected:
+            return JSONResponse({"ok": False, "error": "PX4 not connected"}, status_code=409)
+        job = state.scenario_job
+        if job.get("runner") is not None and not job["runner"].done:
+            return JSONResponse({"ok": False, "error": "a scenario is already running"}, status_code=409)
+        spec = body.get("scenario", "hover")
+        sc = load_scenario(spec if isinstance(spec, dict) else str(spec))
+        if body.get("attitude"):
+            sc.attitude = dict(sc.attitude or {}); sc.attitude.update(body["attitude"])
+        if sc.attitude:
+            try:
+                af2 = sc.apply_attitude(sim.airframe)
+                if af2 is not sim.airframe:
+                    sim.set_airframe(af2, keep_state=False)
+                    state.log(f"[scenario] {sc.name}: parked at {af2.landed_pitch_deg:g} deg, hover at {af2.hover_pitch_deg:g} deg (legs re-solved)")
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": f"attitude: {e}"}, status_code=400)
+        params = dict(sc.params or {}); params.update(body.get("params") or {})
+        pushed = []
+        if body.get("push_params", True) and link.params:
+            # the airframe's own PX4 parameters first (geometry, rotation, output functions): a headless run seeds
+            # them at boot, the live PX4 may still carry another airframe's
+            exp = export_params()
+            stale = {k: v for k, v in exp.items() if k in link.params
+                     and abs(float(link.params[k].get("value", 0.0)) - float(v)) > 1e-4}
+            if stale:
+                res = await run_in_threadpool(link.set_params, stale)
+                bad = [r for r in res if not r.get("ok")]
+                state.log(f"[scenario] airframe export: {len(stale) - len(bad)}/{len(stale)} changed parameters pushed"
+                          + (f"; FAILED: {[r['name'] for r in bad]}" if bad else ""))
+                pushed += bad
+        if params and body.get("push_params", True):
+            present = {k: v for k, v in params.items() if k in link.params}
+            skipped = [k for k in params if k not in link.params]
+            res = await run_in_threadpool(link.set_params, present)
+            pushed = [r for r in res if not r.get("ok")]
+            state.log(f"[scenario] {len(present) - len(pushed)}/{len(present)} parameters pushed for {sc.name}"
+                      + (f"; unknown to this firmware: {skipped}" if skipped else "")
+                      + (f"; FAILED: {[r['name'] for r in pushed]}" if pushed else ""))
+        if body.get("reset", True):
+            if getattr(link, "armed", False):
+                # a previous flight (or crash) left PX4 armed: it must be disarmed before the vehicle is put back
+                await run_in_threadpool(link.disarm, True)
+                for _ in range(30):
+                    if not link.armed:
+                        break
+                    await asyncio.sleep(0.1)
+            sim.reset(yaw=float(body.get("yaw", 0.0)))
+        runner = ScenarioRunner(sc, link, log=state.log, metrics=MetricsRecorder())
+        state.scenario_job = {"runner": runner, "name": sc.name, "started": time.time(), "result": None, "failed_params": pushed}
+        sim.hooks.append(runner)
+        return {"ok": True, "name": sc.name, "phases": [x.get("name") or x.get("type") for x in sc.phases], "failed_params": pushed}
+
+    @app.get("/api/scenario/status")
+    async def scenario_status():
+        job = state.scenario_job
+        r = job.get("runner")
+        if r is None:
+            return {"running": False}
+        out = {"running": not r.done, "name": job.get("name"), "status": r.status, "ok": r.ok, "failures": r.failures,
+               "phase": r.phase.get("name") or r.phase.get("type") if r.phase else None, "phase_index": r.index,
+               "phase_count": len(r.sc.phases), "sim_time": r.metrics.rows[-1][0] if r.metrics.rows else 0.0,
+               "throttle": getattr(r, "last_throttle", None), "events": r.metrics.events[-12:]}
+        if r.done:
+            if job.get("result") is None:
+                try:
+                    job["result"] = json_safe(r.result(sim.airframe.mass.mass))
+                except Exception as e:
+                    job["result"] = {"error": str(e)}
+                if r in sim.hooks:
+                    sim.hooks.remove(r)
+                tune = job.get("tuning")
+                if tune:
+                    try:
+                        res = dict(job["result"]); res.setdefault("scenario", job.get("name"))
+                        res["ok"] = bool(r.ok); res["status"] = r.status; res["failures"] = list(r.failures)
+                        res["airframe_name"] = sim.airframe.name; res["physics"] = getattr(sim, "physics", "live")
+                        tuning.save_run(tune["id"], res, json_safe(r.metrics.timeseries()),
+                                        {"name": tune.get("name"), "kind": "live", "params": tune.get("params") or {}})
+                        state.log(f"[tuning] live flight saved as {tune['id']}")
+                    except Exception as e:
+                        state.log(f"[tuning] could not save the live flight: {e}")
+            out["result"] = job["result"]
+            out["tuning_id"] = (job.get("tuning") or {}).get("id")
+        return out
+
+    @app.post("/api/scenario/stop")
+    async def scenario_stop():
+        job = state.scenario_job
+        r = job.get("runner")
+        if r is not None and not r.done:
+            r.finish(sim, "stopped", False)
+            if r in sim.hooks:
+                sim.hooks.remove(r)
+            state.log("[scenario] stopped by the user")
+        return {"ok": True}
+
     # ------------------------------------------------------------ scenarios / batch / studies
     @app.get("/api/scenarios")
     async def list_scenarios():
@@ -745,7 +983,8 @@ def build_app(state: AppState) -> FastAPI:
             try:
                 d = json.loads(p.read_text())
                 out.append({"file": p.name, "name": d.get("name", p.stem), "description": d.get("description", ""),
-                            "phases": [x.get("name") or x.get("type") for x in d.get("phases", [])]})
+                            "phases": [x.get("name") or x.get("type") for x in d.get("phases", [])],
+                            "attitude": d.get("attitude") or {}})
             except Exception:
                 pass
         return {"scenarios": out}
@@ -810,13 +1049,24 @@ def build_app(state: AppState) -> FastAPI:
         spec = load_study(body["spec"]) if isinstance(body.get("spec"), str) else dict(body.get("spec") or {})
         if body.get("use_current_airframe", False) or "airframe" not in spec:
             spec["airframe"] = sim.airframe.to_dict()
+        return start_study(spec, body.get("workers"))
+
+    def start_study(spec: dict, workers=None):
+        from ..batch.study import run_study
         job = state.study_job
-        job.update(running=True, name=spec.get("name", "study"), trials=[], summary=None, error=None, log=[], t0=time.time())
+        job.update(running=True, name=spec.get("name", "study"), trials=[], summary=None, error=None, log=[], t0=time.time(),
+                   workers=int(workers or spec.get("workers", 4)))
+
+        def progress(t):
+            metrics = t.get("metrics") or {}
+            first = next(iter(metrics.values()), {}) if isinstance(metrics, dict) else {}
+            row = {k: v for k, v in t.items() if k not in ("metrics", "timing")}
+            row["brief"] = tuning.brief({"ok": t.get("ok"), "status": t.get("status"), "failures": t.get("failures"), "metrics": first})
+            job["trials"].append(row)
 
         def run():
             try:
-                job["summary"] = run_study(spec, workers=body.get("workers"), log=lambda s: job["log"].append(s),
-                                           progress=lambda t: job["trials"].append({k: v for k, v in t.items() if k not in ("metrics", "timing")}))
+                job["summary"] = run_study(spec, workers=workers, log=lambda s: job["log"].append(s), progress=progress)
             except Exception as e:
                 job["error"] = f"{type(e).__name__}: {e}"
             finally:
@@ -824,7 +1074,7 @@ def build_app(state: AppState) -> FastAPI:
 
         import threading
         threading.Thread(target=run, name="study", daemon=True).start()
-        return {"ok": True}
+        return {"ok": True, "name": spec.get("name")}
 
     @app.get("/api/study/status")
     async def study_status():
@@ -842,6 +1092,131 @@ def build_app(state: AppState) -> FastAPI:
         sim.set_airframe(af, keep_state=True)
         return {"ok": True, "airframe": af.to_dict()}
 
+    # ------------------------------------------------------------ tuning tab
+    @app.get("/api/tuning/runs")
+    async def tuning_runs():
+        return {"runs": tuning.list_runs(), "jobs": [{k: v for k, v in j.items() if k != "log"} | {"log": j["log"][-3:]}
+                                                      for j in state.batch_jobs.values() if j.get("tuning")][::-1],
+                "free_instances": [i for i in range(1, 10) if instance_is_free(i)]}
+
+    @app.get("/api/tuning/run/{run_id}")
+    async def tuning_run(run_id: str, points: int = 1500):
+        r = tuning.load_run(run_id, max_points=points)
+        if r is None:
+            return JSONResponse({"ok": False, "error": "no such run"}, status_code=404)
+        return r
+
+    @app.delete("/api/tuning/run/{run_id}")
+    async def tuning_run_delete(run_id: str):
+        return {"ok": tuning.delete_run(run_id)}
+
+    @app.post("/api/tuning/run")
+    async def tuning_start(body: dict):
+        """One tuning attempt: the current airframe with ``params`` (PX4 name -> value) on top of its overrides, flown
+        through ``scenario``. Headless (a private PX4 instance, saved with its time series when done) or live on the
+        app's PX4 (SITL or the HITL board; saved when the scenario ends)."""
+        from ..batch.worker import run_once
+        scenario = str(body.get("scenario", "stab_lab"))
+        params = {str(k): v for k, v in (body.get("params") or {}).items() if str(k).strip()}
+        variables = dict(body.get("variables") or {})
+        variables.update({f"px4.{k}": v for k, v in params.items()})
+        run_id = tuning.new_id("live" if body.get("live") else "run")
+        name = str(body.get("name") or run_id)
+        attitude = {k: float(v) for k, v in (body.get("attitude") or {}).items() if v is not None and str(v) != ""}
+        if attitude:                    # the attempt overrides the scenario's parked / hover pitch
+            from ..sim.scenario import load_scenario
+            sc_d = load_scenario(scenario).to_dict()
+            sc_d["attitude"] = dict(sc_d.get("attitude") or {}); sc_d["attitude"].update(attitude)
+            scenario = sc_d
+        if body.get("live"):
+            r = await scenario_start({"scenario": scenario, "params": params, "reset": body.get("reset", True)})
+            if isinstance(r, JSONResponse):
+                return r
+            state.scenario_job["tuning"] = {"id": run_id, "name": name, "params": params}
+            return {"ok": True, "id": run_id, "live": True, "phases": r.get("phases")}
+        af = sim.airframe.copy()
+        opts = dict(body.get("options") or {})
+        # reserve a PX4 instance now: two attempts started in the same second would otherwise both pick the first
+        # free one and collide on its ports
+        taken = {j.get("instance") for j in state.batch_jobs.values() if j.get("running")}
+        if state.study_job.get("running"):
+            # a running sweep cycles PX4 on the lowest instances between trials; they look free for a moment
+            taken |= set(range(1, int(state.study_job.get("workers", 4)) + 1))
+        instance = next((i for i in range(9, 0, -1) if i not in taken and instance_is_free(i)), None)
+        if instance is None:
+            return JSONResponse({"ok": False, "error": "no free PX4 instance (1..9)"}, status_code=409)
+        job = {"id": run_id, "name": name, "tuning": True, "instance": instance, "scenario": scenario if isinstance(scenario, str) else scenario.get("name"),
+               "variables": variables, "params": params, "attitude": attitude,
+               "physics": str(opts.get("physics", "python")), "running": True, "t0": time.time(), "result": None, "log": []}
+        state.batch_jobs[run_id] = job
+
+        def run():
+            tuning.TUNING_DIR.mkdir(parents=True, exist_ok=True)
+            ts_path = tuning.TUNING_DIR / f"{run_id}_ts.json"
+            try:
+                r = run_once(af, scenario, variables=variables, px4_dir=state.args.px4_dir, log=lambda s: job["log"].append(s),
+                             quiet=True, timeseries_path=str(ts_path), task_id=run_id, instance=instance,
+                             **{k: v for k, v in opts.items() if k in ("speed", "rate", "substeps", "noise", "seed", "timeout_wall", "physics")})
+                r.pop("airframe", None)
+                ts = None
+                if ts_path.is_file():
+                    ts = json.loads(ts_path.read_text()).get("timeseries")
+                tuning.save_run(run_id, r, ts, {"name": name, "kind": "headless", "params": params})
+                job["result"] = r
+            except Exception as e:
+                job["result"] = {"ok": False, "status": "error", "failures": [str(e)]}
+                tuning.save_run(run_id, job["result"], None, {"name": name, "kind": "headless", "params": params, "scenario": scenario})
+            finally:
+                job["running"] = False
+                job["t1"] = time.time()
+
+        import threading
+        threading.Thread(target=run, name=f"tuning-{run_id}", daemon=True).start()
+        return {"ok": True, "id": run_id, "live": False}
+
+    @app.get("/api/tuning/sweeps")
+    async def tuning_sweeps():
+        j = state.study_job
+        return {"sweeps": tuning.list_sweeps(), "running": bool(j.get("running")), "current": j.get("name"),
+                "log": (j.get("log") or [])[-6:], "error": j.get("error")}
+
+    @app.get("/api/tuning/sweep/{study}/trial/{k}")
+    async def tuning_trial(study: str, k: int, points: int = 1500):
+        r = tuning.load_trial(study, k, max_points=points)
+        if r is None:
+            return JSONResponse({"ok": False, "error": "no such trial"}, status_code=404)
+        return r
+
+    @app.post("/api/tuning/sweep")
+    async def tuning_sweep(body: dict):
+        """Build and start a grid sweep over PX4 parameters on the current airframe: body {name, scenario, variables:
+        [{param, min, max, levels}], workers, base_variables, objective, constraints}. Trials keep their time series."""
+        if state.study_job.get("running"):
+            return JSONResponse({"ok": False, "error": "a study is already running"}, status_code=409)
+        variables = body.get("variables") or []
+        if not variables:
+            return JSONResponse({"ok": False, "error": "no variables"}, status_code=400)
+        workers = int(body.get("workers") or 4)
+        spec = tuning.sweep_spec(sim.airframe.to_dict(), str(body.get("scenario", "stab_lab")), variables, name=body.get("name"),
+                                 workers=workers, base_variables=body.get("base_variables"), objective=body.get("objective") or None,
+                                 constraints=body.get("constraints") or None, algorithm=body.get("algorithm"))
+        return start_study(spec, workers)
+
+    @app.get("/api/tuning/defaults")
+    async def tuning_defaults():
+        gains = ["MC_ROLLRATE_P", "MC_ROLLRATE_I", "MC_ROLLRATE_D", "MC_PITCHRATE_P", "MC_PITCHRATE_I", "MC_PITCHRATE_D",
+                 "MC_YAWRATE_P", "MC_YAWRATE_I", "MC_ROLL_P", "MC_PITCH_P", "MC_YAW_P", "MC_YAW_WEIGHT", "MC_YAWRATE_MAX",
+                 "CA_METHOD", "MC_AIRMODE", "MPC_THR_HOVER", "THR_MDL_FAC"]
+        ov = sim.airframe.px4_overrides or {}
+        cur = {}
+        for g in gains:
+            if g in ov:
+                cur[g] = ov[g]
+            elif g in (link.params or {}):
+                cur[g] = link.params[g].get("value")
+        return {"params": cur, "objective": tuning.TUNING_OBJECTIVE, "constraints": tuning.TUNING_CONSTRAINTS,
+                "overrides": ov}
+
     # ------------------------------------------------------------ websocket
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
@@ -857,7 +1232,7 @@ def build_app(state: AppState) -> FastAPI:
                     m = json.loads(raw)
                 except Exception:
                     continue
-                if m.get("type") == "manual" and link.ctl_connected and state.conn.mode == "sitl":   # USB remote is SITL-only
+                if m.get("type") == "manual" and link.ctl_connected:
                     try:
                         await run_in_threadpool(link.send_manual_control, float(m.get("roll", 0)), float(m.get("pitch", 0)),
                                                 float(m.get("throttle", 0)), float(m.get("yaw", 0)), int(m.get("buttons", 0)),
