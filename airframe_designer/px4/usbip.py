@@ -150,6 +150,54 @@ def attach(busid: str | None = None) -> dict:
             "detail": out.strip()[:400]}
 
 
+_auto_attach: subprocess.Popen | None = None
+
+
+def auto_attach_running() -> bool:
+    """A `usbipd attach --auto-attach` is alive: ours, or one started by hand or by an earlier app run."""
+    if _auto_attach is not None and _auto_attach.poll() is None:
+        return True
+    try:
+        out = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return any("usbipd" in line and "--auto-attach" in line for line in out.splitlines())
+
+
+def ensure_auto_attach(log=None) -> dict:
+    """Keep the flight controller attached to WSL through re-enumerations. Flashing reboots the board into its
+    bootloader, which is a new USB device to Windows: without --auto-attach it stays on Windows and the uploader
+    waits forever. The process is left running (the board also re-enumerates on every parameter-driven reboot);
+    it ends with the app."""
+    global _auto_attach
+    if not under_wsl():
+        return {"ok": True, "message": "not WSL: the board is visible directly"}
+    if auto_attach_running():
+        return {"ok": True, "message": "usbipd auto-attach already running"}
+    st = status()
+    if not st.get("available"):
+        return {"ok": False, "message": st.get("reason", "usbipd not available"), "hint": st.get("hint")}
+    target = next((d for d in st["candidates"] if d["attached"]), None) or next(iter(st["candidates"]), None)
+    if target is None:
+        return {"ok": False, "message": "No flight controller found on the Windows host. Is it plugged in?"}
+    if not target["shared"]:
+        return {"ok": False, "busid": target["busid"], "message": f"{target['busid']} has not been shared yet.",
+                "hint": f"In an admin PowerShell:  usbipd bind --busid {target['busid']}"}
+    _auto_attach = subprocess.Popen([st["usbipd"], "attach", "--wsl", "--busid", target["busid"], "--auto-attach"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    if log is not None:
+        import threading
+
+        def pump(proc=_auto_attach):
+            for line in proc.stdout:
+                line = line.replace("\r", "").strip()
+                if line:
+                    log(f"[usb] {line}")
+        threading.Thread(target=pump, daemon=True).start()
+    return {"ok": True, "busid": target["busid"],
+            "message": f"usbipd auto-attach started for {target['description']} ({target['busid']})"}
+
+
 def detach(busid: str | None = None) -> dict:
     """Give the device back to Windows, so QGroundControl there can see it again."""
     st = status()

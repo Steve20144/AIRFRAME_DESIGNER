@@ -1,0 +1,72 @@
+diff --git a/src/modules/control_allocator/ControlAllocator.cpp b/src/modules/control_allocator/ControlAllocator.cpp
+index f70eb1d8df..0520b4f33c 100644
+--- a/src/modules/control_allocator/ControlAllocator.cpp
++++ b/src/modules/control_allocator/ControlAllocator.cpp
+@@ -690,6 +690,42 @@ ControlAllocator::publish_actuator_controls()
+ 		actuator_motors.control[i] = NAN;
+ 	}
+ 
++	// AIRFRAME_DESIGNER nose lift: applied here, before the output driver, so the kill switch and disarm still
++	// cut every motor. override_mask replaces a motor's command, floor_mask keeps it at least the sequence's.
++	_nose_lift_output_sub.update(&_nose_lift_output);
++
++	if (_nose_lift_output.active) {
++		nose_lift_feedback_s feedback{};
++		feedback.timestamp = actuator_motors.timestamp;
++
++		for (int i = 0; i < actuator_motors_s::NUM_CONTROLS; i++) {
++			feedback.allocator_control[i] = actuator_motors.control[i];
++		}
++
++		_nose_lift_feedback_pub.publish(feedback);
++
++		// a sequence that owned motors and stopped talking: stop them rather than hand a parked aircraft to PX4
++		const bool stale = actuator_motors.timestamp > _nose_lift_output.timestamp + 100000;
++
++		for (int i = 0; i < actuator_motors_s::NUM_CONTROLS; i++) {
++			const uint16_t bit = static_cast<uint16_t>(1u << i);
++			const float nl = _nose_lift_output.control[i];
++
++			if (stale) {
++				if (_nose_lift_output.override_mask != 0) {
++					actuator_motors.control[i] = NAN;
++				}
++
++			} else if (_nose_lift_output.override_mask & bit) {
++				actuator_motors.control[i] = nl;
++
++			} else if ((_nose_lift_output.floor_mask & bit) && PX4_ISFINITE(nl)) {
++				const float c = actuator_motors.control[i];
++				actuator_motors.control[i] = PX4_ISFINITE(c) ? fmaxf(c, nl) : nl;
++			}
++		}
++	}
++
+ 	_actuator_motors_pub.publish(actuator_motors);
+ 
+ 	// servos
+diff --git a/src/modules/control_allocator/ControlAllocator.hpp b/src/modules/control_allocator/ControlAllocator.hpp
+index 376171ea23..4594c70240 100644
+--- a/src/modules/control_allocator/ControlAllocator.hpp
++++ b/src/modules/control_allocator/ControlAllocator.hpp
+@@ -79,6 +79,8 @@
+ #include <uORB/topics/vehicle_thrust_setpoint.h>
+ #include <uORB/topics/vehicle_status.h>
+ #include <uORB/topics/failure_detector_status.h>
++#include <uORB/topics/nose_lift_feedback.h>
++#include <uORB/topics/nose_lift_output.h>
+ 
+ class ControlAllocator : public ModuleBase<ControlAllocator>, public ModuleParams, public px4::ScheduledWorkItem
+ {
+@@ -194,6 +196,11 @@ private:
+ 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
+ 	uORB::Subscription _failure_detector_status_sub{ORB_ID(failure_detector_status)};
+ 
++	// AIRFRAME_DESIGNER nose lift (external module): a ground sequence that owns some or all motors while it runs
++	uORB::Subscription _nose_lift_output_sub{ORB_ID(nose_lift_output)};
++	uORB::Publication<nose_lift_feedback_s> _nose_lift_feedback_pub{ORB_ID(nose_lift_feedback)};
++	nose_lift_output_s _nose_lift_output{};
++
+ 	matrix::Vector3f _torque_sp;
+ 	matrix::Vector3f _thrust_sp;
+ 	bool _publish_controls{true};

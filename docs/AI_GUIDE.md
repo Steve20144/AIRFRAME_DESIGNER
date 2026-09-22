@@ -63,6 +63,14 @@ PX4, and the sequence keeps holding the nose until PX4's own commands take over,
 changes (it only sees its attitude change, as if tilted by hand). The metrics report `time_to_pitch` and `max_cmd`
 (how close to full thrust the lifting motors came). The same sequence is available interactively on the Flight tab
 and, when enabled for an airframe (`design.nose_lift`), the Takeoff button runs it first. `design.nose_lift.rc_channel` (1-based, 0 = off) names a transmitter switch: a rising edge above `rc_threshold` (1500) while disarmed and on the ground starts the lift in the interactive app (SITL or HITL), a falling edge before arming stops it.
+With `design.nose_lift.executor` set to `"firmware"` the flight controller runs the lift instead (the `nose_lift`
+PX4 module in `firmware/px4_ext`, built into PX4 with `scripts/build_nose_lift_firmware.sh sitl|board`, SITL runs
+need `--px4-dir ~/PX4-nl`): the export carries its `NL_*` parameters plus `COM_KILL_DISARM 0` and
+`COM_DISARM_PRFLT 120`, the app's switch watcher stands down, and the order becomes arm first (every motor stays
+stopped), then the switch. The kill switch stops it in every phase. The scenario phase `rc` drives a scripted
+transmitter (`{"type": "rc", "channels": {"7": 1000}, "until": {"nl_state": "holding"}}`, also `throttle`,
+`radio: "off"`, `arm`, `until: {"motors_off": true}` / `{"armed": false}`, `expect: {"nl_abort": "kill switch"}`),
+and a scenario `"design"` block is merged into the airframe's; see `scenarios/fw_nose_lift_*.json`.
 
 `nose_lower` is the landing counterpart (`{"type": "nose_lower", "motors": [8, 9], "target_pitch_deg": 6,
 "rate_deg_s": 3, "fade_s": 4}`): it requests PX4 Land (unless `px4_land` is false), and at touchdown the simulator

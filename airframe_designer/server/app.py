@@ -18,9 +18,10 @@ from ..geometry.gear import generate_legs
 from ..geometry.paths import list_paths, apply_variables
 from ..analysis import static as design
 from ..analysis.geometric_optimiser import optimise as geometric_optimise, default_groups
-from ..px4.link import mavlink
+from ..px4.link import mavlink, DEBUG_VECT_ID
 from ..px4 import param_meta
 from ..px4.sitl import instance_is_free
+from ..sim.nose_lift import uses_firmware
 from ..aero import airfoils
 from ..geometry import cad as cadmod
 from . import tuning
@@ -597,6 +598,72 @@ def build_app(state: AppState) -> FastAPI:
         return {"job": state.conn.firmware_job.status(), "board": b, "toolchain": state.conn.toolchain_present(),
                 "built": state.conn.firmware_file(b["target"])}
 
+    # ---- Controller tab: which transmitter control drives which channel (learned by moving it), and what each
+    # control should do. That belongs to the radio, not the airframe, so it is kept per user, not per airframe.
+    controller_file = Path.home() / ".airframe_designer" / "controller.json"
+
+    @app.get("/api/controller")
+    async def get_controller():
+        try:
+            return json.loads(controller_file.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    @app.post("/api/controller")
+    async def save_controller(body: dict):
+        controller_file.parent.mkdir(parents=True, exist_ok=True)
+        controller_file.write_text(json.dumps(body, indent=2))
+        return {"ok": True}
+
+    from ..px4.killtest import KillTest
+    kill_test = KillTest(lambda: state.link, state.log)
+
+    @app.get("/api/killtest")
+    async def killtest_status():
+        return kill_test.status()
+
+    @app.post("/api/killtest")
+    async def killtest_control(body: dict):
+        return kill_test.start() if body.get("action") == "start" else kill_test.stop()
+
+    # ---- Flash tab: build and flash the firmware images (px4/firmware_images.py) with a live log
+    @app.get("/api/flash")
+    async def flash_status(target: str | None = None):
+        from ..px4.usbip import status as usb_status_, auto_attach_running
+        imgs = await run_in_threadpool(state.conn.flash_images, target)
+        usb = await run_in_threadpool(usb_status_)
+        usb["auto_attach"] = await run_in_threadpool(auto_attach_running) if usb.get("available") else False
+        link_ = state.link
+        return {**imgs, "board": state.conn.detected_board(), "usb": usb, "job": state.conn.firmware_job.status(),
+                "toolchain": state.conn.toolchain_present(),
+                "connection": {"mode": state.conn.mode, "serial": state.conn.serial,
+                               "connected": bool(link_ is not None and getattr(link_, "ctl_connected", False)),
+                               "firmware": getattr(link_, "firmware", {}) if link_ is not None else {}}}
+
+    @app.get("/api/flash/log")
+    async def flash_log(since: int = 0):
+        return {**state.conn.firmware_job.lines_since(int(since)), "job": state.conn.firmware_job.status()}
+
+    @app.post("/api/flash/build")
+    async def flash_build(body: dict):
+        return await run_in_threadpool(state.conn.flash_build, str(body.get("image", "")), body.get("target"))
+
+    @app.post("/api/flash/upload")
+    async def flash_upload(body: dict):
+        return await run_in_threadpool(state.conn.flash_upload, str(body.get("image", "")), body.get("target"))
+
+    @app.post("/api/flash/cancel")
+    async def flash_cancel():
+        job = state.conn.firmware_job
+        if job.running() and job.action == "upload" and job.progress.get("phase") in ("erase", "program", "verify"):
+            return JSONResponse({"ok": False, "error": "the board is being written: stopping now would leave it without "
+                                 "firmware; let it finish"}, status_code=409)
+        return {"ok": job.cancel()}
+
+    @app.post("/api/flash/verify")
+    async def flash_verify():
+        return await run_in_threadpool(state.conn.flash_verify)
+
     # ------------------------------------------------------------ PX4 export
     def export_params() -> dict[str, float | int]:
         hitl = link.mode == "hitl"
@@ -786,6 +853,9 @@ def build_app(state: AppState) -> FastAPI:
         if body.get("stop"):
             sim.stop_nose_lift()
             return {"ok": True}
+        if uses_firmware(getattr(sim.airframe, "design", None)):
+            return JSONResponse({"ok": False, "error": "the flight controller runs this airframe's nose lift: arm, then "
+                                 "flip the RC switch"}, status_code=409)
         if link.armed:
             return JSONResponse({"ok": False, "error": "disarm first: the nose lift runs before arming"}, status_code=409)
         if not sim.sim.on_ground:
@@ -834,6 +904,17 @@ def build_app(state: AppState) -> FastAPI:
             try:
                 d = (getattr(sim.airframe, "design", None) or {}).get("nose_lift") or {}
                 ch = int(d.get("rc_channel") or 0)
+                if uses_firmware(getattr(sim.airframe, "design", None)):
+                    # executor "firmware": the flight controller reads the switch itself (NL_RC_CH); keep its
+                    # state streaming (DEBUG_VECT "NLIFT"), which PX4 does not send on USB by default
+                    fw = getattr(state.link, "nose_lift_fw", {}) or {}
+                    stale = time.time() - fw.get("t", 0) > 3.0
+                    if getattr(state.link, "ctl_connected", False) and stale and \
+                            time.time() - getattr(rc_switch_loop, "_nl_req", 0.0) > 5.0:
+                        rc_switch_loop._nl_req = time.time()
+                        state.link.request_message(DEBUG_VECT_ID, 10.0)
+                    last = None; land_last = None
+                    continue
                 if ch <= 0:
                     last = None; land_last = None
                     continue

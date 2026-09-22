@@ -65,6 +65,8 @@
       <button data-tab="tuning">Tuning</button>
       <button data-tab="sim">Flight</button>
       <button data-tab="connect">Connect</button>
+      <button data-tab="controller">Controller</button>
+      <button data-tab="flash">Flash</button>
     </nav>
     <div class="panel-body">
 
@@ -350,7 +352,7 @@
 
       <h3>Nose lift <span class="hint">ground sequence for nose-up hoverers</span></h3>
       <div id="nl-card" class="card">
-        <div class="hint">Raises the nose with the chosen motors to the hover pitch while PX4 is disarmed, holds it while PX4 arms and spools up, then hands over. Saved with the airframe.</div>
+        <div class="hint">Raises the nose with the chosen motors to the hover pitch, holds it, then hands over to PX4. Runs on the simulator (PX4 disarmed; the Takeoff button or the RC switch starts it) or on the flight controller (the nose_lift module: arm first, then the RC switch; the kill switch stops it in every phase). Saved with the airframe.</div>
         <div id="nl-motors" class="row tight"></div>
         <div class="row">
           <label title="structural pitch to reach before arming (default: hover pitch)">Target° <input id="nl-target" type="number" step="1" style="width:64px"></label>
@@ -359,6 +361,7 @@
           <label title="transmitter switch that starts the lift while disarmed (RC channel number as in the Connect tab's RC card; 0 = off). Flip it up: the nose rises and holds; then arm and take off. Flip it down before arming to abort.">RC switch ch <input id="nl-rc" type="number" step="1" min="0" max="18" value="0" style="width:52px"></label>
           <label class="row" style="align-self:end;padding-bottom:6px" title="the switch is on when its value is low (below the threshold), e.g. a three-position switch in its up position"><input id="nl-rc-low" type="checkbox"> on = low</label>
           <label class="row" style="align-self:end;padding-bottom:6px" title="the Takeoff button runs the nose lift first"><input id="nl-use" type="checkbox"> Use for Takeoff</label>
+          <label title="simulator: the app raises the nose in the simulation. flight controller: the nose_lift PX4 module does it (needs the firmware from scripts/build_nose_lift_firmware.sh; the export then carries its NL_* parameters, COM_KILL_DISARM 0 and COM_DISARM_PRFLT 120)">Runs on <select id="nl-exec"><option value="sim">simulator</option><option value="firmware">flight controller</option></select></label>
         </div>
         <div class="row">
           <label class="row" title="landing counterpart: when the aircraft touches down at its hover attitude, the other motors are cut and the lift motors lower the nose to the parked pitch, then fade out. Armed automatically on every flight when checked; PX4 is force-disarmed when the nose is down."><input id="nlo-use" type="checkbox"> Lower nose on touchdown</label>
@@ -409,6 +412,74 @@
 
       <h3>HITL checklist</h3>
       <div id="conn-checklist" class="card"></div>
+    </section>
+
+    <!-- ============================ CONTROLLER ============================ -->
+    <section id="tab-controller" class="tab">
+      <h3>Transmitter</h3>
+      <div class="card">
+        <div class="conn-row">
+          <div><b id="ctl-name">RadioMaster T8L</b><div class="hint" id="ctl-signal">Waiting for the radio…</div></div>
+        </div>
+        <div id="ctl-drawing"></div>
+        <div class="hint">PX4 sees channels, not switches. Press <b>Learn</b> on a control, then move it through all its
+          positions (a button: press it a few times) within 6 s; the channel that moved is remembered. Then choose what the
+          control does. Nothing reaches the flight controller until you press <b>Write to board</b>.</div>
+      </div>
+
+      <h3>Controls</h3>
+      <div class="card"><div id="ctl-table"></div></div>
+
+      <h3>Changes for the flight controller</h3>
+      <div class="card">
+        <div id="ctl-plan"></div>
+        <div class="row tight"><button id="ctl-write" class="pill small primary">Write to board</button><span id="ctl-status" class="hint"></span></div>
+      </div>
+
+      <h3>On the board now</h3>
+      <div class="card" id="ctl-board"></div>
+
+      <h3>Kill switch test</h3>
+      <div class="card">
+        <div class="hint">Proof that the emergency stop cuts every motor in any phase. In HITL the board's real outputs
+          stay locked (SYS_HITL 1): it drives only the simulated aircraft. Start recording, arm, start the rotation with
+          the takeoff switch, engage the kill switch; release it and wait 4 s. Repeat while holding and after the
+          handover. Each kill is listed with the time until every motor output is off, the time until the outputs report
+          disarmed, and whether anything came back after the release.</div>
+        <div class="row tight"><button id="ctl-kt-start" class="pill small primary">Start recording</button>
+          <button id="ctl-kt-stop" class="pill small">Stop</button><span id="ctl-kt-live" class="hint ctl-live"></span></div>
+        <div id="ctl-kt-trials"></div>
+      </div>
+    </section>
+
+    <!-- ============================ FLASH ============================ -->
+    <section id="tab-flash" class="tab">
+      <h3>Board</h3>
+      <div id="flash-board" class="card"><span class="hint">Looking for the flight controller…</span></div>
+
+      <h3>Firmware</h3>
+      <div id="flash-images"></div>
+
+      <h3>Progress</h3>
+      <div class="card">
+        <div class="conn-row">
+          <div><b id="flash-job-label">Idle</b><div class="hint" id="flash-job-hint">Build or flash an image above; its output streams here.</div></div>
+          <button id="flash-cancel" class="pill small" style="display:none" title="Stop the build, or a flash that has not started writing yet">Stop</button>
+        </div>
+        <div class="flash-progress"><span id="flash-bar"></span></div>
+        <pre id="flash-log" class="joblog flash-log"></pre>
+        <label class="row hint"><input id="flash-follow" type="checkbox" checked> follow the log</label>
+      </div>
+
+      <h3>After flashing</h3>
+      <div class="card">
+        <div class="hint">The board reboots into the new image and the app reconnects by itself. Then: check the board
+          below; for the nose lift, set "Runs on: flight controller" in the Flight tab's nose-lift card and press
+          Update PX4 (it pushes the NL_* parameters, COM_KILL_DISARM 0 and COM_DISARM_PRFLT 120); map the kill
+          button in the Connect tab. Parameters already on the board are kept.</div>
+        <div class="row tight"><button id="flash-verify" class="pill small">Check the board</button><span id="flash-verify-status" class="hint"></span></div>
+        <pre id="flash-verify-out" class="joblog" hidden></pre>
+      </div>
     </section>
     </div>
     <div class="panel-foot">

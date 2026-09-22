@@ -488,7 +488,8 @@
       "rc_channel": 7,
       "rc_threshold": 1300,
       "rc_active_low": true,
-      "rc_takeoff": false
+      "rc_takeoff": false,
+      "executor": "firmware"
     },
     "nose_lower": {
       "enabled": true,

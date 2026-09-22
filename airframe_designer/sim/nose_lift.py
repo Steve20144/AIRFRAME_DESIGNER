@@ -220,6 +220,82 @@ class NoseLift:
                 "motors": self.motors}
 
 
+def uses_firmware(design: dict | None) -> bool:
+    """True when design.nose_lift runs on the flight controller (the nose_lift PX4 module, firmware/px4_ext) instead
+    of in the simulator: ``"executor": "firmware"``. The simulator's lift and the app's switch watcher then stand
+    down, and the airframe export carries the NL_* parameters."""
+    nl = (design or {}).get("nose_lift") or {}
+    return bool(nl.get("enabled", True)) and str(nl.get("executor", "sim")).lower() == "firmware"
+
+
+def firmware_params(airframe) -> dict[str, float | int]:
+    """NL_* parameters for the nose_lift PX4 module, from the same geometry the simulator's NoseLift uses: the
+    pitch moment of each lifting motor about the rear feet, the static roll/yaw-cancelling thrust weights and the
+    moments the rate damping works through (structural frame, relative to the CG). Plus the PX4 settings the
+    sequence needs: a kill switch that disarms at once, and no pre-takeoff auto-disarm during a slow lift."""
+    from ..dynamics.rigid_body import RigidBody
+    d = ((getattr(airframe, "design", None) or {}).get("nose_lift") or {})
+    body = RigidBody(airframe)
+    rot, legs = body.rotors, body.legs
+    motors = sorted({int(m) for m in d.get("motors") or [] if 0 <= int(m) < rot.n})
+    if not motors:
+        raise ValueError("design.nose_lift.motors is empty: choose the lifting motors")
+    if len(motors) > 4:
+        raise ValueError(f"the nose_lift module drives at most 4 lifting motors, not {len(motors)}")
+    rear = legs.r[legs.r[:, 0] < 0.0] if legs.n else np.zeros((0, 3))
+    if len(rear) == 0:
+        raise ValueError("no rear feet (legs aft of the CG) to pivot about")
+    piv = rear.mean(axis=0)
+    T = np.array([rot.tmax[m] * rot.scale[m] for m in motors])
+    A_ry = np.array([[float(np.cross(rot.r[m], rot.axis[m])[0] - rot.km[m] * rot.axis[m][0]),
+                      float(np.cross(rot.r[m], rot.axis[m])[2] - rot.km[m] * rot.axis[m][2])] for m in motors])
+    M = A_ry * T[:, None]                                    # roll, yaw moment at full thrust
+    w = np.ones(len(motors))
+    if len(motors) >= 2:                                     # NoseLift._update_split at zero rates
+        cols = [1] if len(motors) < 3 else [0, 1]
+        Mc = M[:, cols]
+        lam = np.linalg.lstsq(Mc.T @ Mc + 1e-9 * np.eye(len(cols)), Mc.T @ w, rcond=None)[0]
+        w = w - Mc @ lam
+    A = [float(np.cross(rot.r[m] - piv, rot.axis[m])[1]) * float(T[k]) for k, m in enumerate(motors)]
+    p: dict[str, float | int] = {
+        "NL_EN": 1,
+        "NL_MOT_MSK": int(sum(1 << m for m in motors)),
+        "NL_HOV_PITCH": round(float(airframe.hover_pitch_deg), 3),
+        "NL_TGT": round(float(d.get("target_pitch_deg", airframe.hover_pitch_deg)), 3),
+        "NL_RATE": float(d.get("rate_deg_s", 8.0)),
+        "NL_K_ANG": float(d.get("k_ang", 1.0)),
+        "NL_KQ": float(d.get("kq", 0.02)),
+        "NL_KQI": float(d.get("kqi", 0.012)),
+        "NL_K_RATE": float(d.get("k_rate", 3.0)),
+        "NL_MAX_CMD": float(d.get("max_cmd", 1.0)),
+        "NL_TOL": float(d.get("tolerance_deg", 2.0)),
+        "NL_HOLD_S": float(d.get("hold_s", 0.6)),
+        "NL_FADE_S": float(d.get("fade_s", 2.0)),
+        "NL_HO_TOUT": float(d.get("handover_timeout_s", 8.0)),
+        "NL_TOUT": float(d.get("timeout_s", 25.0)),
+        "NL_EXPO": round(float(np.mean([rot.exponent[m] for m in motors])), 4),
+        "NL_WEIGHT": round(float(body.mass) * 9.80665, 4),
+        "NL_PIV_X": round(float(piv[0]), 5), "NL_PIV_Y": round(float(piv[1]), 5), "NL_PIV_Z": round(float(piv[2]), 5),
+        "NL_RC_CH": int(d.get("rc_channel", 0) or 0),
+        "NL_RC_TH": int(d.get("rc_threshold", 1500)),
+        "NL_RC_LOW": int(bool(d.get("rc_active_low", False))),
+        # a kill (the transmitter's push button) disarms at once, so letting go of it never restarts the motors
+        "COM_KILL_DISARM": 0.0,
+        # PX4 disarms 11 s after arming without a takeoff; the lift and hold take longer
+        "COM_DISARM_PRFLT": 120.0,
+    }
+    for k in range(4):
+        p[f"NL_A{k}"] = round(A[k], 5) if k < len(motors) else 0.0
+        p[f"NL_W{k}"] = round(float(w[k]), 5) if k < len(motors) else 1.0
+        p[f"NL_MR{k}"] = round(float(M[k, 0]), 5) if k < len(motors) else 0.0
+        p[f"NL_MY{k}"] = round(float(M[k, 1]), 5) if k < len(motors) else 0.0
+    for key, name in (("handover_throttle", "NL_HO_THR"), ("hold_timeout_s", "NL_HOLD_TOUT"),
+                      ("roll_max_deg", "NL_ROLL_MAX"), ("liftoff_dz_m", "NL_LIFT_DZ")):
+        if key in d:
+            p[name] = float(d[key])
+    return p
+
+
 class NoseLower(NoseLift):
     """The takeoff sequence run backwards, for landing. The aircraft touches down at its hover attitude (rear feet
     first); at that moment the sequence takes over *all* motor commands: every motor except the chosen (front) ones

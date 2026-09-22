@@ -1,0 +1,59 @@
+{
+  "name": "fw_nose_lift_kill",
+  "description": "The kill switch (channel 9 here) against the firmware nose lift, in three phases of one run: while the nose is rising, while it is held, and during the handover to PX4. Each kill must stop every motor at once, latch the module's abort, disarm PX4 (COM_KILL_DISARM 0), and releasing the switch must not start anything. Needs --px4-dir ~/PX4-nl.",
+  "max_time": 200,
+  "design": {
+    "nose_lift": {
+      "executor": "firmware"
+    }
+  },
+  "params": {
+    "COM_RC_IN_MODE": 0,
+    "RC_CHAN_CNT": 18,
+    "RC_MAP_ROLL": 1,
+    "RC_MAP_PITCH": 2,
+    "RC_MAP_THROTTLE": 3,
+    "RC_MAP_YAW": 4,
+    "RC3_TRIM": 1000,
+    "RC_MAP_KILL_SW": 9,
+    "RC_KILLSWITCH_TH": 0.75,
+    "COM_DISARM_LAND": 3
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 3.0
+  },
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+
+    {"type": "rc", "name": "arm_1", "channels": {"7": 1500, "9": 1000}, "mode": "stabilized", "arm": true,
+     "until": {"armed": true, "nl_state": "parked"}, "timeout": 30},
+    {"type": "rc", "name": "lift_1", "channels": {"7": 1000}, "until": {"nl_state": "ramping"}, "timeout": 5},
+    {"type": "rc", "name": "rising", "duration": 3},
+    {"type": "rc", "name": "kill_rising", "channels": {"9": 2000}, "until": {"motors_off": true}, "timeout": 0.1},
+    {"type": "rc", "name": "disarm_rising", "until": {"armed": false}, "timeout": 1},
+    {"type": "rc", "name": "state_rising", "duration": 0.3, "expect": {"nl_abort": "kill switch"}},
+    {"type": "rc", "name": "release_1", "channels": {"9": 1000, "7": 1500}, "duration": 3},
+    {"type": "rc", "name": "still_off_1", "until": {"motors_off": true, "armed": false}, "timeout": 0.1},
+
+    {"type": "rc", "name": "arm_2", "mode": "stabilized", "arm": true, "until": {"armed": true, "nl_state": "parked"}, "timeout": 30},
+    {"type": "rc", "name": "lift_2", "channels": {"7": 1000}, "until": {"nl_state": "holding"}, "timeout": 40},
+    {"type": "rc", "name": "held", "duration": 2},
+    {"type": "rc", "name": "kill_held", "channels": {"9": 2000}, "until": {"motors_off": true}, "timeout": 0.1},
+    {"type": "rc", "name": "disarm_held", "until": {"armed": false}, "timeout": 1},
+    {"type": "rc", "name": "state_held", "duration": 0.3, "expect": {"nl_abort": "kill switch"}},
+    {"type": "rc", "name": "release_2", "channels": {"9": 1000, "7": 1500}, "duration": 4},
+    {"type": "rc", "name": "still_off_2", "until": {"motors_off": true, "armed": false}, "timeout": 0.1},
+
+    {"type": "rc", "name": "arm_3", "mode": "stabilized", "arm": true, "until": {"armed": true, "nl_state": "parked"}, "timeout": 30},
+    {"type": "rc", "name": "lift_3", "channels": {"7": 1000}, "until": {"nl_state": "holding"}, "timeout": 40},
+    {"type": "rc", "name": "handover", "throttle": 0.35, "ramp_s": 1, "until": {"nl_state": "handover"}, "timeout": 5},
+    {"type": "rc", "name": "handing", "duration": 0.5},
+    {"type": "rc", "name": "kill_handover", "channels": {"9": 2000}, "until": {"motors_off": true}, "timeout": 0.1},
+    {"type": "rc", "name": "disarm_handover", "until": {"armed": false}, "timeout": 1},
+    {"type": "rc", "name": "state_handover", "duration": 0.3, "expect": {"nl_abort": "kill switch"}},
+    {"type": "rc", "name": "release_3", "channels": {"9": 1000, "7": 1500}, "throttle": 0.0, "duration": 3},
+    {"type": "rc", "name": "still_off_3", "until": {"motors_off": true, "armed": false}, "timeout": 0.1}
+  ]
+}

@@ -1,0 +1,13 @@
+diff --git a/ROMFS/px4fmu_common/init.d/rc.mc_apps b/ROMFS/px4fmu_common/init.d/rc.mc_apps
+index adff4e963f..8bde32c2fe 100644
+--- a/ROMFS/px4fmu_common/init.d/rc.mc_apps
++++ b/ROMFS/px4fmu_common/init.d/rc.mc_apps
+@@ -41,3 +41,8 @@ if param compare -s MC_NN_EN 1
+ then
+ 	mc_nn_control start
+ fi
++
++#
++# AIRFRAME_DESIGNER nose-lift ground sequence (passive unless NL_EN is set).
++#
++nose_lift start

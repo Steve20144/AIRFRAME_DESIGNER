@@ -35,6 +35,7 @@ from typing import Any
 
 import numpy as np
 
+from ..px4.link import DEBUG_VECT_ID
 from .metrics import MetricsRecorder
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "scenarios"
@@ -51,24 +52,32 @@ class Scenario:
     description: str = ""
     attitude: dict = field(default_factory=dict)     # {"park_pitch_deg": -10, "hover_pitch_deg": 25}: the flight starts
                                                      # parked at the first, PX4 levels at the second (legs re-solved)
+    design: dict = field(default_factory=dict)       # merged into airframe.design, e.g. {"nose_lift": {"executor": "firmware"}}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Scenario":
         return cls(name=d.get("name", "scenario"), phases=list(d.get("phases", [])), max_time=float(d.get("max_time", 120.0)),
                    params=dict(d.get("params", {}) or {}), wind=list(d.get("wind", [0, 0, 0]) or [0, 0, 0]),
                    abort=dict(d.get("abort", {}) or {}), description=str(d.get("description", "")),
-                   attitude=dict(d.get("attitude", {}) or {}))
+                   attitude=dict(d.get("attitude", {}) or {}), design=dict(d.get("design", {}) or {}))
 
     def to_dict(self) -> dict:
         return {"name": self.name, "description": self.description, "max_time": self.max_time, "params": self.params,
-                "wind": self.wind, "abort": self.abort, "phases": self.phases, "attitude": self.attitude}
+                "wind": self.wind, "abort": self.abort, "phases": self.phases, "attitude": self.attitude,
+                "design": self.design}
 
     def apply_attitude(self, airframe):
         """The airframe as this scenario wants it parked and hovering (unchanged when the scenario says nothing)."""
         a = self.attitude or {}
-        if a.get("park_pitch_deg") is None and a.get("hover_pitch_deg") is None:
-            return airframe
-        return airframe.with_attitude(park_pitch_deg=a.get("park_pitch_deg"), hover_pitch_deg=a.get("hover_pitch_deg"))
+        if a.get("park_pitch_deg") is not None or a.get("hover_pitch_deg") is not None:
+            airframe = airframe.with_attitude(park_pitch_deg=a.get("park_pitch_deg"), hover_pitch_deg=a.get("hover_pitch_deg"))
+        if self.design:
+            import copy
+            airframe = copy.deepcopy(airframe)
+            for k, v in self.design.items():
+                cur = airframe.design.get(k)
+                airframe.design[k] = {**cur, **v} if isinstance(cur, dict) and isinstance(v, dict) else v
+        return airframe
 
 
 def load_scenario(spec: str | Path | dict) -> Scenario:
@@ -107,6 +116,8 @@ class ScenarioRunner:
         self._started = False
         self._wind_applied = False
         self.max_time = scenario.max_time
+        self._rc: list[int] | None = None     # scripted transmitter (rc phases), streamed at 50 Hz once set
+        self._rc_on = True
 
     # ------------------------------------------------------------ helpers
     def _name(self) -> str:
@@ -183,6 +194,9 @@ class ScenarioRunner:
         if link is not None and link.main_mode == 10 and self._airborne_once:
             self.metrics.crashed = True; self.metrics.crash_reason = "PX4 flight termination"
             self.fail(simr, "PX4 flight termination", fatal=True); return
+        if self._rc is not None and self._rc_on and link is not None:
+            if simr.step_count % max(1, int(round(simr.sensor_rate / 50.0))) == 0:
+                link.send_rc_override(self._rc)
         handler = getattr(self, "_p_" + self.phase.get("type", ""), None)
         if handler is None:
             self.fail(simr, f"unknown phase type '{self.phase.get('type')}'"); return
@@ -337,24 +351,7 @@ class ScenarioRunner:
             thr = thr0 + (thr1 - thr0) * 0.5 * (1.0 - math.cos(math.pi * el / ramp))
         else:
             thr = thr1
-        ah = self.phase.get("alt_hold")
-        if ah:
-            # a pilot's throttle hand in a mode without altitude control: nudge the stick around the phase throttle
-            # by the height error and the climb rate (alt above the rest altitude, m; vz up, m/s). Attitude stays
-            # entirely with PX4; this only keeps the aircraft in the band a pilot would.
-            alt = -float(simr.sim.pos[2]) - (self._rest_alt or 0.0)
-            vz_up = -float(simr.sim.vel[2])
-            target = float(ah.get("target", 3.0))
-            rate = ah.get("rate")
-            if rate is not None:                 # slew the height target from where the phase started, like a pilot
-                if "ah_from" not in st:
-                    st["ah_from"] = alt
-                tgt0 = st["ah_from"]
-                target = tgt0 + max(-abs(float(rate)) * el, min(abs(float(rate)) * el, target - tgt0))
-            st["ah_target"] = target
-            corr = float(ah.get("kp", 0.05)) * (target - alt) - float(ah.get("kv", 0.08)) * vz_up
-            lim = float(ah.get("max_corr", 0.15))
-            thr = min(float(ah.get("max", 0.85)), max(float(ah.get("min", 0.2)), thr + max(-lim, min(lim, corr))))
+        thr = self._alt_hold(simr, thr, el)
         every = max(1, int(round(simr.sensor_rate / 50.0)))
         if simr.step_count % every == 0:
             link.send_manual_control(float(self.phase.get("roll", 0)), float(self.phase.get("pitch", 0)), thr,
@@ -407,6 +404,110 @@ class ScenarioRunner:
             if self.phase.get("until_ground") and self.phase.get("require", True):
                 self.fail(simr, f"did not touch down within {el:.0f}s", fatal=bool(self.phase.get("fatal", True))); return
             self._finish_stick(simr, thr)
+
+    def _alt_hold(self, simr, thr: float, el: float) -> float:
+        """The phase's ``alt_hold``: a pilot's throttle hand in a mode without altitude control, nudging the stick
+        around the phase throttle by the height error and the climb rate (alt above the rest altitude, m; vz up,
+        m/s). Attitude stays entirely with PX4; this only keeps the aircraft in the band a pilot would."""
+        ah = self.phase.get("alt_hold")
+        if not ah:
+            return thr
+        st = self._state
+        alt = -float(simr.sim.pos[2]) - (self._rest_alt or 0.0)
+        vz_up = -float(simr.sim.vel[2])
+        target = float(ah.get("target", 3.0))
+        rate = ah.get("rate")
+        if rate is not None:                 # slew the height target from where the phase started, like a pilot
+            if "ah_from" not in st:
+                st["ah_from"] = alt
+            tgt0 = st["ah_from"]
+            target = tgt0 + max(-abs(float(rate)) * el, min(abs(float(rate)) * el, target - tgt0))
+        st["ah_target"] = target
+        corr = float(ah.get("kp", 0.05)) * (target - alt) - float(ah.get("kv", 0.08)) * vz_up
+        lim = float(ah.get("max_corr", 0.15))
+        return min(float(ah.get("max", 0.85)), max(float(ah.get("min", 0.2)), thr + max(-lim, min(lim, corr))))
+
+    def _p_rc(self, simr) -> None:
+        """A transmitter as the flight controller's receiver sees it (RC_CHANNELS_OVERRIDE -> input_rc), for
+        firmware that reads switches itself: the kill switch, the nose-lift module's switch. Channels persist across
+        phases and stream at 50 Hz from the first rc phase on (all 1500 us, throttle channel 3 at 1000 us).
+          channels   {"7": 1000, ...} pulse widths to set on entry (1-based channel numbers)
+          throttle   0..1 on channel 3, with throttle_from / ramp_s for a cosine ramp
+          radio      "off" stops the stream (a transmitter lost), "on" resumes it
+          arm        arm PX4 with a MAVLink command (retried); mode: select that mode once
+          until      {"nl_state": "holding" | [...], "armed": bool, "motors_off": true, "pitch_deg": x, "tol": 2}
+                     ends the phase when met (timeout s, default 30; require, default true, fails the run if not);
+                     without it the phase lasts duration s (default 2)
+          expect     {"nl_abort": "kill switch", "nl_state": "..."}: checked when the phase ends"""
+        st, link = self._state, self.link
+        el = self._elapsed(simr)
+        if "entered" not in st:
+            st["entered"] = True
+            if self._rc is None:
+                self._rc = [1500] * 18
+                self._rc[2] = 1000
+                try:
+                    link.request_message(DEBUG_VECT_ID, 20.0)     # the nose_lift module's state
+                except Exception:
+                    pass
+            for k, v in (self.phase.get("channels") or {}).items():
+                if 1 <= int(k) <= 18:
+                    self._rc[int(k) - 1] = int(v)
+            radio = self.phase.get("radio")
+            if radio in ("off", "on"):
+                self._rc_on = radio == "on"
+                self.metrics.note(simr.t, f"transmitter {radio}")
+            st["thr_from"] = (self._rc[2] - 1000) / 1000.0
+        if "throttle" in self.phase:
+            thr1 = float(self.phase["throttle"])
+            thr0 = float(self.phase.get("throttle_from", st["thr_from"]))
+            ramp = float(self.phase.get("ramp_s", 0.0))
+            thr = thr1 if ramp <= 1e-6 or el >= ramp else thr0 + (thr1 - thr0) * 0.5 * (1.0 - math.cos(math.pi * el / ramp))
+            thr = self._alt_hold(simr, thr, el)
+            self._rc[2] = int(round(1000 + 1000 * min(1.0, max(0.0, thr))))
+            self.last_throttle = thr
+        mode = self.phase.get("mode")
+        if mode and "mode_at" not in st:
+            link.set_mode(mode); st["mode_at"] = simr.t
+        if self.phase.get("arm") and not link.armed and el > 0.3 and ("arm_at" not in st or simr.t - st["arm_at"] > 1.5):
+            link.arm(force=bool(self.phase.get("force", False))); st["arm_at"] = simr.t
+            st["arm_tries"] = st.get("arm_tries", 0) + 1
+            if st["arm_tries"] > int(self.phase.get("arm_tries", 6)):
+                self.fail(simr, f"PX4 did not arm (can arm: '{link.can_arm_modes()}')", fatal=True); return
+        nl = getattr(link, "nose_lift_fw", {}) or {}
+        until = self.phase.get("until")
+        if until:
+            met = True
+            if "nl_state" in until:
+                want = until["nl_state"] if isinstance(until["nl_state"], list) else [until["nl_state"]]
+                met &= nl.get("state") in want and time.time() - nl.get("t", 0) < 1.0
+            if "armed" in until:
+                met &= bool(link.armed) == bool(until["armed"])
+            if until.get("motors_off"):
+                n = simr.sim.rotors.n
+                met &= all(not (float(c) > 1e-3) for c in list(link.actuators)[:n])
+            if "pitch_deg" in until:
+                met &= abs(math.degrees(simr.sim.euler[1]) - float(until["pitch_deg"])) <= float(until.get("tol", 2.0))
+            if met:
+                self.metrics.note(simr.t, f"{self._name()}: {until} after {el:.2f}s")
+                self.metrics.phases[self._name()]["time_to_until"] = round(el, 3)
+                self._end_rc(simr, nl); return
+            if el > float(self.phase.get("timeout", 30.0)):
+                if self.phase.get("require", True):
+                    self.fail(simr, f"{until} not reached in {el:.0f}s (nose lift {nl.get('state')}, abort "
+                                    f"{nl.get('abort')}, armed {link.armed})", fatal=bool(self.phase.get("fatal", True))); return
+                self._end_rc(simr, nl); return
+        elif el >= float(self.phase.get("duration", 2.0)):
+            self._end_rc(simr, nl)
+
+    def _end_rc(self, simr, nl: dict) -> None:
+        exp = self.phase.get("expect") or {}
+        for key, field_ in (("nl_abort", "abort"), ("nl_state", "state")):
+            if key in exp and nl.get(field_) != exp[key]:
+                self.fail(simr, f"expected nose lift {field_} '{exp[key]}', got '{nl.get(field_)}'",
+                          fatal=bool(self.phase.get("fatal", True)))
+                return
+        self._next(simr)
 
     def _finish_stick(self, simr, thr: float) -> None:
         self._next(simr)

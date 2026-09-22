@@ -269,6 +269,11 @@ class Airframe:
         p["SENS_BOARD_Y_OFF"] = round(float(self.hover_pitch_deg), 2)
         for n in range(1, 17):
             p[f"HIL_ACT_FUNC{n}"] = 101 + (n - 1) if n <= len(rotors) else 0
+        from ..sim.nose_lift import firmware_params, uses_firmware
+        if uses_firmware(self.design):
+            # the nose lift runs on the flight controller: its geometry and settings (px4_overrides still win)
+            for k, v in firmware_params(self).items():
+                p.setdefault(k, v)
         if hitl:
             p["SYS_HITL"] = 1
         return p

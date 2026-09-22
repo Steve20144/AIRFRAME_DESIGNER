@@ -9,6 +9,16 @@ const api = async (path, body, method) => {
   if (!r.ok) throw new Error((j && j.error) || r.statusText);
   return j;
 };
+// Embedded browsers (the app's side pane among them) answer window.confirm() with "cancel" without showing it, so a
+// button that needs a confirmation asks for a second click on itself instead.
+function confirmClick(btn, label = 'Click again to confirm', ms = 4000) {
+  if (btn.dataset.armed === '1') {
+    clearTimeout(btn._armT); delete btn.dataset.armed; btn.textContent = btn.dataset.label; return true;
+  }
+  btn.dataset.armed = '1'; btn.dataset.label = btn.textContent; btn.textContent = label;
+  btn._armT = setTimeout(() => { delete btn.dataset.armed; btn.textContent = btn.dataset.label; }, ms);
+  return false;
+}
 const fmt = (v, d = 3) => (typeof v === 'number' ? v.toFixed(d) : String(v));
 const deg = (r) => r * 180 / Math.PI;
 
@@ -284,7 +294,7 @@ async function cadFrameChanged() {
 }
 ['cad-rx', 'cad-ry', 'cad-rz', 'cad-ox', 'cad-oy', 'cad-oz', 'cad-scale'].forEach(id => $('#' + id).addEventListener('change', cadFrameChanged));
 $('#cad-reset-offsets').addEventListener('click', () => { if (!airframe.cad) return; airframe.cad.bodies.forEach(b => b.offset = [0, 0, 0]); scene.syncCad(); renderCadTable(); pushAirframe(true); });
-$('#cad-remove-all').addEventListener('click', () => { if (!airframe.cad || !confirm('Remove the CAD file and all its bodies from this airframe?')) return; airframe.cad = null; cadSelected = null; scene.selectCad(null); setAirframe(airframe); pushAirframe(true); });
+$('#cad-remove-all').addEventListener('click', (e) => { if (!airframe.cad || !confirmClick(e.currentTarget, 'Click again to remove')) return; airframe.cad = null; cadSelected = null; scene.selectCad(null); setAirframe(airframe); pushAirframe(true); });
 
 
 function bindNumber(id, fn) {
@@ -849,7 +859,7 @@ function noseLiftCfg() {
   airframe.design = airframe.design || {};
   const d = airframe.design.nose_lift || {};
   const motors = $$('#nl-motors input[data-m]').filter(c => c.checked).map(c => +c.dataset.m);
-  return { enabled: $('#nl-use').checked, motors: motors.length ? motors : (d.motors || []), target_pitch_deg: +$('#nl-target').value,
+  return { ...d, executor: $('#nl-exec').value, enabled: $('#nl-use').checked, motors: motors.length ? motors : (d.motors || []), target_pitch_deg: +$('#nl-target').value,
            rate_deg_s: +$('#nl-rate').value || 8, assist_cmd: (+$('#nl-assist').value || 0) / 100,
            rc_channel: +$('#nl-rc').value || 0, rc_active_low: $('#nl-rc-low').checked,
            rc_threshold: $('#nl-rc-low').checked ? 1300 : 1700 };
@@ -865,19 +875,22 @@ function fillNoseLiftCard() {
   $('#nl-use').checked = !!d.enabled;
   $('#nl-rc').value = d.rc_channel || 0;
   $('#nl-rc-low').checked = !!d.rc_active_low;
+  $('#nl-exec').value = d.executor === 'firmware' ? 'firmware' : 'sim';
   const lo = (airframe.design && airframe.design.nose_lower) || {};
   $('#nlo-use').checked = !!lo.enabled;
   $('#nlo-rate').value = lo.rate_deg_s ?? 3;
   $('#nlo-target').value = lo.target_pitch_deg ?? airframe.landed_pitch_deg ?? 0;
-  $$('#nl-card input').forEach(inp => inp.addEventListener('change', () => {
+  $$('#nl-card input, #nl-card select').forEach(inp => inp.addEventListener('change', () => {
     airframe.design.nose_lift = noseLiftCfg();
     airframe.design.nose_lower = { enabled: $('#nlo-use').checked, motors: airframe.design.nose_lift.motors,
                                    rate_deg_s: +$('#nlo-rate').value || 3, target_pitch_deg: +$('#nlo-target').value };
     pushAirframe(true);
   }));
 }
+const FW_NOSE_LIFT_HINT = 'the flight controller runs the nose lift: arm, then flip the RC switch; raise the throttle once it holds';
 async function startNoseLift() {
   const c = noseLiftCfg();
+  if (c.executor === 'firmware') { logLine('[ui] nose lift: ' + FW_NOSE_LIFT_HINT); return false; }
   if (!c.motors.length) { logLine('[ui] nose lift: choose the motors first'); return false; }
   const assist = airframe.rotors.map((_, i) => i).filter(i => !c.motors.includes(i));
   try {
@@ -892,8 +905,8 @@ function updateNoseLift(st) {
   lastNoseLift = st.nose_lift || null;
   const el = $('#nl-status'); if (!el) return;
   const n = lastNoseLift;
-  el.textContent = n ? `${n.state}: nose ${n.pitch_deg.toFixed(1)}° → ${n.target_deg}°, cmd ${(n.cmd * 100).toFixed(0)}%${n.reason ? ' · ' + n.reason : ''}` : '';
-  el.classList.toggle('err', !!(n && n.state === 'failed'));
+  el.textContent = n ? `${n.source === 'firmware' ? 'flight controller · ' : ''}${n.state}: nose ${n.pitch_deg.toFixed(1)}° → ${n.target_deg}°, cmd ${(n.cmd * 100).toFixed(0)}%${n.reason ? ' · ' + n.reason : ''}` : '';
+  el.classList.toggle('err', !!(n && (n.state === 'failed' || n.state === 'aborted')));
 }
 async function waitNoseLift(timeoutMs = 40000) {
   const t0 = Date.now();
@@ -908,6 +921,7 @@ async function waitNoseLift(timeoutMs = 40000) {
 $('#btn-takeoff').addEventListener('click', async () => {
   try {
     const useNl = airframe && airframe.design && airframe.design.nose_lift && airframe.design.nose_lift.enabled;
+    if (useNl && airframe.design.nose_lift.executor === 'firmware') { logLine('[ui] takeoff: ' + FW_NOSE_LIFT_HINT); return; }
     if (useNl && !status.armed) {
       logLine('[ui] takeoff: lifting the nose first');
       if (!(await startNoseLift())) return;
@@ -1050,7 +1064,7 @@ $('#param-search').addEventListener('input', renderParams);
 $('#param-group').addEventListener('change', renderParams);
 $('#param-refresh').addEventListener('click', async () => { $('#param-count').textContent = 'loading…'; await api('/api/params/refresh', {}); await loadParams(); });
 $('#param-save').addEventListener('click', () => api('/api/params/save', {}));
-$('#param-reboot').addEventListener('click', () => { if (confirm('Reboot the flight controller?')) api('/api/px4/command', { command: 'reboot' }); });
+$('#param-reboot').addEventListener('click', (e) => { if (confirmClick(e.currentTarget, 'Click again to reboot')) api('/api/px4/command', { command: 'reboot' }); });
 $('#param-meta-fetch').addEventListener('click', async () => {
   $('#param-count').textContent = 'downloading descriptions via MAVLink FTP…';
   try { const r = await api('/api/params/meta/fetch', {}); await loadMeta(); logLine(`[ui] ${r.count} parameter descriptions from ${r.source}`); }
@@ -1252,7 +1266,7 @@ $('#st-detected').addEventListener('click', async () => { openTab('connect'); aw
 $('#conn-sitl').addEventListener('click', async () => { await connCall('/api/connection/connect', { mode: 'sitl' }); });
 $('#conn-rescan').addEventListener('click', refreshConnection);
 $('#conn-disconnect').addEventListener('click', async () => { await connCall('/api/connection/disconnect', {}); });
-$('#conn-reboot').addEventListener('click', async () => { if (confirm('Reboot the flight controller? The link reconnects by itself.')) { await api('/api/px4/command', { command: 'reboot' }); setTimeout(refreshConnection, 3000); } });
+$('#conn-reboot').addEventListener('click', async (e) => { if (confirmClick(e.currentTarget, 'Click again to reboot')) { await api('/api/px4/command', { command: 'reboot' }); setTimeout(refreshConnection, 3000); } });
 
 // ---- USB passthrough. Only WSL needs this: elsewhere the board is already a serial port.
 let usbAvailable = false;          // set by refreshUsb; true only under WSL with usbipd-win installed
@@ -1373,8 +1387,7 @@ async function refreshConnection() {
     if (b.dataset.act === 'ekf') { b.textContent = 'Restarting…'; await api('/api/connection/restart_estimator', {}); setTimeout(refreshConnection, 3000); }
     if (b.dataset.act === 'reboot') { b.textContent = 'Rebooting…'; await api('/api/px4/command', { command: 'reboot' }); setTimeout(refreshConnection, 3000); }
     if (b.dataset.act === 'upload_firmware') {
-      if (!confirm('Flash the HITL-capable firmware to the board now? It reboots and reconnects when done. Parameters are kept.')) return;
-      b.textContent = 'Flashing…'; await connCall('/api/firmware/upload', {});
+      openTab('flash');          // flashing lives in the Flash tab (image choice, confirmation, live log)
     }
   }));
   connTimer = setTimeout(refreshConnection, 2000);
@@ -2120,3 +2133,544 @@ function drawTuneCharts() {
   const legend = `<div class="tune-legend"><span><i style="background:var(--accent)"></i>roll / p / north / altitude</span><span><i style="background:var(--red)"></i>pitch / q / east</span><span><i style="background:var(--green)"></i>yaw / r</span><span><i style="background:var(--amber)"></i>motor utilisation</span><span><i style="background:#8e44ad"></i>mean command</span><span><i style="background:var(--text-3)"></i>PX4 setpoint (dashed)</span>${runs.length > 1 ? '<span>second flight dashed</span>' : ''}</div>`;
   el.innerHTML = `<div class="card">${legend}${parts.join('')}</div>`;
 }
+
+// ---- Flash tab: build and flash the firmware images (/api/flash*), with the job's output streamed live
+let flashSince = 0, flashPoll = null, flashInfo = null, flashVerify = null, flashLines = [], flashPending = null;
+const flashEsc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const FLASH_PROGRESS_LINE = /^\s*(Erase|Program|Verify)\s*:/;
+function flashAge(s) {
+  if (s == null) return '';
+  if (s < 90) return `${Math.round(s)} s ago`;
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 172800) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+function renderFlashBoard(s) {
+  const b = s.board || {}, u = s.usb || {}, c = s.connection || {};
+  const fw = c.firmware && c.firmware.version ? `PX4 ${c.firmware.version} (${c.firmware.git})` : '';
+  const conn = c.mode === 'hitl' && c.connected ? ' · connected' + (fw ? ' · ' + fw : '')
+    : c.mode === 'sitl' ? ' · the app is on SITL (flashing does not need a connection)' : ' · not connected';
+  const rows = [`<div class="conn-row"><div><b>${b.description ? flashEsc(b.description) : 'No flight controller on USB'}</b>
+      <div class="hint">${b.device ? flashEsc(b.device) + ' · ' : ''}target ${flashEsc(s.target)}${flashEsc(conn)}</div></div>
+      <button class="pill small" id="flash-usb-btn" ${u.available ? '' : 'hidden'}>${u.attached ? 'Detach USB' : 'Attach USB'}</button></div>`];
+  if (u.available) rows.push(`<div class="hint">USB: ${flashEsc(u.summary || '')}${u.needs_bind ? ' · needs one admin bind first (usbipd bind --busid …)' : ''} · auto-attach ${u.auto_attach ? 'running' : 'starts when you flash'}</div>`);
+  if (!s.toolchain) rows.push('<div class="warn">ARM toolchain not found: images cannot be built here (flashing a built one still works).</div>');
+  $('#flash-board').innerHTML = rows.join('');
+  const ub = $('#flash-usb-btn');
+  if (ub) ub.onclick = async () => {
+    ub.disabled = true;
+    try {
+      const r = await api(u.attached ? '/api/usb/detach' : '/api/usb/attach', {});
+      logLine('[usb] ' + r.message + (r.hint ? ' ' + r.hint : ''));
+      if (r.ok && !u.attached) await api('/api/connection/connect', { mode: 'hitl' }).catch(() => { });
+    } catch (e) { logLine('[usb] ' + e.message); } finally { refreshFlash(); }
+  };
+}
+function renderFlashImages(s) {
+  const busy = s.job && s.job.running;
+  $('#flash-images').innerHTML = s.images.map(i => {
+    const onboard = flashVerify && flashVerify.ok && (i.id === 'nose_lift') === !!flashVerify.nose_lift_present;
+    const state = i.built
+      ? `<span class="ok">built ${flashAge(i.age_s)}</span> · ${(i.size / 1048576).toFixed(2)} MB${i.stale ? ' · <span class="warn">sources changed since: build again</span>' : ''}`
+      : !i.tree_exists ? `<span class="warn">PX4 tree ${flashEsc(i.px4_dir)} not found${i.id === 'nose_lift' ? ': Build creates it (a few minutes the first time)' : ''}</span>`
+      : '<span class="warn">not built yet</span>';
+    return `<div class="card fw-card${onboard ? ' onboard' : ''}">
+      <div><b>${flashEsc(i.name)}</b>${onboard ? ' <span class="ok">· on the board</span>' : ''}<div class="hint">${flashEsc(i.detail)}</div></div>
+      <div class="hint">${state}</div>
+      <div class="fw-meta">${flashEsc(i.file)}${i.px4_ref ? ' · ' + flashEsc(i.px4_ref) : ''}</div>
+      <div class="fw-actions">
+        <button class="pill small" data-fw-build="${i.id}" ${busy || !s.toolchain ? 'disabled' : ''}>Build</button>
+        <button class="pill small primary" data-fw-flash="${i.id}" ${busy || !i.built || flashPending === i.id ? 'disabled' : ''}>Flash to board</button>
+      </div>${flashPending === i.id && !busy ? flashConfirmBox(s, i) : ''}</div>`;
+  }).join('');
+  $$('#flash-images [data-fw-build]').forEach(b => { b.onclick = () => flashStart('build', b.dataset.fwBuild); });
+  // an in-page confirmation: embedded browsers (the app's side pane among them) answer window.confirm() with
+  // "cancel" without showing it, which made Flash do nothing
+  $$('#flash-images [data-fw-flash]').forEach(b => { b.onclick = () => { flashPending = b.dataset.fwFlash; renderFlashImages(flashInfo); }; });
+  $$('#flash-images [data-fw-yes]').forEach(b => { b.onclick = () => { const id = flashPending; flashPending = null; flashStart('upload', id); }; });
+  $$('#flash-images [data-fw-no]').forEach(b => { b.onclick = () => { flashPending = null; renderFlashImages(flashInfo); }; });
+}
+function flashConfirmBox(s, img) {
+  const onBoard = ((s.connection || {}).firmware || {}).version || '';
+  const imgVer = ((img.px4_ref || '').match(/v(\d+\.\d+\.\d+)/) || [])[1] || '';
+  const notes = [
+    'Take the props off.',
+    'The board reboots into its bootloader, is written (about 30 s) and reboots into the new image. Do not unplug it meanwhile.',
+    'Parameters on the board are kept.',
+  ];
+  if (onBoard && imgVer && !onBoard.startsWith(imgVer))
+    notes.unshift(`<span class="warn">The board runs PX4 ${flashEsc(onBoard)}; this image is PX4 ${flashEsc(imgVer)}. Parameters that ${flashEsc(imgVer)} does not know are dropped; check the PX4 tab after flashing.</span>`);
+  if (!(s.board || {}).device) notes.unshift('<span class="warn">No flight controller is visible on USB right now: Attach USB first.</span>');
+  if (img.stale && img.id === 'nose_lift') notes.push('The sources changed since this image was built: it is rebuilt first.');
+  return `<div class="problems" style="margin-top:8px"><b>Flash ${flashEsc(img.name)} to the ${flashEsc(s.target)}?</b>
+    <ul style="margin:6px 0 8px 18px;padding:0">${notes.map(n => `<li>${n}</li>`).join('')}</ul>
+    <div class="row tight"><button class="pill small primary" data-fw-yes="${img.id}">Yes, flash now</button><button class="pill small" data-fw-no="${img.id}">Cancel</button></div></div>`;
+}
+function renderFlashJob(job) {
+  const bar = $('#flash-bar'), p = job.progress || {};
+  $('#flash-cancel').style.display = job.running ? '' : 'none';     // .pill's display beats the hidden attribute
+  if (!job.label) return;
+  const phase = { build: 'building', upload: 'starting', erase: 'erasing the board', program: 'writing', verify: 'verifying', done: 'done' }[p.phase] || p.phase || '';
+  $('#flash-job-label').textContent = job.label;
+  $('#flash-job-hint').innerHTML = job.running
+    ? `${flashEsc(phase)} · ${(p.percent || 0).toFixed(0)}% · ${Math.round(job.elapsed)} s${job.action === 'upload' ? ' · do not unplug the board' : ''}`
+    : job.result === 'ok' ? `<span class="ok">finished in ${Math.round(job.elapsed)} s</span>` : `<span class="err">${flashEsc(job.result || 'stopped')}</span>`;
+  bar.style.width = `${job.running ? Math.max(2, p.percent || 0) : 100}%`;
+  bar.classList.toggle('done', !job.running && job.result === 'ok');
+  bar.classList.toggle('failed', !job.running && !!job.result && job.result !== 'ok');
+}
+function flashAppend(lines) {
+  for (const [, text] of lines) {
+    // the uploader redraws its progress bar in place: keep only the latest state of each bar
+    const last = flashLines[flashLines.length - 1];
+    const m = text.match(FLASH_PROGRESS_LINE);
+    if (m && last && last.match(FLASH_PROGRESS_LINE) && last.match(FLASH_PROGRESS_LINE)[1] === m[1]) flashLines[flashLines.length - 1] = text;
+    else flashLines.push(text);
+  }
+  if (flashLines.length > 6000) flashLines = flashLines.slice(-4000);
+  const pre = $('#flash-log');
+  pre.textContent = flashLines.join('\n');
+  if ($('#flash-follow').checked) pre.scrollTop = pre.scrollHeight;
+}
+async function flashPollOnce() {
+  let r;
+  try { r = await api('/api/flash/log?since=' + flashSince); } catch { return null; }
+  if (r.lines.length) flashAppend(r.lines);
+  flashSince = r.next;
+  renderFlashJob(r.job);
+  return r.job;
+}
+function startFlashPoll() {
+  if (flashPoll) return;
+  flashPoll = setInterval(async () => {
+    const job = await flashPollOnce();
+    if (job && !job.running) { clearInterval(flashPoll); flashPoll = null; setTimeout(refreshFlash, 600); }
+  }, 400);
+}
+async function refreshFlash() {
+  let s;
+  try { s = await api('/api/flash'); } catch (e) { $('#flash-board').innerHTML = `<span class="err">${flashEsc(e.message)}</span>`; return; }
+  flashInfo = s;
+  renderFlashBoard(s); renderFlashImages(s); renderFlashJob(s.job);
+  if (s.job.running) startFlashPoll();
+  else if (s.job.label && !flashLines.length) await flashPollOnce();      // show the last job's output after a reload
+}
+async function flashStart(action, id) {
+  flashLines = []; $('#flash-log').textContent = '';
+  let r;
+  try { r = await api('/api/flash/' + action, { image: id, target: flashInfo.target }); } catch (e) { r = { ok: false, error: e.message }; }
+  if (!r.ok) {
+    $('#flash-job-label').textContent = 'Not started';
+    $('#flash-job-hint').innerHTML = `<span class="err">${flashEsc(r.error)}</span>`;
+    const bar = $('#flash-bar'); bar.style.width = '0'; bar.classList.remove('done', 'failed');
+    return;
+  }
+  startFlashPoll();
+  refreshFlash();
+}
+$('#flash-cancel').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/flash/cancel', {});
+    if (!r.ok) logLine('[flash] nothing to stop');
+  } catch (e) { $('#flash-job-hint').innerHTML = `<span class="err">${flashEsc(e.message)}</span>`; }
+});
+$('#flash-verify').addEventListener('click', async () => {
+  const st = $('#flash-verify-status'), out = $('#flash-verify-out');
+  st.textContent = 'asking the board…';
+  let r;
+  try { r = await api('/api/flash/verify', {}); } catch (e) { r = { ok: false, error: e.message }; }
+  flashVerify = r;
+  if (!r.ok) { st.innerHTML = `<span class="err">${flashEsc(r.error)}</span>`; out.hidden = true; return; }
+  st.innerHTML = r.nose_lift_present
+    ? `<span class="ok">nose_lift module on the board</span> · NL_EN ${r.nl_en ?? 'not loaded yet (Update PX4)'}`
+    : '<span class="warn">no nose_lift module on this board</span>';
+  out.hidden = false;
+  out.textContent = `${r.ver}\n\n$ nose_lift status\n${r.nose_lift}`;
+  if (flashInfo) renderFlashImages(flashInfo);
+});
+$$('.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'flash') refreshFlash(); }));
+
+// ---- Controller tab: learn which channel each transmitter control drives, give it a function, write the PX4 mapping
+// PX4 reads switches as channels scaled by RCn_MIN/TRIM/MAX/REV to -1..1, then 0..1 against a threshold whose sign
+// says which side is "on" (rc_update.cpp getRCSwitchOnOffPosition); the mode channel picks one of six slots.
+const CTL_LAYOUT = {
+  name: 'RadioMaster T8L',
+  controls: [
+    { id: 'SA', kind: 'momentary', where: 'left shoulder', x: 64, y: 30 },
+    { id: 'SD', kind: 'momentary', where: 'left shoulder', x: 134, y: 30 },
+    { id: 'S1', kind: 'dial', where: 'top, centre', x: 280, y: 30 },
+    { id: 'SC', kind: '3pos', where: 'right shoulder', x: 426, y: 30 },
+    { id: 'SB', kind: '3pos', where: 'right shoulder', x: 496, y: 30 },
+    { id: 'SE', kind: '2pos', where: 'back', x: 280, y: 232 },
+  ],
+};
+const CTL_KIND = { momentary: 'push button', '2pos': '2-position switch', '3pos': '3-position switch', dial: 'dial' };
+const CTL_FUNCS = [
+  { id: 'none', label: 'Nothing' },
+  { id: 'kill', label: 'Emergency stop (all motors off)', short: 'E-STOP', map: 'RC_MAP_KILL_SW', th: 'RC_KILLSWITCH_TH', onoff: true },
+  { id: 'arm', label: 'Arm / disarm', short: 'ARM', map: 'RC_MAP_ARM_SW', th: 'RC_ARMSWITCH_TH', onoff: true },
+  { id: 'mode', label: 'Flight mode', short: 'MODE', map: 'RC_MAP_FLTMODE', modes: true },
+  { id: 'takeoff', label: 'Staged takeoff (nose lift, then throttle)', short: 'TAKEOFF', nl: true, onoff: true },
+  { id: 'landing', label: 'Staged landing (not on the flight controller yet)', short: 'LAND', disabled: true },
+  { id: 'return', label: 'Return', short: 'RTL', map: 'RC_MAP_RETURN_SW', th: 'RC_RETURN_TH', onoff: true },
+  { id: 'hold', label: 'Hold (loiter)', short: 'HOLD', map: 'RC_MAP_LOITER_SW', th: 'RC_LOITER_TH', onoff: true },
+];
+const CTL_MODES_FALLBACK = [[-1, 'Unassigned'], [8, 'Stabilized'], [1, 'Altitude'], [2, 'Position'], [4, 'Hold'], [11, 'Land'],
+  [5, 'Return'], [10, 'Takeoff'], [0, 'Manual'], [6, 'Acro'], [3, 'Mission'], [7, 'Offboard']];
+let ctlCfg = { controls: {} }, ctlRc = null, ctlParams = {}, ctlModes = CTL_MODES_FALLBACK, ctlSel = null, ctlLearn = null,
+  ctlTimer = null, ctlMsgText = '', ctlLoaded = false;
+const ctlEsc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ctlP = (n) => { const p = ctlParams[n]; return p && typeof p.value === 'number' ? p.value : undefined; };
+const ctlFunc = (id) => CTL_FUNCS.find(f => f.id === id) || CTL_FUNCS[0];
+const ctlC = (id) => (ctlCfg.controls[id] = ctlCfg.controls[id] || {});
+const ctlDef = (id) => CTL_LAYOUT.controls.find(c => c.id === id);
+function ctlScaled(raw, ch) {
+  // rc_update.cpp: trim-centred, then reversed
+  const min = ctlP(`RC${ch}_MIN`) ?? 1000, trim = ctlP(`RC${ch}_TRIM`) ?? 1500, max = ctlP(`RC${ch}_MAX`) ?? 2000, rev = ctlP(`RC${ch}_REV`) ?? 1;
+  let v = raw > trim ? (raw - trim) / Math.max(max - trim, 1) : (raw - trim) / Math.max(trim - min, 1);
+  return Math.max(-1, Math.min(1, v * (rev < 0 ? -1 : 1)));
+}
+const ctl01 = (raw, ch) => 0.5 * ctlScaled(raw, ch) + 0.5;
+function ctlSlot(raw, ch) {
+  // rc_update.cpp UpdateManualSwitches: the flight mode slot (1..6) of a channel value
+  const n = 6, half = 1 / n, lo = -1 - 0.05, hi = 1 + 0.05;
+  return Math.min(n, Math.floor((((ctlScaled(raw, ch) - lo) * n) + half) / (hi - lo) + half) + 1);
+}
+function ctlLiveRaw(ch) { const v = ctlRc && ctlRc.channels ? ctlRc.channels[ch - 1] : undefined; return v > 0 ? v : undefined; }
+function ctlLevelIndex(c, raw) {
+  if (raw === undefined || !c.levels || !c.levels.length) return -1;
+  let best = 0;
+  c.levels.forEach((l, i) => { if (Math.abs(l - raw) < Math.abs(c.levels[best] - raw)) best = i; });
+  return Math.abs(c.levels[best] - raw) < 120 ? best : -1;
+}
+function ctlSave() { api('/api/controller', ctlCfg).catch(() => { }); }
+
+async function ctlLoad() {
+  try { const c = await api('/api/controller'); if (c && c.controls) ctlCfg = c; } catch { }
+  try {
+    const m = await api('/api/params/meta');
+    const vals = m && m.meta && m.meta.COM_FLTMODE1 && m.meta.COM_FLTMODE1.values;
+    if (vals && vals.length) ctlModes = vals.filter(v => v.value < 100).map(v => [v.value, v.description]);
+  } catch { }
+  ctlLoaded = true;
+}
+async function ctlRefreshParams() { try { ctlParams = (await api('/api/params')).params || {}; } catch { ctlParams = {}; } }
+
+// ---- learning: watch every channel for 6 s while the pilot moves one control
+function ctlStartLearn(id) {
+  if (!ctlRc || !ctlRc.channels || !ctlRc.channels.some(v => v > 0)) { ctlMsgText = 'No radio signal: switch the T8L on and wait for it to link first.'; ctlRenderAll(); return; }
+  ctlLearn = { id, t0: Date.now(), samples: [], start: [...ctlRc.channels] };
+  ctlSel = id;
+  ctlMsgText = `Learning ${id}: move it through all its positions now${ctlDef(id).kind === 'momentary' ? ' (press it a few times)' : ''}…`;
+  ctlRenderAll();
+}
+function ctlLearnStep() {
+  const L = ctlLearn;
+  if (ctlRc && ctlRc.channels) L.samples.push([...ctlRc.channels]);
+  if (Date.now() - L.t0 < 6000) return;
+  ctlLearn = null;
+  const sticks = new Set(['RC_MAP_ROLL', 'RC_MAP_PITCH', 'RC_MAP_THROTTLE', 'RC_MAP_YAW'].map(ctlP).filter(v => v > 0));
+  let best = null;
+  for (let ch = 1; ch <= L.start.length; ch++) {
+    if (sticks.has(ch)) continue;
+    const vals = L.samples.map(s => s[ch - 1]).filter(v => v > 0);
+    if (vals.length < 5) continue;
+    const range = Math.max(...vals) - Math.min(...vals);
+    if (range > 150 && (!best || range > best.range)) best = { ch, range, vals };
+  }
+  const def = ctlDef(L.id);
+  if (!best) { ctlMsgText = `${L.id}: no channel moved. Is the control mapped to a channel in the radio (ExpressLRS web configurator)?`; ctlRenderAll(); return; }
+  // positions: clusters of values at least 80 us apart, each seen at least twice
+  const sorted = [...best.vals].sort((a, b) => a - b), groups = [];
+  for (const v of sorted) {
+    const g = groups[groups.length - 1];
+    if (g && v - g[g.length - 1] <= 80) g.push(v); else groups.push([v]);
+  }
+  let levels = groups.filter(g => g.length >= 2).map(g => g[Math.floor(g.length / 2)]);
+  if (def.kind === 'dial') levels = [sorted[0], sorted[sorted.length - 1]];
+  const startRaw = L.start[best.ch - 1];
+  const rest = levels.reduce((a, b) => (Math.abs(b - startRaw) < Math.abs(a - startRaw) ? b : a), levels[0]);
+  for (const other of CTL_LAYOUT.controls) {                   // a channel belongs to one control
+    const oc = ctlCfg.controls[other.id];
+    if (other.id !== L.id && oc && oc.channel === best.ch) { oc.channel = null; oc.levels = []; }
+  }
+  const c = ctlC(L.id);
+  c.channel = best.ch; c.levels = levels; c.rest = rest;
+  const restIdx = levels.indexOf(rest);
+  // active = away from where it rested when learning began (the pilot starts from the normal position), for a
+  // button and a switch alike; a 3-position switch takes the far end
+  if (c.active === undefined || c.active >= levels.length || levels[c.active] === rest) c.active = restIdx === 0 ? levels.length - 1 : 0;
+  if (!c.modes || c.modes.length !== levels.length) c.modes = levels.map(() => -1);
+  const want = { momentary: 2, '2pos': 2, '3pos': 3 }[def.kind];
+  ctlMsgText = `${L.id} drives channel ${best.ch}: ${levels.length} position${levels.length === 1 ? '' : 's'} (${levels.join(', ')} us)` +
+    (want && levels.length !== want ? `. Expected ${want} for a ${CTL_KIND[def.kind]}: learn again and move it through every position.` : '.');
+  ctlSave();
+  ctlRenderAll();
+}
+
+// ---- what the choices mean for PX4
+function ctlPlan() {
+  const changes = {}, errors = [], notes = [], byFunc = {};
+  const sticks = { RC_MAP_ROLL: 'roll', RC_MAP_PITCH: 'pitch', RC_MAP_THROTTLE: 'throttle', RC_MAP_YAW: 'yaw' };
+  for (const def of CTL_LAYOUT.controls) {
+    const c = ctlCfg.controls[def.id];
+    if (!c || !c.func || c.func === 'none') continue;
+    const F = ctlFunc(c.func);
+    if (!c.channel) { errors.push(`${def.id} (${F.label}): learn its channel first`); continue; }
+    if (byFunc[F.id]) { errors.push(`${F.label} is on both ${byFunc[F.id].id} and ${def.id}: keep one`); continue; }
+    for (const [p, n] of Object.entries(sticks)) if (ctlP(p) === c.channel) errors.push(`${def.id} is on channel ${c.channel}, which PX4 reads as the ${n} stick`);
+    byFunc[F.id] = { ...c, id: def.id, kind: def.kind };
+  }
+  for (const [fid, c] of Object.entries(byFunc)) {
+    const F = ctlFunc(fid), ch = c.channel, lv = c.levels || [];
+    if (F.onoff) {
+      if (lv.length < 2) { errors.push(`${c.id}: only one position learned; learn it again`); continue; }
+      const act = lv[c.active];
+      let other;
+      if (c.kind === 'momentary') other = c.rest;
+      else if (lv.length === 2) other = lv[1 - c.active];
+      else if (c.active === 0) other = lv[1];
+      else if (c.active === lv.length - 1) other = lv[c.active - 1];
+      else { errors.push(`${c.id}: ${F.label} needs an end position of the switch, not the middle`); continue; }
+      if (act === other) { errors.push(`${c.id}: the active position is the resting one; a button is active when pressed`); continue; }
+      if (F.nl) {
+        changes.NL_RC_CH = ch; changes.NL_RC_TH = Math.round((act + other) / 2); changes.NL_RC_LOW = act < other ? 1 : 0;
+      } else {
+        const sa = ctl01(act, ch), so = ctl01(other, ch), th = Math.round(((sa + so) / 2) * 1000) / 1000;
+        changes[F.map] = ch; changes[F.th] = sa > so ? th : -th;
+      }
+      if (fid === 'kill') {
+        changes.COM_KILL_DISARM = 0;
+        notes.push(`${c.id} stops every motor and disarms at once when ${c.kind === 'momentary' ? 'pressed' : 'in its active position'}; releasing it restarts nothing.`);
+      }
+      if (fid === 'arm') changes.COM_ARM_SWISBTN = c.kind === 'momentary' ? 1 : 0;
+      if (fid === 'takeoff') notes.push(`${c.id} starts the nose lift after arming (the flight controller runs it with the nose-lift firmware).`);
+    }
+    if (F.modes) {
+      changes.RC_MAP_FLTMODE = ch;
+      const slots = lv.map(r => ctlSlot(r, ch));
+      for (let s = 1; s <= 6; s++) {
+        let bi = 0;
+        slots.forEach((sl, i) => { if (Math.abs(sl - s) < Math.abs(slots[bi] - s)) bi = i; });
+        changes[`COM_FLTMODE${s}`] = (c.modes || [])[bi] ?? -1;
+      }
+      if ((c.modes || []).every(m => m < 0)) errors.push(`${c.id}: choose a flight mode for at least one position`);
+    }
+  }
+  // a channel now used by one function must not still drive another (the kill on the mode channel, for example)
+  const used = new Set(Object.values(byFunc).map(c => c.channel));
+  for (const F of CTL_FUNCS) if (F.map && !byFunc[F.id] && used.has(ctlP(F.map))) {
+    changes[F.map] = 0; notes.push(`${F.label} is removed from channel ${ctlP(F.map)}, which now does something else.`);
+  }
+  if (!byFunc.takeoff && used.has(ctlP('NL_RC_CH'))) { changes.NL_RC_CH = 0; }
+  const same = (a, b) => a !== undefined && Math.abs(Number(a) - Number(b)) < 1e-4;
+  const diff = Object.entries(changes).filter(([k, v]) => !same(ctlP(k), v));
+  const missing = diff.filter(([k]) => ctlParams[k] === undefined).map(([k]) => k);
+  if (Object.keys(ctlParams).length && missing.length) errors.push(`not in the board's firmware: ${missing.join(', ')}${missing.some(k => k.startsWith('NL_')) ? ' (flash the nose-lift image)' : ''}`);
+  if (!byFunc.kill) notes.unshift('No control is set to Emergency stop.');
+  const k = byFunc.kill;
+  if (k && ctlLiveRaw(k.channel) !== undefined && ctlLevelIndex(k, ctlLiveRaw(k.channel)) === k.active)
+    errors.unshift(`${k.id} is in its emergency-stop position right now: PX4 would not arm. Pick the other position as the stop, or flip ${k.id}.`);
+  for (const [fid, c] of Object.entries(byFunc)) {
+    const F = ctlFunc(fid);
+    if (!F.onoff || F.nl || changes[F.th] === undefined) continue;
+    const th = Math.abs(changes[F.th]);
+    for (const l of c.levels || []) if (Math.abs(ctl01(l, c.channel) - th) < 0.08)
+      errors.push(`${c.id}: position ${l} us sits on the ${F.label} threshold (${th}); PX4 would flicker between on and off there`);
+  }
+  return { changes, diff, errors, notes, byFunc };
+}
+
+// ---- rendering
+function ctlDrawing() {
+  const W = 560, H = 270;
+  const stick = (cx, cy, xr, yr) => {
+    const nx = xr ? Math.max(-1, Math.min(1, (xr - 1500) / 500)) : 0, ny = yr ? Math.max(-1, Math.min(1, (yr - 1500) / 500)) : 0;
+    return `<circle class="stick-well" cx="${cx}" cy="${cy}" r="48"/><circle class="stick-dot" cx="${cx + nx * 40}" cy="${cy - ny * 40}" r="9"/>`;
+  };
+  const raw = (p) => { const ch = ctlP(p); return ch ? ctlLiveRaw(ch) : undefined; };
+  let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${ctlEsc(CTL_LAYOUT.name)} controls">
+    <rect class="body" x="24" y="52" width="${W - 48}" height="${H - 70}" rx="70"/>
+    ${stick(170, 140, raw('RC_MAP_YAW'), raw('RC_MAP_THROTTLE'))}${stick(390, 140, raw('RC_MAP_ROLL'), raw('RC_MAP_PITCH'))}
+    <text x="170" y="206" text-anchor="middle" class="fn">throttle / yaw</text><text x="390" y="206" text-anchor="middle" class="fn">pitch / roll</text>`;
+  for (const def of CTL_LAYOUT.controls) {
+    const c = ctlCfg.controls[def.id] || {}, F = ctlFunc(c.func);
+    const r = c.channel ? ctlLiveRaw(c.channel) : undefined, li = ctlLevelIndex(c, r);
+    const restIdx = (c.levels || []).indexOf(c.rest);
+    const active = li >= 0 && (F.onoff ? li === c.active : (def.kind === 'momentary' ? li !== restIdx : false));
+    const cls = `ctl${active ? ' active' : ''}${ctlSel === def.id ? ' selected' : ''}`;
+    const shape = def.kind === 'dial' ? `<circle class="knob" cx="${def.x}" cy="${def.y}" r="13"/>`
+      : `<rect x="${def.x - 22}" y="${def.y - 12}" width="44" height="24" rx="${def.kind === 'momentary' ? 12 : 5}"/>`;
+    const pos = def.kind === '3pos' || def.kind === '2pos' ? (li >= 0 ? `pos ${li + 1}` : '') : def.kind === 'momentary' ? (li >= 0 && li !== restIdx ? 'pressed' : '') : (r ? String(r) : '');
+    s += `<g class="${cls}" data-ctl="${def.id}">${shape}<text x="${def.x}" y="${def.y + 4}" text-anchor="middle" class="lbl">${def.id}</text>
+      <text x="${def.x}" y="${def.y + (def.id === 'SE' ? -18 : 28)}" text-anchor="middle">${c.channel ? 'ch ' + c.channel : '—'}${pos ? ' · ' + pos : ''}</text>
+      <text x="${def.x}" y="${def.y + (def.id === 'SE' ? 30 : 40)}" text-anchor="middle" class="fn">${F.id !== 'none' ? ctlEsc(F.short) : def.id === 'SE' ? 'on the back' : ''}</text></g>`;
+  }
+  return s + '</svg>';
+}
+function ctlRenderTable() {
+  const rows = CTL_LAYOUT.controls.map(def => {
+    const c = ctlCfg.controls[def.id] || {}, F = ctlFunc(c.func);
+    const r = c.channel ? ctlLiveRaw(c.channel) : undefined, li = ctlLevelIndex(c, r);
+    const levels = (c.levels || []).map((l, i) => `<span class="lvl${i === li ? ' now' : ''}" data-lvl="${def.id}" data-i="${i}" title="${l} us">${def.kind === 'momentary' ? (l === c.rest ? 'rest' : 'pressed') : 'pos ' + (i + 1)}</span>`).join('');
+    const funcs = def.kind === 'dial' ? '<select disabled><option>Nothing</option></select>'
+      : `<select data-ctl-func="${def.id}">${CTL_FUNCS.map(f => `<option value="${f.id}" ${f.id === (c.func || 'none') ? 'selected' : ''} ${f.disabled ? 'disabled' : ''}>${ctlEsc(f.label)}</option>`).join('')}</select>`;
+    let detail = '';
+    if (F.onoff && (c.levels || []).length >= 2) {
+      detail = def.kind === 'momentary' ? '<span class="hint">active while pressed</span>'
+        : `active in <select data-ctl-active="${def.id}">${c.levels.map((l, i) => `<option value="${i}" ${i === c.active ? 'selected' : ''} ${def.kind === '3pos' && i > 0 && i < c.levels.length - 1 ? 'disabled' : ''}>pos ${i + 1} (${l} us)</option>`).join('')}</select>`;
+    } else if (F.modes && (c.levels || []).length) {
+      detail = c.levels.map((l, i) => `<div>pos ${i + 1} <select data-ctl-mode="${def.id}" data-i="${i}">${ctlModes.map(([v, n]) => `<option value="${v}" ${v === (c.modes || [])[i] ? 'selected' : ''}>${ctlEsc(n)}</option>`).join('')}</select></div>`).join('');
+    }
+    const learning = ctlLearn && ctlLearn.id === def.id;
+    return `<tr class="${ctlSel === def.id ? 'selected' : ''}" data-row="${def.id}">
+      <td><b>${def.id}</b><div class="hint">${CTL_KIND[def.kind]} · ${def.where}</div></td>
+      <td class="ctl-live">${c.channel ? 'ch ' + c.channel : '—'}<div class="hint" data-raw="${def.id}">${r ?? ''}</div></td>
+      <td>${levels || '<span class="hint">not learned</span>'}</td>
+      <td>${funcs}<div style="margin-top:4px">${detail}</div></td>
+      <td><button class="pill small" data-ctl-learn="${def.id}" ${ctlLearn ? 'disabled' : ''}>${learning ? 'Move it…' : 'Learn'}</button></td></tr>`;
+  }).join('');
+  $('#ctl-table').innerHTML = `<table><thead><tr><th>Control</th><th>Channel</th><th>Positions</th><th>Function</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    ${ctlMsgText ? `<div class="hint" style="margin-top:6px">${ctlEsc(ctlMsgText)}</div>` : ''}`;
+}
+function ctlRenderPlan() {
+  const p = ctlPlan();
+  const rows = p.diff.map(([k, v]) => `<tr><td class="mono">${k}</td><td class="mono">${ctlP(k) ?? '—'}</td><td class="mono">${v}</td></tr>`).join('');
+  $('#ctl-plan').innerHTML = (p.errors.length ? `<div class="problems">⚠ ${p.errors.map(ctlEsc).join('<br>⚠ ')}</div>` : '') +
+    (p.notes.length ? `<ul class="hint" style="margin:4px 0 6px 18px;padding:0">${p.notes.map(n => `<li>${ctlEsc(n)}</li>`).join('')}</ul>` : '') +
+    (rows ? `<table class="grid"><thead><tr><th>Parameter</th><th>On the board</th><th>New</th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<div class="hint">The board already matches these choices.</div>');
+  const connected = Object.keys(ctlParams).length > 0;
+  $('#ctl-write').disabled = !connected || p.errors.length > 0 || !p.diff.length;
+  if (!connected) $('#ctl-status').textContent = 'not connected to the board';
+}
+function ctlRenderBoard() {
+  const byCh = {};
+  const line = (label, ch, extra) => {
+    if (ch > 0) (byCh[ch] = byCh[ch] || []).push(label);
+    return `<tr><td>${ctlEsc(label)}</td><td class="mono">${ch > 0 ? 'ch ' + ch : '—'}</td><td class="mono">${extra || ''}</td></tr>`;
+  };
+  const modeName = (v) => (ctlModes.find(m => m[0] === v) || [v, String(v)])[1];
+  let rows = '';
+  for (const F of CTL_FUNCS) if (F.map && F.th) rows += line(F.label, ctlP(F.map), ctlP(F.map) > 0 ? `threshold ${ctlP(F.th)}` : '');
+  rows += line('Flight mode', ctlP('RC_MAP_FLTMODE'), ctlP('RC_MAP_FLTMODE') > 0 ? [1, 2, 3, 4, 5, 6].map(s => `${s}: ${ctlEsc(modeName(ctlP('COM_FLTMODE' + s)))}`).join(' · ') : '');
+  if (ctlParams.NL_RC_CH) rows += line('Staged takeoff (nose lift)', ctlP('NL_RC_CH'), ctlP('NL_RC_CH') > 0 ? `${ctlP('NL_RC_LOW') ? 'below' : 'above'} ${ctlP('NL_RC_TH')} us` : '');
+  const clashes = Object.entries(byCh).filter(([, l]) => l.length > 1).map(([ch, l]) => `channel ${ch} drives ${l.join(' and ')}`);
+  for (const F of CTL_FUNCS) {
+    if (!F.map || !F.th || !(ctlP(F.map) > 0)) continue;
+    const ch = ctlP(F.map), r = ctlLiveRaw(ch), th = ctlP(F.th);
+    if (r === undefined || th === undefined) continue;
+    const v = ctl01(r, ch), on = th < 0 ? -v > th : v > th;
+    if (Math.abs(v - Math.abs(th)) < 0.08) clashes.push(`${F.label}: channel ${ch} reads ${r} us, on its threshold ${th}; it flickers between on and off`);
+    else if (F.id === 'kill' && on) clashes.push(`Emergency stop is ENGAGED now (channel ${ch} at ${r} us): PX4 will not arm`);
+  }
+  $('#ctl-board').innerHTML = !Object.keys(ctlParams).length ? '<span class="hint">Not connected to the board.</span>'
+    : `${clashes.length ? `<div class="problems">⚠ ${clashes.map(ctlEsc).join('<br>⚠ ')}</div>` : ''}<table class="grid"><tbody>${rows}</tbody></table>
+       <div class="hint">Kill disarms after ${ctlP('COM_KILL_DISARM') ?? '?'} s · arm control is ${ctlP('COM_ARM_SWISBTN') ? 'a push button' : 'a switch'}</div>`;
+}
+function ctlRenderLive() {
+  const n = ctlRc && ctlRc.channels ? ctlRc.channels.filter(v => v > 0).length : 0;
+  $('#ctl-signal').textContent = n ? `Radio linked · ${n} channels` : 'No radio signal: switch the T8L on and wait for it to link to the receiver.';
+  $('#ctl-drawing').innerHTML = ctlDrawing();
+  // the table is rebuilt only when something changes; here just its live values, so clicks are never lost
+  for (const def of CTL_LAYOUT.controls) {
+    const c = ctlCfg.controls[def.id] || {}, r = c.channel ? ctlLiveRaw(c.channel) : undefined, li = ctlLevelIndex(c, r);
+    const cell = document.querySelector(`[data-raw="${def.id}"]`); if (cell) cell.textContent = r ?? '';
+    $$(`[data-lvl="${def.id}"]`).forEach(el => el.classList.toggle('now', +el.dataset.i === li));
+  }
+  $$('#ctl-table tr[data-row]').forEach(tr => tr.classList.toggle('selected', tr.dataset.row === ctlSel));
+  ctlRenderPlan(); ctlRenderBoard();              // both depend on where the switches are right now
+}
+function ctlRenderAll() { ctlRenderLive(); ctlRenderTable(); ctlRenderPlan(); ctlRenderBoard(); }
+async function ctlTick() {
+  if (!$('#tab-controller').classList.contains('active')) { ctlTimer = null; return; }
+  try { ctlRc = await api('/api/rc'); } catch { ctlRc = null; }
+  if (ctlLearn) ctlLearnStep();
+  ctlRenderLive();
+  ctlTimer = setTimeout(ctlTick, 150);
+}
+async function ctlOpen() {
+  if (!ctlLoaded) await ctlLoad();
+  await ctlRefreshParams();
+  ctlRenderAll();
+  if (!ctlTimer) ctlTick();
+}
+
+$('#ctl-drawing').addEventListener('pointerdown', (e) => {
+  const g = e.target.closest('[data-ctl]'); if (!g) return;
+  ctlSel = g.dataset.ctl; ctlRenderAll();
+});
+$('#ctl-table').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-ctl-learn]'); if (b) { ctlStartLearn(b.dataset.ctlLearn); return; }
+  const row = e.target.closest('[data-row]'); if (row && e.target.tagName !== 'SELECT' && e.target.tagName !== 'OPTION') { ctlSel = row.dataset.row; ctlRenderLive(); }
+});
+$('#ctl-table').addEventListener('change', (e) => {
+  const t = e.target;
+  if (t.dataset.ctlFunc) {
+    const fid = t.value;
+    for (const [id, oc] of Object.entries(ctlCfg.controls)) if (id !== t.dataset.ctlFunc && oc.func === fid && fid !== 'none') oc.func = 'none';   // one control per function
+    ctlC(t.dataset.ctlFunc).func = fid;
+  }
+  if (t.dataset.ctlActive) ctlC(t.dataset.ctlActive).active = +t.value;
+  if (t.dataset.ctlMode) { const c = ctlC(t.dataset.ctlMode); c.modes = c.modes || []; c.modes[+t.dataset.i] = +t.value; }
+  ctlSave(); t.blur(); ctlRenderAll();
+});
+$('#ctl-write').addEventListener('click', async (e) => {
+  const btn = e.currentTarget, p = ctlPlan();
+  if (p.errors.length || !p.diff.length) return;
+  if (!confirmClick(btn, `Click again to write ${p.diff.length} parameter${p.diff.length === 1 ? '' : 's'}`)) return;
+  if (status.armed) { $('#ctl-status').innerHTML = '<span class="err">disarm first</span>'; return; }
+  btn.disabled = true;
+  const failed = [];
+  for (const [k, v] of p.diff) {
+    $('#ctl-status').textContent = `writing ${k}…`;
+    try {
+      const r = await api('/api/params/set', { name: k, value: v });
+      if (!r.ok) failed.push(k); else if (airframe) { airframe.px4_overrides = airframe.px4_overrides || {}; airframe.px4_overrides[k] = r.value; }
+    } catch { failed.push(k); }
+  }
+  try { await api('/api/params/save', {}); } catch { }
+  const t = p.byFunc.takeoff;
+  if (t && airframe) {
+    // the airframe keeps the nose-lift switch too: the export computes NL_RC_* from it, the simulator uses it
+    airframe.design = airframe.design || {};
+    airframe.design.nose_lift = { ...(airframe.design.nose_lift || {}), rc_channel: p.changes.NL_RC_CH, rc_threshold: p.changes.NL_RC_TH, rc_active_low: !!p.changes.NL_RC_LOW };
+    pushAirframe(true);
+  }
+  await ctlRefreshParams();
+  $('#ctl-status').innerHTML = failed.length ? `<span class="err">failed: ${ctlEsc(failed.join(', '))}</span>` : `<span class="ok">✓ ${p.diff.length} parameters written and saved on the board</span>`;
+  btn.disabled = false;
+  ctlRenderAll();
+});
+$$('.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'controller') ctlOpen(); }));
+
+// ---- kill switch test (px4/killtest.py): what the board itself reports around each kill
+let ctlKtTimer = null;
+function ctlKtRender(s) {
+  const L = s.live || {};
+  $('#ctl-kt-live').textContent = s.running
+    ? `recording ${Math.round(s.elapsed)} s · kill ${L.kill_engaged ? 'ENGAGED' : L.kill_engaged === false ? 'off' : '?'} (${L.kill_raw ?? '—'} us) · outputs ${L.outputs_armed ? 'armed' : 'disarmed'} · motors up to ${L.motor_peak ?? 0} · nose lift ${L.nose_lift || '—'}`
+    : (s.trials && s.trials.length ? 'stopped' : '');
+  const rows = (s.trials || []).map((t, i) => {
+    const off = t.motors_off_ms, ok = off !== null && off <= 100 && t.restarted === false;
+    return `<tr><td>${i + 1}</td><td>${ctlEsc(t.phase)}</td><td class="mono">${t.motor_peak_before}</td>
+      <td class="mono ${off === null ? 'err' : off <= 100 ? 'ok' : 'err'}">${off === null ? 'NOT OFF' : off + ' ms'}</td>
+      <td class="mono">${t.disarmed_ms === null ? '—' : t.disarmed_ms + ' ms'}</td>
+      <td class="${t.restarted === null ? 'hint' : t.restarted ? 'err' : 'ok'}">${t.restarted === null ? (t.released_t ? 'watching…' : 'release the switch') : t.restarted ? `MOTORS CAME BACK (${t.max_after_release})` : 'nothing restarted'}</td>
+      <td>${t.restarted === null ? '' : ok ? '<span class="ok">✓</span>' : '<span class="err">✗</span>'}</td></tr>`;
+  }).join('');
+  $('#ctl-kt-trials').innerHTML = rows ? `<table class="grid"><thead><tr><th>#</th><th>Phase at the kill</th><th>Motors before</th><th>All motors off</th><th>Outputs disarmed</th><th>After release</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="hint">Times are from the moment the app sees the kill position in RC_CHANNELS (50 Hz): 0 ms means the motors were already off when that frame arrived.</div>` : '';
+}
+async function ctlKtPoll() {
+  let s; try { s = await api('/api/killtest'); } catch { return; }
+  ctlKtRender(s);
+  if (s.running && $('#tab-controller').classList.contains('active')) ctlKtTimer = setTimeout(ctlKtPoll, 200); else ctlKtTimer = null;
+}
+$('#ctl-kt-start').addEventListener('click', async () => {
+  let r; try { r = await api('/api/killtest', { action: 'start' }); } catch (e) { r = { ok: false, error: e.message }; }
+  if (!r.ok) { $('#ctl-kt-live').innerHTML = `<span class="err">${ctlEsc(r.error)}</span>`; return; }
+  if (!ctlKtTimer) ctlKtPoll();
+});
+$('#ctl-kt-stop').addEventListener('click', async () => { await api('/api/killtest', { action: 'stop' }).catch(() => { }); ctlKtPoll(); });
+$$('.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'controller' && !ctlKtTimer) ctlKtPoll(); }));

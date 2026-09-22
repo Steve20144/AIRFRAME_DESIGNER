@@ -15,6 +15,7 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
@@ -101,34 +102,61 @@ def board_target_from_description(desc: str | None) -> str | None:
 
 
 class FirmwareJob:
-    """Runs scripts/build_hitl_firmware.sh in the background, streaming output into the app log."""
+    """Runs a firmware build or flash script in the background (scripts/build_hitl_firmware.sh by default), keeping
+    every output line for the Flash tab and a filtered copy in the app log, plus a progress estimate: ninja's
+    [n/m] steps while building, px_uploader's Erase/Program/Verify percentages while flashing."""
+
+    _NINJA = re.compile(r"^\[(\d+)/(\d+)\]")
+    _UPLOAD = re.compile(r"^\s*(Erase|Program|Verify)\s*:.*?(\d+(?:\.\d+)?)%")
 
     def __init__(self, log):
         self.log = log
         self.proc: subprocess.Popen | None = None
         self.action = None
         self.board = None
+        self.image = None
+        self.label = None
         self.result: str | None = None
         self.exit_code: int | None = None
+        self.started = 0.0
+        self.ended = 0.0
+        self.progress: dict = {}
+        self.lines: deque[tuple[int, str]] = deque(maxlen=5000)
+        self._seq = 0
 
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
-    def start(self, board: str, action: str, px4_dir: str, venv_bin: str, ref: str | None = None) -> dict:
+    def _keep(self, text: str) -> None:
+        self._seq += 1
+        self.lines.append((self._seq, text))
+
+    def lines_since(self, since: int) -> dict:
+        return {"lines": [[n, t] for n, t in list(self.lines) if n > since], "next": self._seq}
+
+    def start(self, board: str, action: str, px4_dir: str, venv_bin: str, ref: str | None = None,
+              script: Path | None = None, script_args: list[str] | None = None, image: str | None = None,
+              label: str | None = None, env_extra: dict | None = None, timeout_s: float | None = None) -> dict:
         if self.running():
-            return {"ok": False, "error": f"{self.action} already running"}
-        script = PROJECT_DIR / "scripts" / "build_hitl_firmware.sh"
+            return {"ok": False, "error": f"{self.label or self.action} already running"}
+        script = script or PROJECT_DIR / "scripts" / "build_hitl_firmware.sh"
         env = dict(os.environ)
         env["PX4_DIR"] = px4_dir
         if ref:
             env["PX4_REF"] = ref
         env["PATH"] = venv_bin + ":" + env.get("PATH", "")
         env["VENV_BIN"] = venv_bin
+        env["PYTHONUNBUFFERED"] = "1"
+        env.update(env_extra or {})
         self.action, self.board, self.result, self.exit_code = action, board, None, None
-        self.log(f"[firmware] {action} {board} (this takes a few minutes; watch the log)")
-        self.proc = subprocess.Popen(["/bin/bash", str(script), board, action], env=env, cwd=str(PROJECT_DIR),
-                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                     start_new_session=True)
+        self.image, self.label = image, label or f"{action} {board}"
+        self.started, self.ended, self.progress = time.time(), 0.0, {"phase": action, "percent": 0.0}
+        self.lines.clear()
+        self._keep(f"$ {script.name} {' '.join(script_args or [board, action])}   (PX4_DIR={px4_dir})")
+        self.log(f"[firmware] {self.label} (this takes a few minutes; watch the log)")
+        self.proc = subprocess.Popen(["/bin/bash", str(script), *(script_args or [board, action])], env=env,
+                                     cwd=str(PROJECT_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True, bufsize=1, start_new_session=True)
         ansi = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
         def pump():
@@ -138,6 +166,12 @@ class FirmwareJob:
                 line = ansi.sub("", line).rstrip()
                 if not line:
                     continue
+                m = self._NINJA.match(line)
+                if m and int(m.group(2)) > 0:
+                    self.progress = {"phase": "build", "percent": round(100.0 * int(m.group(1)) / int(m.group(2)), 1)}
+                u = self._UPLOAD.match(line)
+                if u:
+                    self.progress = {"phase": u.group(1).lower(), "percent": float(u.group(2))}
                 if line == last:
                     repeats += 1
                     if repeats == 3:
@@ -145,38 +179,55 @@ class FirmwareJob:
                     continue
                 repeats = 0
                 last = line
-                # ninja progress lines are very chatty; keep every 25th plus anything that is not a build step
-                if line.startswith("[") and "/" in line[:12] and "]" in line[:14]:
+                self._keep(line)
+                # ninja progress lines are very chatty; keep every 25th in the app log plus anything else
+                if m:
                     try:
-                        n = int(line[1:line.index("/")])
-                        if n % 25:
+                        if int(m.group(1)) % 25:
                             continue
                     except ValueError:
                         pass
+                if u and not line.rstrip().endswith("100.0%"):
+                    continue
                 self.log(f"[firmware] {line}")
             code = self.proc.wait()
             self.exit_code = code
+            self.ended = time.time()
             self.result = "ok" if code == 0 else f"failed ({code}): {last}"
-            self.log(f"[firmware] {self.action} {'finished' if code == 0 else 'FAILED'} (exit {code})")
+            if code == 0:
+                self.progress = {"phase": "done", "percent": 100.0}
+            self._keep(f"[{self.label} {'finished' if code == 0 else 'FAILED'} (exit {code}) after "
+                       f"{self.ended - self.started:.0f} s]")
+            self.log(f"[firmware] {self.label} {'finished' if code == 0 else 'FAILED'} (exit {code})")
 
         threading.Thread(target=pump, daemon=True).start()
         if action == "upload":
             def watchdog():
-                deadline = time.time() + 240
+                deadline = time.time() + (timeout_s or 240)
                 while self.running() and time.time() < deadline:
                     time.sleep(1.0)
                 if self.running():
-                    self.log("[firmware] upload took too long, giving up (is the port free? unplug/replug the board and retry)")
-                    try:
-                        os.killpg(self.proc.pid, signal.SIGTERM)
-                    except Exception:
-                        pass
+                    msg = "upload took too long, giving up (is the port free? unplug/replug the board and retry)"
+                    self._keep("[" + msg + "]")
+                    self.log("[firmware] " + msg)
+                    self.cancel()
             threading.Thread(target=watchdog, daemon=True).start()
         return {"ok": True}
 
+    def cancel(self) -> bool:
+        if not self.running():
+            return False
+        try:
+            os.killpg(self.proc.pid, signal.SIGTERM)
+        except Exception:
+            return False
+        return True
+
     def status(self) -> dict:
         return {"running": self.running(), "action": self.action, "board": self.board, "result": self.result,
-                "exit_code": self.exit_code}
+                "exit_code": self.exit_code, "image": self.image, "label": self.label, "progress": self.progress,
+                "started": self.started, "ended": self.ended,
+                "elapsed": round((self.ended or time.time()) - self.started, 1) if self.started else 0.0}
 
 
 class ConnectionManager:
@@ -389,6 +440,84 @@ class ConnectionManager:
                 self.connect_hitl(serial, self.baud)
             threading.Thread(target=reconnect, daemon=True).start()
         return r
+
+    # ------------------------------------------------------------ Flash tab
+    def flash_target(self, target: str | None = None) -> str:
+        from .firmware_images import DEFAULT_TARGET
+        return target or self.detected_board()["target"] or DEFAULT_TARGET
+
+    def flash_images(self, target: str | None = None) -> dict:
+        from . import firmware_images as fi
+        t = self.flash_target(target)
+        return {"target": t, "images": [fi.describe(img, t) for img in fi.IMAGES]}
+
+    def flash_build(self, image_id: str, target: str | None = None) -> dict:
+        from . import firmware_images as fi
+        img = fi.get(image_id)
+        if img is None:
+            return {"ok": False, "error": f"unknown firmware image '{image_id}'"}
+        if not self.toolchain_present():
+            return {"ok": False, "error": "ARM toolchain missing: unpack the xpack arm-none-eabi-gcc tarball under ~/toolchains/"}
+        t = self.flash_target(target)
+        script, args, env = fi.script_call(img, t, "build")
+        return self.firmware_job.start(t, "build", fi.px4_dir(img), self._venv_bin(), script=script, script_args=args,
+                                       image=image_id, label=f"build {img['name']} for {t}", env_extra=env)
+
+    def flash_upload(self, image_id: str, target: str | None = None) -> dict:
+        """Flash an image: keep the board attached to WSL through its bootloader reboot (usbipd --auto-attach),
+        release the serial port, run the uploader, then reconnect to whichever port the board comes back on."""
+        from . import firmware_images as fi
+        from .usbip import ensure_auto_attach
+        img = fi.get(image_id)
+        if img is None:
+            return {"ok": False, "error": f"unknown firmware image '{image_id}'"}
+        t = self.flash_target(target)
+        if not fi.image_file(img, t).is_file():
+            return {"ok": False, "error": f"{img['name']} is not built for {t} yet: build it first"}
+        if self.firmware_job.running():
+            return {"ok": False, "error": f"{self.firmware_job.label} is still running"}
+        aa = ensure_auto_attach(self.log)
+        self.log("[usb] " + aa.get("message", ""))
+        if not aa.get("ok"):
+            return {"ok": False, "error": aa.get("message", "usbipd auto-attach failed") +
+                    (" " + aa["hint"] if aa.get("hint") else "")}
+        deadline = time.time() + 8.0
+        while time.time() < deadline and not any(p["likely_px4"] for p in self.list_ports_cached(0.0)):
+            time.sleep(0.25)              # an auto-attach that just started takes a moment to bring the tty up
+        with self._lock:
+            was_hitl = self.mode == "hitl"
+            if was_hitl:
+                self._close_link()
+                time.sleep(1.0)           # let the OS release the device
+        script, args, env = fi.script_call(img, t, "upload")
+        r = self.firmware_job.start(t, "upload", fi.px4_dir(img), self._venv_bin(), script=script, script_args=args,
+                                    image=image_id, label=f"flash {img['name']} to {t}", env_extra=env,
+                                    timeout_s=900 if image_id == "nose_lift" else 240)
+        if r.get("ok") and was_hitl:
+            def reconnect():
+                while self.firmware_job.running():
+                    time.sleep(1.0)
+                # the board reboots into the new image and re-enumerates, often as another ttyACM
+                end = time.time() + 25.0
+                while time.time() < end and not any(p["likely_px4"] for p in self.list_ports_cached(0.0)):
+                    time.sleep(0.5)
+                time.sleep(2.0)
+                self.log("[firmware] reconnecting to the board")
+                self.connect_hitl(None, self.baud)
+            threading.Thread(target=reconnect, daemon=True).start()
+        return r
+
+    def flash_verify(self) -> dict:
+        """What the board runs now: its version line and, when present, the nose_lift module's state."""
+        link = self.link
+        if link is None or not link.ctl_connected or self.mode != "hitl":
+            return {"ok": False, "error": "not connected to the board (Connect tab: connect over USB first)"}
+        ver = link.shell("ver all", 3.0)
+        nl = link.shell("nose_lift status", 3.0)
+        has_module = "state:" in nl
+        return {"ok": True, "firmware": link.firmware, "ver": ver.strip(), "nose_lift": nl.strip(),
+                "nose_lift_present": has_module,
+                "nl_en": (link.params.get("NL_EN") or {}).get("value")}
 
     # ------------------------------------------------------------ HITL helpers
     def recover(self) -> dict:
@@ -664,6 +793,8 @@ class ConnectionManager:
         """Re-download parameters whenever the control link (re)connects, e.g. after a reboot."""
         fetched_for = -1
         was_up = False
+        down_since = None
+        last_follow = 0.0
         while not self._stop.is_set():
             time.sleep(0.5)
             link = self.link
@@ -671,6 +802,25 @@ class ConnectionManager:
                 was_up = False
                 continue
             up = link.ctl_connected and (time.time() - link.ctl_rx_time < 3.0)
+            # HITL: a rebooting board re-enumerates, often as another ttyACM (usbipd auto-attach brings it back to
+            # WSL, but under a new name). pymavlink keeps waiting on the old path forever, so follow the board.
+            if self.mode == "hitl" and not up:
+                down_since = down_since or time.time()
+                if (time.time() - down_since > 4.0 and time.time() - last_follow > 8.0 and not self.busy
+                        and not self.firmware_job.running()):
+                    ports = [p["device"] for p in self.list_ports_cached(0.0) if p["likely_px4"]]
+                    moved = ports and self.serial not in ports
+                    if moved or (ports and time.time() - down_since > 12.0):
+                        last_follow = time.time()
+                        self.log(f"[link] board lost on {self.serial}; it is now on {ports[0]}: reconnecting"
+                                 if moved else f"[link] no data from {self.serial} for 12 s: reopening it")
+                        try:
+                            self.connect_hitl(ports[0], self.baud)
+                        except Exception as e:
+                            self.log(f"[link] reconnect failed: {e}")
+                        continue
+            else:
+                down_since = None
             if up and not was_up:
                 self._params_session += 1
             if up and fetched_for != self._params_session:

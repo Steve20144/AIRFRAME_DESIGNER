@@ -30,6 +30,7 @@ current task needs.
 - [2026-09-21 The scenario owns the parked and hover pitch](decisions/2026-09-21-scenario-owns-attitude.md)
 - [2026-09-21 Tuning lives in the app](decisions/2026-09-21-tuning-tab-in-app.md)
 - [2026-09-21 ATLAS_09B model corrections](decisions/2026-09-21-atlas-09b-model-corrections.md)
+- [2026-09-22 The nose lift runs on the flight controller](decisions/2026-09-22-nose-lift-on-the-flight-controller.md)
 
 ## Experiments
 

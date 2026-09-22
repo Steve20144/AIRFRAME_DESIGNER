@@ -344,5 +344,19 @@ class Simulator:
                 "motor_override": self.motor_override, "wind": s.wind_ned.tolist(),
                 "rotor_health": s.rotors.scale.tolist(),
                 "physics": self.physics,
-                "nose_lift": self.nose_lift.status() if self.nose_lift is not None else self.nose_lift_last,
+                "nose_lift": self._nose_lift_status(),
             }
+
+    def _nose_lift_status(self) -> dict | None:
+        """The ground sequence for the UI: the simulator's own, or the flight controller's nose_lift module when
+        the airframe runs it there (its DEBUG_VECT "NLIFT" stream, same fields)."""
+        from .nose_lift import uses_firmware
+        design = getattr(self.airframe, "design", None) or {}
+        fw = getattr(self.link, "nose_lift_fw", None) or {}
+        if uses_firmware(design) and fw and time.time() - fw.get("t", 0) < 3.0:
+            nl = design.get("nose_lift") or {}
+            abort = fw.get("abort", "none")
+            return {"state": fw.get("state"), "reason": "" if abort == "none" else abort, "pitch_deg": fw.get("pitch_deg", 0.0),
+                    "target_deg": nl.get("target_pitch_deg", self.airframe.hover_pitch_deg), "cmd": fw.get("cmd", 0.0),
+                    "motors": nl.get("motors", []), "source": "firmware"}
+        return self.nose_lift.status() if self.nose_lift is not None else self.nose_lift_last

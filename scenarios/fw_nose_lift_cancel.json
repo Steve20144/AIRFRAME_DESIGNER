@@ -1,0 +1,47 @@
+{
+  "name": "fw_nose_lift_cancel",
+  "description": "Cancelling the firmware nose lift without the kill switch: SB back to the middle while the nose is held must lower it at the lift rate to where it started, stop the motors and disarm; then a second lift loses the transmitter half way up (what the module and PX4's own radio-loss failsafe do on the ground). Needs --px4-dir ~/PX4-nl.",
+  "max_time": 200,
+  "design": {
+    "nose_lift": {
+      "executor": "firmware"
+    }
+  },
+  "params": {
+    "COM_RC_IN_MODE": 0,
+    "RC_CHAN_CNT": 18,
+    "RC_MAP_ROLL": 1,
+    "RC_MAP_PITCH": 2,
+    "RC_MAP_THROTTLE": 3,
+    "RC_MAP_YAW": 4,
+    "RC3_TRIM": 1000,
+    "RC_MAP_KILL_SW": 9,
+    "RC_KILLSWITCH_TH": 0.75,
+    "COM_DISARM_LAND": 3
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 3.0
+  },
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "rc", "name": "switch_before_arm", "channels": {"7": 1000, "9": 1000}, "duration": 1},
+    {"type": "rc", "name": "switch_back", "channels": {"7": 1500}, "duration": 1},
+
+    {"type": "rc", "name": "arm_1", "mode": "stabilized", "arm": true, "until": {"armed": true, "nl_state": "parked"}, "timeout": 30},
+    {"type": "rc", "name": "lift_1", "channels": {"7": 1000}, "until": {"nl_state": "holding"}, "timeout": 40},
+    {"type": "rc", "name": "held", "duration": 2},
+    {"type": "rc", "name": "switch_off", "channels": {"7": 1500}, "until": {"nl_state": "lowering"}, "timeout": 0.5,
+     "expect": {"nl_abort": "switch off"}},
+    {"type": "rc", "name": "lowered", "until": {"armed": false}, "timeout": 40},
+    {"type": "rc", "name": "at_park", "until": {"pitch_deg": 4.0, "tol": 2.5, "motors_off": true}, "timeout": 3},
+
+    {"type": "rc", "name": "arm_2", "mode": "stabilized", "arm": true, "until": {"armed": true, "nl_state": "parked"}, "timeout": 30},
+    {"type": "rc", "name": "lift_2", "channels": {"7": 1000}, "until": {"nl_state": "ramping"}, "timeout": 5},
+    {"type": "rc", "name": "rising", "duration": 3},
+    {"type": "rc", "name": "radio_lost", "radio": "off", "until": {"nl_state": ["lowering", "aborted", "disarmed"]}, "timeout": 2},
+    {"type": "rc", "name": "after_radio_loss", "until": {"armed": false}, "timeout": 40},
+    {"type": "rc", "name": "radio_back", "radio": "on", "channels": {"7": 1500}, "duration": 2}
+  ]
+}

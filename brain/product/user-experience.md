@@ -14,8 +14,21 @@
 
 ## Important Interactions
 
-- Tabs: Geometry, PX4, Optimize, Batch, Tuning, Flight, Connect. The Flight tab holds modes, wind, noise, the nose
-  lift card and motor overrides; Batch holds the generic scenario and study runners; Tuning is the tuning loop.
+- Controller tab (2026-09-22): a RadioMaster T8L drawing (SA, SD push buttons; SB, SC 3-position; SE 2-position on
+  the back; S1 dial) with live sticks and switches. Learn watches every channel for 6 s while the pilot moves one
+  control; each control gets a function (emergency stop, arm, flight mode per position, staged takeoff = the
+  nose-lift switch, return, hold; staged landing listed but not on the flight controller yet). The plan shows the
+  exact PX4 parameters (thresholds from RCn_MIN/TRIM/MAX/REV as rc_update computes them, mode slots 1-6, clears a
+  function left on a channel that now does something else, COM_KILL_DISARM 0 for the kill, COM_ARM_SWISBTN for a
+  button) and Write to board sets and saves them. Learned channels live in ~/.airframe_designer/controller.json.
+  Embedded browsers answer window.confirm() with cancel: confirmations are a second click (confirmClick).
+- Tabs: Geometry, PX4, Optimize, Batch, Tuning, Flight, Connect, Controller, Flash. The Flight tab holds modes, wind, noise, the
+  nose lift card and motor overrides; Batch holds the generic scenario and study runners; Tuning is the tuning loop.
+- Flash tab (2026-09-22, `px4/firmware_images.py`, `/api/flash*`): board and USB state, one card per image (Nose
+  lift from `~/PX4-nl`, HITL stock from `~/PX4-hitl`) with Build and Flash, a progress bar and the job's full output
+  streamed live; flashing starts `usbipd attach --auto-attach` (the bootloader is a new USB device), releases the
+  serial port and reconnects to whichever ttyACM the board comes back on. "Check the board" runs `ver all` and
+  `nose_lift status`. Stop is refused while the board is being written.
 - Tuning attempt card: name, scenario, physics, seed, Park and Hover pitch overrides (placeholders show the
   scenario's own values), PX4 parameter table prefilled with the current gains, Run headless / Fly live / Apply.
 - Sweep card: parameter, min, max, levels rows; runs = product of levels; progress and best score while running.

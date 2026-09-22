@@ -6,6 +6,18 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8090", "--directory", "results"],
       "port": 8090
+    },
+    {
+      "name": "app",
+      "runtimeExecutable": "wsl",
+      "runtimeArgs": ["-d", "Ubuntu-24.04", "--", "bash", "-lc", "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --mode auto --launch-px4 --airframe airframes/atlas_09b.json --no-browser"],
+      "port": 8080
+    },
+    {
+      "name": "app-nose-lift-fw",
+      "runtimeExecutable": "wsl",
+      "runtimeArgs": ["-d", "Ubuntu-24.04", "--", "bash", "-lc", "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --airframe airframes/atlas_09b.json --px4-dir ~/PX4-nl --px4-instance 4 --http 127.0.0.1:8091 --no-browser"],
+      "port": 8091
     }
   ]
 }

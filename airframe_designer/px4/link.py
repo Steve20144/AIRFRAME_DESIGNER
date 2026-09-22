@@ -31,6 +31,13 @@ from pymavlink.dialects.v20 import common as mavlink  # noqa: E402
 PARAM_TYPE_INT32 = mavlink.MAV_PARAM_TYPE_INT32
 PARAM_TYPE_REAL32 = mavlink.MAV_PARAM_TYPE_REAL32
 
+# NoseLift::State and NoseLift::Abort of the nose_lift PX4 module (firmware/px4_ext), in enum order; the module
+# streams them as DEBUG_VECT "NLIFT" with x = state + abort / 100
+NOSE_LIFT_STATES = ("disabled", "disarmed", "parked", "ramping", "holding", "handover", "flying", "lowering", "aborted")
+NOSE_LIFT_ABORTS = ("none", "kill switch", "switch off", "radio lost", "attitude lost", "roll limit", "overshoot",
+                    "left the ground", "lift timeout", "motors cannot hold the nose", "hold timeout", "lowering timeout")
+DEBUG_VECT_ID = 250
+
 
 def _float_to_int_bits(f: float) -> int:
     return struct.unpack("<i", struct.pack("<f", f))[0]
@@ -92,6 +99,8 @@ class PX4Link:
         self.rc: dict = {}                   # RC_CHANNELS from the autopilot
         self.board_att: dict = {}            # ATTITUDE as PX4 estimates it (in its own, possibly rotated, frame)
         self.manual_last: dict = {}          # last MANUAL_CONTROL we sent (USB joystick)
+        self.rc_override_last: dict = {}     # last RC_CHANNELS_OVERRIDE we sent (scripted transmitter)
+        self.nose_lift_fw: dict = {}         # the nose_lift PX4 module's state (DEBUG_VECT "NLIFT")
         self._shell_buf = bytearray()
         self._shell_lock = threading.Lock()
         self.recent_events = deque(maxlen=60)
@@ -215,6 +224,17 @@ class PX4Link:
                                              0, 0, *[c(v) for v in aux])
         self.manual_last = {"roll": roll, "pitch": pitch, "throttle": throttle, "yaw": yaw, "buttons": int(buttons),
                             "aux": aux, "t": time.time()}
+
+    def send_rc_override(self, channels: list[int]) -> None:
+        """MAVLink RC_CHANNELS_OVERRIDE: a transmitter as PX4's rc_update sees it (input_rc), so its switches
+        (mode, arm, kill, the nose-lift switch the flight controller reads itself) work as on the real radio.
+        ``channels``: up to 18 pulse widths in us; the rest are sent as "ignore"."""
+        v = [int(max(0, min(65535, round(c)))) for c in list(channels)[:18]]
+        v += [65535] * max(0, 8 - len(v))        # channels 1-8: UINT16_MAX = ignore; 9-18: 0 = ignore
+        v += [0] * (18 - len(v))
+        with self._ctl_lock:
+            self.ctl.mav.rc_channels_override_send(self.target_system, self.target_component, *v)
+        self.rc_override_last = {"channels": v, "t": time.time()}
 
     # ---------------------------------------------------------- scripted flight helpers (all non-blocking)
     # PX4 custom mode encoding: main_mode << 16 | sub_mode << 24
@@ -417,6 +437,14 @@ class PX4Link:
                 self.firmware = {"version": f"{ver} {typ}".strip(), "git": gh, "board": msg.board_version,
                                  "vendor_id": msg.vendor_id, "product_id": msg.product_id}
                 self.log(f"[link] firmware PX4 v{ver} {typ} ({gh})")
+            elif t == "DEBUG_VECT":
+                key = msg.name if isinstance(msg.name, str) else msg.name.decode(errors="ignore")
+                if key.rstrip("\x00") == "NLIFT":         # the nose_lift PX4 module (firmware/px4_ext)
+                    code = float(msg.x)
+                    st = int(code + 1e-3)
+                    self.nose_lift_fw = {"state": NOSE_LIFT_STATES[st] if 0 <= st < len(NOSE_LIFT_STATES) else str(st),
+                                         "abort": NOSE_LIFT_ABORTS[min(int(round((code - st) * 100)), len(NOSE_LIFT_ABORTS) - 1)],
+                                         "pitch_deg": float(msg.y), "cmd": float(msg.z), "t": time.time()}
             elif t == "STATUSTEXT":
                 text = msg.text if isinstance(msg.text, str) else msg.text.decode(errors="ignore")
                 self.statustext.append((time.time(), msg.severity, text))

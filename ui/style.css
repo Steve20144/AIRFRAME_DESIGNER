@@ -405,3 +405,32 @@ table.grid.tune .x:hover { color: var(--red); }
 #cad-table tr[data-cad] { cursor: pointer; }
 #cad-table td.pos { white-space: pre; font-variant-numeric: tabular-nums; font-size: 12px; }
 #cad-table input[type=number] { width: 64px; }
+
+/* ---------------------------------------------------------------- Flash tab */
+.flash-progress { height: 8px; background: var(--soft-2); border-radius: 4px; overflow: hidden; margin: 10px 0 2px; }
+#flash-bar { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
+#flash-bar.done { background: var(--green); } #flash-bar.failed { background: var(--red); }
+pre.flash-log { max-height: 420px; min-height: 120px; }
+.fw-card .fw-meta { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-top: 4px; word-break: break-all; }
+.fw-card .fw-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.fw-card.onboard { box-shadow: inset 3px 0 0 var(--green); }
+
+/* ---------------------------------------------------------------- Controller tab */
+#ctl-drawing svg { width: 100%; max-width: 560px; height: auto; display: block; margin: 8px auto; }
+#ctl-drawing .body { fill: var(--soft); stroke: var(--text-3); stroke-width: 1.5; }
+#ctl-drawing .stick-well { fill: var(--soft-2); stroke: var(--text-3); stroke-width: 1; }
+#ctl-drawing .stick-dot { fill: var(--accent); }
+#ctl-drawing .ctl { cursor: pointer; }
+#ctl-drawing .ctl rect, #ctl-drawing .ctl circle.knob { fill: var(--soft-2); stroke: var(--text-3); stroke-width: 1.2; }
+#ctl-drawing .ctl.active rect, #ctl-drawing .ctl.active circle.knob { fill: var(--accent); stroke: var(--accent); }
+#ctl-drawing .ctl.selected rect, #ctl-drawing .ctl.selected circle.knob { stroke: var(--amber); stroke-width: 2.5; }
+#ctl-drawing text { fill: var(--text-2); font-size: 11px; font-family: var(--mono); }
+#ctl-drawing text.fn { fill: var(--text-3); font-size: 9.5px; font-family: inherit; }
+#ctl-drawing text.lbl { font-weight: 700; fill: var(--text); }
+#ctl-table table { width: 100%; border-collapse: collapse; }
+#ctl-table td, #ctl-table th { padding: 5px 6px; border-bottom: 1px solid var(--soft-2); text-align: left; vertical-align: top; font-size: 12.5px; }
+#ctl-table tr.selected td { background: var(--soft); }
+#ctl-table .lvl { display: inline-block; min-width: 38px; padding: 1px 5px; margin: 1px; border-radius: 5px; background: var(--soft-2); font-family: var(--mono); font-size: 11px; text-align: center; }
+#ctl-table .lvl.now { background: var(--accent); color: #fff; }
+#ctl-table select { max-width: 230px; }
+.ctl-live { font-family: var(--mono); font-size: 11.5px; }
