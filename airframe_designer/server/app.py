@@ -827,6 +827,7 @@ def build_app(state: AppState) -> FastAPI:
         true): that makes the switch a complete takeoff sequence. Edge-triggered, so a switch that is already on
         at start does nothing."""
         last: bool | None = None
+        land_last: bool | None = None
         takeoff_sent = False
         while True:
             time.sleep(0.1)
@@ -834,14 +835,37 @@ def build_app(state: AppState) -> FastAPI:
                 d = (getattr(sim.airframe, "design", None) or {}).get("nose_lift") or {}
                 ch = int(d.get("rc_channel") or 0)
                 if ch <= 0:
-                    last = None
+                    last = None; land_last = None
                     continue
                 rc = getattr(state.link, "rc", {}) or {}
                 vals = rc.get("channels") or []
                 if not rc or time.time() - rc.get("t", 0) > 1.0 or ch > len(vals):
                     continue
                 v = float(vals[ch - 1])
-                high = v < float(d.get("rc_threshold", 1500)) if d.get("rc_active_low") else v > float(d.get("rc_threshold", 1500))
+                thr = float(d.get("rc_threshold", 1500))
+                high = v < thr if d.get("rc_active_low") else v > thr
+                # the other end of a three-position switch is the landing rotation (nose down onto the front leg):
+                # mirror of the takeoff threshold about 1500 unless rc_land_threshold says otherwise
+                lthr = float(d.get("rc_land_threshold", 3000 - thr))
+                land = v > lthr if d.get("rc_active_low") else v < lthr
+                if land_last is None:
+                    land_last = land
+                elif land and not land_last:
+                    dl = (getattr(sim.airframe, "design", None) or {}).get("nose_lower") or {}
+                    motors = [int(m) for m in dl.get("motors") or d.get("motors") or []]
+                    if sim.nose_lift is not None and getattr(sim.nose_lift, "kind", "lift") == "lift" and not link.armed:
+                        sim.stop_nose_lift()
+                    if link.armed or not sim.sim.on_ground:
+                        state.log(f"[rc] channel {ch} land position while flying: the nose lowers by itself on touchdown"
+                                  if dl.get("enabled", True) else f"[rc] channel {ch} land position while flying: ignored")
+                    elif not motors:
+                        state.log(f"[rc] channel {ch} land position but no nose motors chosen")
+                    else:
+                        sim.start_nose_lower(motors, float(dl.get("target_pitch_deg", sim.airframe.landed_pitch_deg)),
+                                             rate_deg_s=float(dl.get("rate_deg_s", 3)), fade_s=float(dl.get("fade_s", 4)),
+                                             wait_touchdown=False)
+                        state.log(f"[rc] channel {ch} land position: lowering the nose to {sim.airframe.landed_pitch_deg:g} deg")
+                land_last = land
                 if last is None:
                     last = high
                     continue

@@ -40,6 +40,7 @@ current task needs.
 - [2026-09-21 ATLAS_OG flat gain sweeps and confirmation](experiments/2026-09-21-atlas-og-flat-gain-sweeps.md)
 - [2026-09-21 ATLAS_09B: from import to the tuned sequence](experiments/2026-09-21-atlas-09b-sequence-tuning.md)
 - [2026-09-21 ATLAS_09B rounds 4 and 5: the yaw loop and the hands-off drift](experiments/2026-09-21-atlas-09b-yaw-rounds.md)
+- [2026-09-21 First piloted HITL session](experiments/2026-09-21-hitl-pilot-session.md): RC setup, integrator wind-up on the legs, hover thrust, stick scale
 
 ## Research
 
@@ -74,7 +75,7 @@ pitch, rotate back; first in SITL, then HITL on the Pixhawk 6X Pro, then the rea
 
 ## Current Phase
 
-SITL tuning complete for two models; HITL verification next.
+SITL tuning complete for two models; piloted HITL started 2026-09-21 (see the HITL session note).
 
 - ATLAS_OG with flat nose brackets (`airframes/atlas_og_flat.json`): tuned and confirmed hands-off in Stabilized.
 - ATLAS_09B (imported from upstream, corrected, `airframes/atlas_09b.json`): flies the full sequence with the softened

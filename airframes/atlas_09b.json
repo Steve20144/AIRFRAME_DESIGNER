@@ -363,9 +363,9 @@
   "px4_overrides": {
     "MIS_TAKEOFF_ALT": 1,
     "MPC_TKO_RAMP_T": 0.20000000298023224,
-    "MPC_THR_HOVER": 0.4,
+    "MPC_THR_HOVER": 0.32,
     "MC_AIRMODE": 1,
-    "MPC_MAN_Y_MAX": 150,
+    "MPC_MAN_Y_MAX": 60,
     "MC_YAWRATE_I": 0.02,
     "CA_ROTOR0_CT": 6.5,
     "CA_ROTOR1_CT": 6.5,
@@ -378,7 +378,7 @@
     "IMU_INTEG_RATE": 250,
     "SENS_MAG_AUTOCAL": 0,
     "MC_PITCHRATE_P": 0.45,
-    "MC_PITCHRATE_I": 0.3,
+    "MC_PITCHRATE_I": 0.0,
     "MC_PITCHRATE_D": 0.012,
     "MC_PITCH_P": 5.0,
     "MC_ROLLRATE_P": 0.6,
@@ -388,12 +388,13 @@
     "MPC_VEL_MANUAL": 10,
     "MPC_ACC_HOR": 3,
     "MPC_ACC_HOR_MAX": 5,
-    "MC_YAWRATE_MAX": 30,
-    "MC_YAW_P": 1.0,
-    "MC_YAWRATE_P": 0.065,
+    "MC_YAWRATE_MAX": 60,
+    "MC_YAW_P": 2.8,
+    "MC_YAWRATE_P": 0.15,
     "MC_YAW_WEIGHT": 0.4,
     "COM_DISARM_LAND": 120,
-    "THR_MDL_FAC": 1.0
+    "THR_MDL_FAC": 1.0,
+    "MPC_MAN_TILT_MAX": 12
   },
   "design": {
     "cruise_speed_kmh": 50,
@@ -487,7 +488,7 @@
       "rc_channel": 7,
       "rc_threshold": 1300,
       "rc_active_low": true,
-      "rc_takeoff": true
+      "rc_takeoff": false
     },
     "nose_lower": {
       "enabled": true,
@@ -500,7 +501,7 @@
       "fade_s": 4
     }
   },
-  "notes": "Imported 2026-09-21 from rasmushauschild/AIRFRAME_DESIGNER commit 83ba06a (airframes/atlas_09b.json). Mass, CG and inertia come from that repo's CAD body model of PHASE_0_V4 (89 bodies, per-body masses); the 'cad' block is kept for reference but this checkout has no STEP viewer, and the CAD-derived mass model is not re-resolved here. Removed on import because this checkout's PX4 export and firmware do not have them: ['NLF_ENABLE', 'NLF_LAND_ANG', 'NLF_MANUAL', 'NLF_RC_THR', 'PWM_AUX_FUNC1', 'PWM_AUX_FUNC2', 'PWM_MAIN_FUNC1', 'PWM_MAIN_FUNC2', 'PWM_MAIN_FUNC3', 'PWM_MAIN_FUNC4', 'PWM_MAIN_FUNC5', 'PWM_MAIN_FUNC6', 'PWM_MAIN_FUNC7', 'PWM_MAIN_FUNC8']. Ground sequences added here (design.nose_lift / nose_lower, front fans M9 M10): the tricycle stand lands on the rear legs first and the nose must be lowered onto the nose leg, as upstream's NLF firmware module does. THR_MDL_FAC 1.0 added here: the fans are quadratic (thrust_exponent 2) and without it PX4 mixes as if they were linear, which left a pitch torque bias the integrator had to trim and a nose-up kick at every liftoff; MPC_THR_HOVER 0.40 is the matching hover thrust fraction. Corrections after import: M7's axis set equal to its mirror M8 (the imported file had the left inner fan at 30 deg and the right at 40, which put a 2 Nm roll/yaw bias into every hover); km 0.002 on all fans (the ATLAS_OG file value; with the imported 0.01 PX4's pseudo-inverse hover mix needs negative thrust on three fans, and even at 0.004 it pins a foil fan at idle and leaves no nose-up authority, so PX4 hovers 1.7 deg nose-down); hover pitch 24 (with km 0.002 the mix has 2.7 Nm of pitch authority each way there, against 0 nose-up at 25). The reaction-torque coefficient dominates this aircraft's controllability and is an estimate: measure it on a thrust stand before trusting any of this on hardware. Parked pitch +4 (stand re-solved under the same hard points, rear feet arm kept): from the imported -12 deg park the two nose fans have only 5 percent moment margin over gravity about the rear feet and the lift stalls; at +4 the margin is 19 percent. Tuned 2026-09-21 in the Stabilized lab sequence (results/09b_pitch_1, 09b_rates_1, 09b_roll_2): roll rate P 0.6 (from 0.5), pitch rate P 0.45, rate I 0.3, rate D 0.012, roll attitude P 3, pitch attitude P 5 (from 3). A 0.25 deg roll bias and 0.2 to 0.3 m/s of drift remain in a hands-off hover: yaw authority is 0.3 Nm with all fans spinning the same way, the yaw axis sits at saturation and couples into roll; no gain removes it, the pilot trims it. Yaw loop softened 2026-09-21 (rounds 09b_yaw_4 / 09b_yaw_5 and confirmation over seeds 2-4 and JSBSim): MC_YAW_P 1.0, MC_YAWRATE_MAX 30, MC_YAWRATE_P 0.065, MC_YAWRATE_I 0.02, MC_ROLL_P 5. With ten same-spin fans the mix has about 0.3 Nm of yaw authority one way; at liftoff the heading swings 10 to 15 deg uncommanded, the yaw loop saturates the allocator and PX4 freezes the roll and pitch integrators, so the aircraft picks up 0.2 to 0.3 m/s it then holds hands-off. Softer yaw halves the standing roll bias (0.40 to 0.12 deg) and the 12 s hands-off drift (3.7 to 1.8 m) at the cost of 1 to 2 deg of heading wander. MC_YAW_WEIGHT does nothing here; hover 22 or 23 is much worse (1.5 deg pitch bias). Counter-rotating fans would remove the cause.",
+  "notes": "Imported 2026-09-21 from rasmushauschild/AIRFRAME_DESIGNER commit 83ba06a (airframes/atlas_09b.json). Mass, CG and inertia come from that repo's CAD body model of PHASE_0_V4 (89 bodies, per-body masses); the 'cad' block is kept for reference but this checkout has no STEP viewer, and the CAD-derived mass model is not re-resolved here. Removed on import because this checkout's PX4 export and firmware do not have them: ['NLF_ENABLE', 'NLF_LAND_ANG', 'NLF_MANUAL', 'NLF_RC_THR', 'PWM_AUX_FUNC1', 'PWM_AUX_FUNC2', 'PWM_MAIN_FUNC1', 'PWM_MAIN_FUNC2', 'PWM_MAIN_FUNC3', 'PWM_MAIN_FUNC4', 'PWM_MAIN_FUNC5', 'PWM_MAIN_FUNC6', 'PWM_MAIN_FUNC7', 'PWM_MAIN_FUNC8']. Ground sequences added here (design.nose_lift / nose_lower, front fans M9 M10): the tricycle stand lands on the rear legs first and the nose must be lowered onto the nose leg, as upstream's NLF firmware module does. THR_MDL_FAC 1.0 added here: the fans are quadratic (thrust_exponent 2) and without it PX4 mixes as if they were linear, which left a pitch torque bias the integrator had to trim and a nose-up kick at every liftoff; MPC_THR_HOVER 0.40 is the matching hover thrust fraction. Corrections after import: M7's axis set equal to its mirror M8 (the imported file had the left inner fan at 30 deg and the right at 40, which put a 2 Nm roll/yaw bias into every hover); km 0.002 on all fans (the ATLAS_OG file value; with the imported 0.01 PX4's pseudo-inverse hover mix needs negative thrust on three fans, and even at 0.004 it pins a foil fan at idle and leaves no nose-up authority, so PX4 hovers 1.7 deg nose-down); hover pitch 24 (with km 0.002 the mix has 2.7 Nm of pitch authority each way there, against 0 nose-up at 25). The reaction-torque coefficient dominates this aircraft's controllability and is an estimate: measure it on a thrust stand before trusting any of this on hardware. Parked pitch +4 (stand re-solved under the same hard points, rear feet arm kept): from the imported -12 deg park the two nose fans have only 5 percent moment margin over gravity about the rear feet and the lift stalls; at +4 the margin is 19 percent. Tuned 2026-09-21 in the Stabilized lab sequence (results/09b_pitch_1, 09b_rates_1, 09b_roll_2): roll rate P 0.6 (from 0.5), pitch rate P 0.45, rate I 0.3, rate D 0.012, roll attitude P 3, pitch attitude P 5 (from 3). A 0.25 deg roll bias and 0.2 to 0.3 m/s of drift remain in a hands-off hover: yaw authority is 0.3 Nm with all fans spinning the same way, the yaw axis sits at saturation and couples into roll; no gain removes it, the pilot trims it. Yaw loop softened 2026-09-21 (rounds 09b_yaw_4 / 09b_yaw_5 and confirmation over seeds 2-4 and JSBSim): MC_YAW_P 1.0, MC_YAWRATE_MAX 30, MC_YAWRATE_P 0.065, MC_YAWRATE_I 0.02, MC_ROLL_P 5. With ten same-spin fans the mix has about 0.3 Nm of yaw authority one way; at liftoff the heading swings 10 to 15 deg uncommanded, the yaw loop saturates the allocator and PX4 freezes the roll and pitch integrators, so the aircraft picks up 0.2 to 0.3 m/s it then holds hands-off. Softer yaw halves the standing roll bias (0.40 to 0.12 deg) and the 12 s hands-off drift (3.7 to 1.8 m) at the cost of 1 to 2 deg of heading wander. MC_YAW_WEIGHT does nothing here; hover 22 or 23 is much worse (1.5 deg pitch bias). Counter-rotating fans would remove the cause. HITL pilot attempt 2026-09-21 (results/hitl/attempt1.jsonl): set A's yaw loop let the heading spin at 31 deg/s under a pilot's large tilts, so yaw is back to MC_YAW_P 2.8 / MC_YAWRATE_P 0.15 / MC_YAWRATE_MAX 60; MPC_MAN_Y_MAX 60 and MPC_MAN_TILT_MAX 12 size the sticks for an indoor hover (full stick = 12 deg tilt). MC_PITCHRATE_I 0 (HITL 2026-09-21, reproduced in SITL with scenarios/stab_slowlift_probe.json): a pilot's slow throttle ramp lets the pitch rate integrator wind up while the aircraft sits on its legs near hover thrust; airborne it never unwinds and the aircraft holds a nose-up offset equal to the integrator limit (5 deg at MC_PR_INT_LIM 0.3, 2.7 at 0.1), drifting backward at 3 m/s. With I 0 the brisk liftoff still tracks to 0.24 deg. MPC_THR_HOVER 0.32 measured from the HITL flight (mid stick hovers).",
   "mesh": {},
   "cad": {
     "file": "airframes/cad/PHASE_0_V4.step",
