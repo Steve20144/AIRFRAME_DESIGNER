@@ -39,9 +39,20 @@ done
 # timestamps confuse make
 EXT="$PX4_DIR/airframe_designer_ext"
 rsync -a --delete "$HERE/firmware/px4_ext/" "$EXT/"
+# PX4 regenerates parameters.xml (and px4_parameters.hpp) only when a params.c under its own src/ changes, not ours:
+# a new NL_* parameter then fails with "'NL_...' is not a member of 'px4::params'". Drop the generated file of the
+# build being made whenever our params.c differ from what it was generated from.
+params_stale() {  # $1: build directory
+  local sum; sum="$(find "$EXT" -name params.c -exec md5sum {} + | sort | md5sum)"
+  if [ "$sum" != "$(cat "$1/.nose_lift_params.md5" 2>/dev/null)" ]; then
+    rm -f "$1/parameters.xml"
+    mkdir -p "$1" && echo "$sum" > "$1/.nose_lift_params.md5"
+  fi
+}
 
 case "$TARGET_KIND" in
   sitl)
+    params_stale build/px4_sitl_default
     make px4_sitl_default EXTERNAL_MODULES_LOCATION="$EXT"
     echo
     echo "SITL: $PX4_DIR/build/px4_sitl_default/bin/px4   (run the app or 'run' with PX4_DIR=$PX4_DIR or --px4-dir)"
@@ -50,6 +61,7 @@ case "$TARGET_KIND" in
     CFG="boards/${BOARD/_//}/$VARIANT.px4board"
     grep -q "CONFIG_MODULES_SIMULATION_PWM_OUT_SIM=y" "$CFG" || echo "CONFIG_MODULES_SIMULATION_PWM_OUT_SIM=y" >> "$CFG"
     TARGET="${BOARD}_${VARIANT}"
+    params_stale "build/$TARGET"
     make "$TARGET" EXTERNAL_MODULES_LOCATION="$EXT"
     OUT="build/$TARGET/$TARGET.px4"
     echo

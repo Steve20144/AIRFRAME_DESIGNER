@@ -20,6 +20,7 @@ class RotorSet:
         self.km = np.array([r.km for r in rotors], float)
         self.tmax = np.array([r.effective_max_thrust() for r in rotors], float)
         self.tau = np.array([max(r.tau, 1e-3) for r in rotors], float)
+        self.tau_down = np.array([max(getattr(r, "tau_down", 0.0) or r.tau, 1e-3) for r in rotors], float)
         self.exponent = np.array([r.thrust_exponent for r in rotors], float)
         self.square = bool(self.n and np.all(np.abs(self.exponent - 2.0) < 1e-9))
         self.ram = np.array([bool(r.ram_drag) for r in rotors], bool)
@@ -32,6 +33,11 @@ class RotorSet:
         self.MA = np.cross(self.r, self.axis) - self.km[:, None] * self.axis   # moment per unit thrust
         self.power_coef = np.where(self.ducted, 1.0 / (2 * np.sqrt(RHO * np.maximum(self.area, 1e-9))),
                                    1.0 / np.sqrt(2 * RHO * np.maximum(self.area, 1e-9)))
+
+    def spool(self, omega: np.ndarray, cmd: np.ndarray, dt: float) -> np.ndarray:
+        """First-order fan speed response: tau spinning up, tau_down spinning down."""
+        tau = np.where(cmd < omega, self.tau_down, self.tau)
+        return np.clip(omega + (cmd - omega) / tau * dt, 0.0, 1.0)
 
     def thrust(self, omega: np.ndarray) -> np.ndarray:
         om = np.clip(omega, 0.0, 1.0)

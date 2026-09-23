@@ -100,9 +100,8 @@ class RigidBody:
         F_ned, M_body, thrust, on_ground, feet, R, bd = self._forces(self.pos, self.vel, self.q, self.rates, self.omega, detail, dt)
         acc = F_ned / self.mass
         ang_acc = self.I_inv @ (M_body - cross3(self.rates, self.I @ self.rates))
-        d_omega = (self.cmd - self.omega) / self.rotors.tau
         vel_before = self.vel
-        self.omega = np.clip(self.omega + d_omega * dt, 0.0, 1.0)
+        self.omega = self.rotors.spool(self.omega, self.cmd, dt)
         self.vel = vel_before + acc * dt
         self.pos = self.pos + self.vel * dt
         self.rates = self.rates + ang_acc * dt

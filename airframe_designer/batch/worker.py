@@ -57,7 +57,8 @@ def run_once(airframe, scenario, *, variables: dict | None = None, px4_dir: str 
              speed: float = 0.0, rate: float = 250.0, substeps: int = 2, home: Home | None = None, noise: bool = True,
              seed: int = 1, timeout_wall: float = 600.0, connect_timeout: float = 40.0, log=None, quiet: bool = True,
              px4_model: str = "none_iris", extra_params: dict | None = None, timeseries_path: str | None = None,
-             workdir: str | None = None, task_id: str | None = None, physics: str = "python") -> dict:
+             workdir: str | None = None, task_id: str | None = None, physics: str = "python",
+             vibration: list[float] | None = None) -> dict:
     """Run ``scenario`` on ``airframe`` (path, dict or Airframe), optionally with parameter-path ``variables``
     applied first. Returns {"ok", "status", "failures", "metrics", "timing", "airframe", ...}."""
     t_wall0 = time.perf_counter()
@@ -106,6 +107,8 @@ def run_once(airframe, scenario, *, variables: dict | None = None, px4_dir: str 
         simr = Simulator(af, link, sensor_rate=rate, physics_substeps=substeps, speed=speed, lockstep=True, home=home,
                          log=_log, seed=seed, physics=physics)
         simr.sensors.noise.enabled = bool(noise)
+        if vibration:  # gyro shake at full fan speed, rad/s per body axis (SensorNoise.vib_gyro)
+            simr.sensors.noise.vib_gyro = [float(v) for v in vibration]
         metrics = MetricsRecorder()
         runner = ScenarioRunner(sc, link, log=_log, metrics=metrics)
         simr.hooks.append(runner)

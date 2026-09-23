@@ -37,6 +37,10 @@ class SensorNoise:
     gps_vel: float = 0.03     # m/s std
     accel_bias: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     gyro_bias: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    # airframe vibration seen by the gyro: two tones (Hz) summed, rad/s amplitude per body axis at full fan speed,
+    # scaled by the fastest fan's actual (lagged) speed. ATLAS_09B on its legs: ~0.35 rad/s pitch at 5-10 Hz
+    vib_freqs: list[float] = field(default_factory=lambda: [5.4, 10.3])
+    vib_gyro: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     enabled: bool = True
 
 
@@ -71,11 +75,23 @@ class SensorSuite:
             return np.zeros(n)
         return self.rng.normal(0.0, std, n)
 
+    def _vibration(self, sim, time_usec: int) -> np.ndarray:
+        amp = np.asarray(self.noise.vib_gyro, float)
+        if not self.noise.enabled or not amp.any():
+            return np.zeros(3)
+        omega = getattr(sim, "omega", None)
+        level = float(np.max(omega)) if omega is not None and len(omega) else 0.0
+        t = time_usec * 1e-6
+        if not hasattr(self, "_vib_phase"):
+            self._vib_phase = self.rng.uniform(0, 2 * np.pi, (len(self.noise.vib_freqs), 3))
+        tone = sum(np.sin(2 * np.pi * f * t + self._vib_phase[i]) for i, f in enumerate(self.noise.vib_freqs))
+        return amp * level * tone / max(len(self.noise.vib_freqs), 1)
+
     # ---------------------------------------------------------- HIL_SENSOR
     def hil_sensor(self, sim, time_usec: int) -> dict:
         R = sim.rotmat
         accel = sim.accel_body + np.asarray(self.noise.accel_bias) + self._n(self.noise.accel)
-        gyro = sim.rates + np.asarray(self.noise.gyro_bias) + self._n(self.noise.gyro)
+        gyro = sim.rates + np.asarray(self.noise.gyro_bias) + self._n(self.noise.gyro) + self._vibration(sim, time_usec)
         mag = R.T @ self.mag_ned + self._n(self.noise.mag)
 
         alt = self.home.alt - sim.pos[2]

@@ -14,6 +14,18 @@
       "port": 8080
     },
     {
+      "name": "throttle-radio",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["scripts/throttle_dashboard.py", "--port", "COM6"],
+      "port": 8095
+    },
+    {
+      "name": "throttle-usb",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["scripts/throttle_dashboard.py", "--port", "COM3", "--baud", "115200", "--dev", "/dev/ttyACM0", "--http", "8096"],
+      "port": 8096
+    },
+    {
       "name": "app-nose-lift-fw",
       "runtimeExecutable": "wsl",
       "runtimeArgs": ["-d", "Ubuntu-24.04", "--", "bash", "-lc", "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --airframe airframes/atlas_09b.json --px4-dir ~/PX4-nl --px4-instance 4 --http 127.0.0.1:8091 --no-browser"],

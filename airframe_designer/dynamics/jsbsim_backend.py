@@ -299,7 +299,7 @@ class JSBSimBody:
         R = q_to_rotmat(self.q)
         v_air = R.T @ (self.vel - self.wind_ned)
         # rotor model (project): spool, thrust curve, reaction torque, ram drag
-        self.omega = np.clip(self.omega + (self.cmd - self.omega) / self.rotors.tau * dt, 0.0, 1.0)
+        self.omega = self.rotors.spool(self.omega, self.cmd, dt)
         F_r, M_r, thrust, ram = self.rotors.forces(self.omega, v_air, self.rates, detail)
         tv = thrust @ self.rotors.axis
         M_thrust = np.cross(self.rotors.r, thrust[:, None] * self.rotors.axis).sum(axis=0) if self.rotors.n else np.zeros(3)

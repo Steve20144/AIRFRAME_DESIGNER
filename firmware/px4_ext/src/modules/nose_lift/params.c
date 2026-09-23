@@ -116,6 +116,22 @@ PARAM_DEFINE_FLOAT(NL_LOW_KQ, 0.3f);
 PARAM_DEFINE_FLOAT(NL_LOW_KQI, 0.1f);
 
 /**
+ * Low-pass cutoff on the body rates the nose lift works on
+ *
+ * First-order filter on the pitch rate (and the roll and yaw rates of the split damping), against the frame's
+ * 5-10 Hz shake on its legs. 0 disables it. Off by default: in SITL with the fans' measured slow spin-down
+ * (tau 0.3 s up, 1.0 s down) a 2 Hz filter's lag raised the worst rise from 9 to 14 deg/s and the worst drop
+ * while lowering from -4 to -33 deg/s.
+ *
+ * @unit Hz
+ * @min 0
+ * @max 20
+ * @decimal 1
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_Q_LPF, 0.0f);
+
+/**
  * Roll and yaw rate damping in the thrust split
  *
  * @min 0
@@ -251,6 +267,9 @@ PARAM_DEFINE_FLOAT(NL_OVERSHOOT, 12.0f);
 
 /**
  * Height gain that counts as leaving the ground during the lift
+ *
+ * Both the height estimate (climbing faster than 0.3 m/s) and the low-passed barometric altitude must have risen
+ * this much since the lift started; the estimate alone when no baro is available.
  *
  * @unit m
  * @min 0.05

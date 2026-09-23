@@ -20,6 +20,8 @@ current task needs.
 - [Scenario runner and ground sequences](architecture/scenarios-and-ground-sequences.md): phases, the scripted pilot,
   the attitude block, nose lift and nose lower.
 - [Tuning tab](architecture/tuning-tab.md): attempts, sweeps, flight library, charts, API.
+- [Telemetry radio and throttle dashboard](architecture/telemetry-dashboard.md): SiK on TELEM3, the live dashboard,
+  per-run records, log download over the radio, PX4 stream quirks.
 
 ## Decisions
 
@@ -43,6 +45,8 @@ current task needs.
 - [2026-09-21 ATLAS_09B: from import to the tuned sequence](experiments/2026-09-21-atlas-09b-sequence-tuning.md)
 - [2026-09-21 ATLAS_09B rounds 4 and 5: the yaw loop and the hands-off drift](experiments/2026-09-21-atlas-09b-yaw-rounds.md)
 - [2026-09-21 First piloted HITL session](experiments/2026-09-21-hitl-pilot-session.md): RC setup, integrator wind-up on the legs, hover thrust, stick scale
+- [2026-09-23 Firmware nose lift on the real aircraft](experiments/2026-09-23-aircraft-nose-lift-bench-runs.md): two
+  fans, props on; false aborts fixed, sim gains failed, G4 set, rate filter rejected, fan response still unmodelled
 
 ## Research
 
@@ -61,6 +65,8 @@ current task needs.
 - [Stands, pivots and lift margin](lessons/stands-and-lift-margin.md)
 - [Reaction torque decides controllability](lessons/reaction-torque-km.md)
 - [Environment and process gotchas](lessons/environment-gotchas.md)
+- [A PX4 module must read the clock after copying its messages](lessons/px4-module-clock-before-copy.md)
+- [Fan vibration drifts the EKF height on the ground](lessons/fan-vibration-drifts-ekf-height.md)
 
 ## Inbox
 
@@ -77,7 +83,10 @@ pitch, rotate back; first in SITL, then HITL on the Pixhawk 6X Pro, then the rea
 
 ## Current Phase
 
-SITL tuning complete for two models; piloted HITL started 2026-09-21 (see the HITL session note).
+SITL tuning complete for two models; piloted HITL started 2026-09-21 (see the HITL session note). Bench runs of the
+firmware nose lift on the real aircraft started 2026-09-22 (two nose fans, props on, see the aircraft-runs note):
+the nose rises from a +2 deg park with the G4 gains, but the fans' slow response makes the rise and the lowering
+jerky, and the model does not reproduce it yet.
 
 - ATLAS_OG with flat nose brackets (`airframes/atlas_og_flat.json`): tuned and confirmed hands-off in Stabilized.
 - ATLAS_09B (imported from upstream, corrected, `airframes/atlas_09b.json`): flies the full sequence with the softened
@@ -88,6 +97,9 @@ SITL tuning complete for two models; piloted HITL started 2026-09-21 (see the HI
 
 ## Current Priorities
 
+0. Aircraft nose lift: measure the nose fans' step response on the bench, fit the model (`tau`, `tau_down`), re-tune
+   the lift gains in SITL; fix the lowering fade; make the app export carry the board's gains. Keep raises short
+   (SB off by ~10 deg) until then.
 1. HITL session on the board with `atlas_og_flat.params` (or `atlas_09b.params`), comparing against the SITL
    confirmation numbers in the experiments notes.
 2. Measure the fans' reaction-torque coefficient on a thrust stand; it decides ATLAS_09B's controllability. Ask

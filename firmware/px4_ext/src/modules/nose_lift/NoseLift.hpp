@@ -43,6 +43,7 @@
 #include <uORB/topics/nose_lift_feedback.h>
 #include <uORB/topics/nose_lift_output.h>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/vehicle_air_data.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_command.h>
@@ -107,7 +108,8 @@ private:
 	float motor_thrust(float command) const;
 	float motor_command(float thrust) const;
 	float throttle() const;
-	bool lifted_off();
+	bool lifted_off(hrt_abstime now);
+	void update_baro();
 
 	void try_start(hrt_abstime now);
 	void step_sequence(hrt_abstime now, float dt, bool kill);
@@ -132,6 +134,7 @@ private:
 	uORB::Subscription _manual_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Subscription _rc_sub{ORB_ID(input_rc)};
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
+	uORB::Subscription _air_sub{ORB_ID(vehicle_air_data)};
 	uORB::Subscription _status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _feedback_sub{ORB_ID(nose_lift_feedback)};
 
@@ -142,6 +145,7 @@ private:
 	manual_control_setpoint_s _manual{};
 	input_rc_s _rc{};
 	vehicle_local_position_s _lpos{};
+	vehicle_air_data_s _air{};
 	vehicle_status_s _status{};
 	nose_lift_feedback_s _feedback{};
 
@@ -187,6 +191,11 @@ private:
 	float _fade_from{0.f};
 	float _z0{NAN};
 	uint8_t _z_reset_counter{0};
+	matrix::Vector3f _w_f{};	// [rad/s] low-passed body rates in the structural frame
+	hrt_abstime _rate_t{0};		// sample time of the last rate used
+	float _baro_f{NAN};		// [m] low-passed barometric altitude
+	float _baro0{NAN};		// [m] ... at the start of the lift
+	hrt_abstime _baro_t{0};		// sample time of the last baro update
 	bool _fading{false};
 	const char *_fade_reason{""};
 
@@ -214,6 +223,7 @@ private:
 		(ParamFloat<px4::params::NL_ROLL_MAX>) _param_nl_roll_max,
 		(ParamFloat<px4::params::NL_OVERSHOOT>) _param_nl_overshoot,
 		(ParamFloat<px4::params::NL_LIFT_DZ>) _param_nl_lift_dz,
+		(ParamFloat<px4::params::NL_Q_LPF>) _param_nl_q_lpf,
 		(ParamInt<px4::params::NL_RC_CH>) _param_nl_rc_ch,
 		(ParamInt<px4::params::NL_RC_TH>) _param_nl_rc_th,
 		(ParamInt<px4::params::NL_RC_LOW>) _param_nl_rc_low,

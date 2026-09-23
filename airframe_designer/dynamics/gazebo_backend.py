@@ -334,7 +334,7 @@ class GazeboBody:
     def step(self, dt: float, detail: bool = True) -> None:
         R = q_to_rotmat(self.q)
         v_air = R.T @ (self.vel - self.wind_ned)
-        self.omega = np.clip(self.omega + (self.cmd - self.omega) / self.rotors.tau * dt, 0.0, 1.0)
+        self.omega = self.rotors.spool(self.omega, self.cmd, dt)
         F_r, M_r, thrust, ram = self.rotors.forces(self.omega, v_air, self.rates, detail)
         F_b, M_b, body_drag = self.body.forces(v_air, self.rates, detail)
         F_w, M_w, wb = (self.wings.forces(v_air, self.rates, detail) if self.wings.n

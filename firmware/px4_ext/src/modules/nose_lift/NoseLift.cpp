@@ -51,10 +51,25 @@ void NoseLift::update_attitude(hrt_abstime now)
 	_roll = math::degrees(e.phi());
 	_pitch = math::degrees(e.theta());
 
-	const Vector3f w_s = Rh.transpose() * Vector3f(_angvel.xyz);
-	_p_rad = w_s(0);
-	_q = math::degrees(w_s(1));
-	_r_rad = w_s(2);
+	const Vector3f w_raw = Rh.transpose() * Vector3f(_angvel.xyz);
+
+	// low-pass the rates the loop works on: on the aircraft the frame shakes at 5-10 Hz on its legs (+-20 deg/s of
+	// pitch rate with the attitude still within 0.3 deg, log 184) and the loop gains turned that into 0 <-> 60 % fan
+	// bursts. The fans cannot follow faster than about 1 Hz anyway.
+	const float fc = _param_nl_q_lpf.get();
+
+	if (fc <= 0.f || _rate_t == 0) {
+		_w_f = w_raw;
+
+	} else if (_angvel.timestamp_sample != _rate_t) {
+		const float dt = math::constrain((_angvel.timestamp_sample - _rate_t) * 1e-6f, 0.f, 0.05f);
+		_w_f += (w_raw - _w_f) * (dt / (dt + 1.f / (2.f * M_PI_F * fc)));
+	}
+
+	_rate_t = _angvel.timestamp_sample;
+	_p_rad = _w_f(0);
+	_q = math::degrees(_w_f(1));
+	_r_rad = _w_f(2);
 }
 
 void NoseLift::update_switch(hrt_abstime now)
@@ -99,7 +114,19 @@ float NoseLift::throttle() const
 	return _manual.valid ? 0.5f * (_manual.throttle + 1.f) : 1.f;
 }
 
-bool NoseLift::lifted_off()
+void NoseLift::update_baro()
+{
+	// the raw barometric altitude, low-passed over 0.5 s against its sample noise (tenths of a metre)
+	if (_air.timestamp_sample == 0 || _air.timestamp_sample == _baro_t || !PX4_ISFINITE(_air.baro_alt_meter)) {
+		return;
+	}
+
+	const float dt = _baro_t > 0 ? math::constrain((_air.timestamp_sample - _baro_t) * 1e-6f, 0.f, 0.5f) : 0.f;
+	_baro_t = _air.timestamp_sample;
+	_baro_f = PX4_ISFINITE(_baro_f) ? _baro_f + dt / (0.5f + dt) * (_air.baro_alt_meter - _baro_f) : _air.baro_alt_meter;
+}
+
+bool NoseLift::lifted_off(hrt_abstime now)
 {
 	if (!PX4_ISFINITE(_z0) || !_lpos.z_valid || !_lpos.v_z_valid) {
 		return false;
@@ -115,7 +142,13 @@ bool NoseLift::lifted_off()
 	// (after a kill drops the nose, for one), and a false alarm here cuts the motors and drops the nose from the hold
 	const bool high = (_z0 - _lpos.z) > _param_nl_lift_dz.get();
 	const bool climbing = -_lpos.vz > 0.3f;
-	return high && climbing;
+
+	// and the barometer must agree: on the aircraft (log 164) fan vibration (accel vibration metric 0.02 -> 3.8)
+	// biased the accelerometer, and the estimate climbed a smooth 0.85 m at 0.3 m/s in 6 s with the nose not
+	// moving and the raw baro within 0.2 m. Without a recent baro the estimate decides alone, as before.
+	const bool baro_ok = PX4_ISFINITE(_baro0) && PX4_ISFINITE(_baro_f) && now - _air.timestamp < 500_ms;
+	const bool baro_high = !baro_ok || (_baro_f - _baro0) > _param_nl_lift_dz.get();
+	return high && climbing && baro_high;
 }
 
 // ------------------------------------------------------------------------------------------------- the loop
@@ -240,6 +273,7 @@ void NoseLift::try_start(hrt_abstime now)
 	_fading = false;
 	_z0 = _lpos.z_valid ? _lpos.z : NAN;
 	_z_reset_counter = _lpos.z_reset_counter;
+	_baro0 = _baro_f;
 	_abort_reason = Abort::None;
 	set_state(State::Ramping, now);
 	mavlink_log_info(&_mavlink_log_pub, "Nose lift: raising the nose from %.1f to %.1f deg\t", (double)_pitch0,
@@ -263,7 +297,7 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 	if (lifting || _state == State::Lowering) {
 		if (fabsf(_roll) > _param_nl_roll_max.get()) { abort(Abort::Roll, false, now); return; }
 
-		if (lifted_off()) { abort(Abort::Liftoff, false, now); return; }
+		if (lifted_off(now)) { abort(Abort::Liftoff, false, now); return; }
 	}
 
 	if (lifting) {
@@ -559,10 +593,6 @@ void NoseLift::Run()
 		update_lift_motors();
 	}
 
-	const hrt_abstime now = hrt_absolute_time();
-	const float dt = _last_run > 0 ? math::constrain((now - _last_run) * 1e-6f, 1e-4f, 0.05f) : 0.005f;
-	_last_run = now;
-
 	_attitude_sub.update(&_attitude);
 	_angular_velocity_sub.update(&_angvel);
 	_armed_sub.update(&_armed);
@@ -570,8 +600,16 @@ void NoseLift::Run()
 	_manual_sub.update(&_manual);
 	_rc_sub.update(&_rc);
 	_lpos_sub.update(&_lpos);
+	_air_sub.update(&_air);
 	_status_sub.update(&_status);
 	_feedback_sub.update(&_feedback);
+
+	// the clock is read after the copies: on hardware the gyro and estimator threads preempt this one, and a
+	// message published between an earlier clock read and its copy is newer than now, so now - timestamp
+	// wrapped to a huge age ("attitude lost" 0.4 s into the first lift on the aircraft; lockstep SITL cannot)
+	const hrt_abstime now = hrt_absolute_time();
+	const float dt = _last_run > 0 ? math::constrain((now - _last_run) * 1e-6f, 1e-4f, 0.05f) : 0.005f;
+	_last_run = now;
 
 	if (_param_nl_en.get() == 0) {
 		if (_state != State::Disabled) {
@@ -589,6 +627,7 @@ void NoseLift::Run()
 
 	update_attitude(now);
 	update_switch(now);
+	update_baro();
 
 	const bool armed = _armed.armed;
 	const bool kill = _armed.kill || _armed.termination;

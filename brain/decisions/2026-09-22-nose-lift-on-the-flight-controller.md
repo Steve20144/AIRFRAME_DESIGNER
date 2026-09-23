@@ -55,6 +55,16 @@ card (`px4/killtest.py`, the board's own HIL_ACTUATOR_CONTROLS): a kill while th
 from 0.91 to all off in 17 ms and the outputs to disarmed in 27 ms; nothing came back after the release. The user
 accepted the results.
 
+## On the aircraft (2026-09-22/23)
+
+Two front fans, props on: see [aircraft runs](../experiments/2026-09-23-aircraft-nose-lift-bench-runs.md). Firmware
+fixes flashed: the clock is read after the uORB copies (a false "attitude lost"), and "left the ground" also needs
+the low-passed baro to rise `NL_LIFT_DZ` (fan vibration drifted the EKF height). The sim-tuned gains failed (15 deg/s
+rise coasting to 43 deg; the lowering slammed the fans): G4 set on the board (`NL_KQ` 0.10, `NL_KQI` 0.05,
+`NL_LOW_KQ` 0.06, `NL_LOW_KQI` 0.03). The app's export still writes `NL_KQ` 0.02 / `NL_KQI` 0.012 and does not export
+the lowering gains; do not re-export to the board until `design.nose_lift` carries G4. `COM_DISARM_PRFLT` is -1 on
+the board (the export writes 120). New, off by default: `NL_Q_LPF` (a rate low-pass that SITL rejected).
+
 ## Open
 
 Kill tests while holding and in the handover on the board; a flight-mode switch (channel 5 now carries the kill;

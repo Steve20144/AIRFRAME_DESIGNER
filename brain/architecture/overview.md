@@ -15,10 +15,12 @@ airframe_designer/
               cad (STEP import via OpenCascade: solids -> bodies with volume, centroid, unit inertia, cached
               meshes; placement rotation/origin/scale; body masses -> mass items), airframe (composition,
               schema migration, with_attitude, resolve_mass, PX4 export), paths (parameter-path addressing)
-  aero/       strip-theory wings, rotor thrust / torque / ram drag, body drag, fastmath
+  aero/       strip-theory wings, rotor thrust / torque / ram drag, body drag, fastmath; fan speed is first-order
+              (RotorAero.spool: rotor `tau` up, `tau_down` down, 0 = same) in all three physics backends
   dynamics/   quaternion, per-leg contact (damping clamped to the integrator's stable range), rigid body about
               the CG; jsbsim_backend and gazebo_backend as alternative engines
-  sensors/    IMU / mag / baro / GPS -> HIL_SENSOR, HIL_GPS
+  sensors/    IMU / mag / baro / GPS -> HIL_SENSOR, HIL_GPS; optional gyro vibration (SensorNoise.vib_gyro, two
+              tones scaled by the fastest fan's speed; batch task option "vibration": [x, y, z] rad/s)
   px4/        link (MAVLink SITL/HITL; records ATTITUDE, ATTITUDE_TARGET, params, events), sitl (process, BSON
               param seeding, instances), connection (runtime SITL<->HITL), events, param_meta
   sim/        simulator loop (hooks), scenario (phases, scripted pilot, attitude block), metrics (time series,

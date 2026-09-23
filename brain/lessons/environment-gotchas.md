@@ -13,6 +13,13 @@
 - JSBSim positions were unsigned once (every metre west came back east); fixed in commit c62a11b; compare engines when a
   horizontal result looks odd.
 - Sensor noise off makes PX4 refuse to arm (preflight drift checks dislike a perfectly quiet IMU).
+- A new `NL_*` parameter in `firmware/px4_ext/.../params.c` failed to compile ("not a member of px4::params"):
+  PX4 regenerates `parameters.xml` only for params.c under its own `src/`. `build_nose_lift_firmware.sh` now deletes
+  the generated file when ours change (fixed 2026-09-23).
+- `wsl -- bash -lc '...$VAR...'` from PowerShell expands `$VAR` too early; put the commands in a script file and run
+  `wsl -d Ubuntu-24.04 -- bash /mnt/c/.../script.sh`.
+- Edits to the physics core need the test suite (`pytest -q`, 235 tests, ~15 s): a misplaced method once cut
+  `RotorAero.__init__` short and every fan made zero thrust while SITL scenarios merely "timed out".
 - Landing on the +8 stand in Position mode: PX4 holds the hover attitude until land detection; the nose lower hook
   handles it; tip-overs fault the compass and need an estimator restart (on the board: reboot, never restart EKF2
   in place).

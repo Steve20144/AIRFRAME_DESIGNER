@@ -1,4 +1,16 @@
-# Open items (unprocessed, 2026-09-21)
+# Open items (unprocessed, 2026-09-21; aircraft items added 2026-09-23)
+
+- **Measure the nose fans' step response** (spin-up, spin-down, dead time) on the bench: the sim does not reproduce
+  the aircraft's ~1 Hz fan bursts; fit `tau` / `tau_down`, then re-tune `NL_KQ*` / `NL_LOW_KQ*`.
+- **Lowering never fades**: the post-rotation pitch estimate reads ~0.5 deg high, the 0.5 deg fade tolerance is never
+  met, thrust bleeds to the 25 s lowering timeout. Fade when the nose stops while the loop still asks it down.
+- **App export reverts the board's nose-lift settings** (NL_KQ/KQI to 0.02/0.012, COM_DISARM_PRFLT to 120) and never
+  exports NL_LOW_KQ/KQI: put G4 into `design.nose_lift` and export the lowering gains.
+- **Compass**: "Strong magnetic interference" after every fan run; fan wiring near the GPS/compass.
+- **Vibration**: accel vibration metric 3-5 with the fans on; soft-mount the Pixhawk, balance the fans.
+- **SITL arming flake**: twice in ~40 runs PX4 armed while nose_lift stayed "disarmed"; retry passes.
+- **Uncommitted** on branch nose-lift-firmware (as of 2026-09-23): both firmware fixes, NL_Q_LPF, sim tau_down and
+  vibration, the throttle dashboard, the build-script params fix, these brain notes.
 
 - **Remote switches in HITL for Stabilized.** Wanted: takeoff (rotate + lift) and land (land + rotate back) on
   switches. Exists: `design.nose_lift.rc_channel` (SB down = rotate, `rc_takeoff` chains PX4 Takeoff) and

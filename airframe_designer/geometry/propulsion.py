@@ -29,6 +29,8 @@ class Rotor:
     km: float = 0.05             # moment coefficient, signed (spin direction)
     max_thrust: float = 8.0      # N at full command (before jetfoil turning loss)
     tau: float = 0.04            # spool-up time constant, s
+    tau_down: float = 0.0        # spool-down time constant, s (0: same as tau). Fans that coast down unbraked are
+                                 # much slower to lose thrust than to gain it (ATLAS_09B logs 174/184: 1-2 s)
     diameter: float = 0.25       # prop / fan diameter, m (disc area for ram drag and momentum-theory power)
     thrust_exponent: float = 2.0  # thrust = max_thrust * omega_norm ** exponent
     kind: str = "prop"           # "prop" | "ducted"
