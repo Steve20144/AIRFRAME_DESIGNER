@@ -49,6 +49,8 @@ current task needs.
 - [2026-09-21 First piloted HITL session](experiments/2026-09-21-hitl-pilot-session.md): RC setup, integrator wind-up on the legs, hover thrust, stick scale
 - [2026-09-23 Firmware nose lift on the real aircraft](experiments/2026-09-23-aircraft-nose-lift-bench-runs.md): two
   fans, props on; false aborts fixed, sim gains failed, G4 set, rate filter rejected, fan response still unmodelled
+- [2026-09-23 Mitigating fan vibration (Tuning tab)](experiments/2026-09-23-vibration-tuning-rounds.md): vibration
+  doubles motor jitter and, indoors, attitude error and drift; soft mount or balance fixes it, gyro filters fix jitter
 
 ## Research
 
