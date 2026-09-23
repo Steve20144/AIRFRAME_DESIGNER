@@ -34,6 +34,7 @@ class Simulator:
         self.home = home or Home()
         self.sim = self._make_body(airframe, physics)
         self.sensors = SensorSuite(home=home, seed=seed)
+        self.sensors.set_airframe(airframe)
         self.sensor_rate = float(sensor_rate)
         self.substeps = max(1, int(physics_substeps))
         self.gps_every = max(1, int(round(sensor_rate / gps_rate)))
@@ -112,6 +113,7 @@ class Simulator:
     def set_airframe(self, airframe: Airframe, keep_state: bool = True) -> None:
         with self.lock:
             self.airframe = airframe
+            self.sensors.set_airframe(airframe)
             if self.physics == "jsbsim":
                 # JSBSim reloads its model; the vehicle restarts on the ground
                 self.sim = self._make_body(airframe, "jsbsim"); self.sim.reset()
@@ -345,6 +347,7 @@ class Simulator:
                 "rotor_health": s.rotors.scale.tolist(),
                 "physics": self.physics,
                 "nose_lift": self._nose_lift_status(),
+                "vibration": self.sensors.vibration_status(),
             }
 
     def _nose_lift_status(self) -> dict | None:

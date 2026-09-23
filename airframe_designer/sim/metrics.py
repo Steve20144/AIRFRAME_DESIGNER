@@ -33,6 +33,7 @@ class MetricsRecorder:
         self.energy_j = 0.0
         self.saturation_steps = 0
         self.steps = 0
+        self.clipping: dict | None = None       # accel / gyro samples at the IMU range (sensors/vibration.py)
 
     # ------------------------------------------------------------ phases
     def begin_phase(self, name: str, t: float) -> None:
@@ -81,15 +82,21 @@ class MetricsRecorder:
             sp_cols = [sp["roll"], sp["pitch"], sp["yaw"], sp["thrust"]] if sp else [float("nan")] * 4
             est = getattr(link, "board_att", None)          # PX4's own attitude estimate (ATTITUDE), PX4 body frame
             sp_cols += [est["roll"], est["pitch"], est["yaw"]] if est else [float("nan")] * 3
+            vm = getattr(getattr(simr, "sensors", None), "vib_metrics", None)
+            vib_cols = [vm.accel, vm.gyro] if vm is not None else [float("nan")] * 2
+            if vm is not None:
+                self.clipping = {"accel": vm.accel_clipping, "gyro": vm.gyro_clipping}
             self.rows.append([t, *s.pos.tolist(), *s.vel.tolist(), r, p, y, *s.rates.tolist(), tilt,
                               float(bd.get("thrust", 0.0)), power, float(bd.get("lift", 0.0)), float(bd.get("airspeed", 0.0)),
-                              util, float(cmd.mean()) if len(cmd) else 0.0, 1.0 if airborne else 0.0, *sp_cols])
+                              util, float(cmd.mean()) if len(cmd) else 0.0, 1.0 if airborne else 0.0, *sp_cols, *vib_cols])
             self.phase_of_row.append(self.current_phase)
 
     # ------------------------------------------------------------ summary
     COLS = ["t", "n", "e", "d", "vn", "ve", "vd", "roll", "pitch", "yaw", "p", "q", "r", "tilt", "thrust", "power", "lift",
-            "airspeed", "util_max", "cmd_mean", "airborne", "roll_sp", "pitch_sp", "yaw_sp", "thr_sp", "roll_est", "pitch_est", "yaw_est"]
+            "airspeed", "util_max", "cmd_mean", "airborne", "roll_sp", "pitch_sp", "yaw_sp", "thr_sp", "roll_est", "pitch_est", "yaw_est",
+            "vib_acc", "vib_gyro"]
     # *_sp: PX4's attitude setpoint (ATTITUDE_TARGET, hover frame), NaN until the first one arrives
+    # vib_*: PX4's accel (m/s^2) and gyro (rad/s) vibration metrics on the samples sent (sensors/vibration.py)
 
     def array(self) -> np.ndarray:
         return np.array(self.rows, float).reshape(-1, len(self.COLS))
@@ -102,6 +109,7 @@ class MetricsRecorder:
                      "max_alt_m": round(self.max_alt, 2), "energy_wh": round(self.energy_j / 3600.0, 3),
                      "saturation_fraction": round(self.saturation_steps / max(1, self.steps), 4),
                      "touchdown_speed": None if self.touchdown_speed is None else round(self.touchdown_speed, 3),
+                     "accel_clipping": (self.clipping or {}).get("accel"), "gyro_clipping": (self.clipping or {}).get("gyro"),
                      "events": self.events, "phases": {}}
         if len(a) == 0:
             return out
@@ -167,6 +175,11 @@ class MetricsRecorder:
             d["util_mean"] = round(float(x[:, col["util_max"]].mean()), 4)
             d["cmd_mean"] = round(float(x[:, col["cmd_mean"]].mean()), 4)
             d["airborne_fraction"] = round(float(x[:, col["airborne"]].mean()), 3)
+            for k, c, nd in (("accel", "vib_acc", 3), ("gyro", "vib_gyro", 5)):
+                v = x[:, col[c]]
+                if np.isfinite(v).any():
+                    d[f"{k}_vibration_mean"] = round(float(np.nanmean(v)), nd)
+                    d[f"{k}_vibration_max"] = round(float(np.nanmax(v)), nd)
             if "alt" in tgt:
                 e = alt - float(tgt["alt"])
                 d["alt_err_rms"] = round(float(np.sqrt((e ** 2).mean())), 4); d["alt_err_max"] = round(float(np.abs(e).max()), 4)

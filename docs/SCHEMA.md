@@ -97,6 +97,36 @@ Not modelled: any dependence of the deflection angle on airspeed or thrust, jet-
 losses beyond the linear `turn_loss`. The foil as a lifting body in the outside flow is a separate `wings` entry
 (strip theory); `airframes/atlas_og.json` carries one with an estimated planform measured on the CAD mesh.
 
+### Fan vibration (`design.vibration`)
+
+Off unless `enabled`. The fans' vibration is added to the simulated IMU samples (`sensors/vibration.py`); it never
+enters the rigid-body integration (at hundreds of hertz it moves the vehicle by microns and matters only through
+the sensors).
+
+```jsonc
+"design": {"vibration": {
+  "enabled": true,
+  "rpm_max": 30000,          // fan speed at full command, rpm (scalar or one per active rotor)
+  "imbalance_gmm": 1.0,      // residual unbalance per fan, g mm: a force U w^2 rotating in the fan's disc plane (1P)
+  "blades": 12,              // blade count (blade-pass frequency = blades x fan speed)
+  "blade_ripple": 0.0,       // thrust ripple at blade pass, fraction of the fan's thrust, along the thrust axis
+  "imu_pos": null,           // flight controller IMU in the structural frame, m (null: at the CG)
+  "mount_hz": 0,             // soft-mount natural frequency, Hz (0: hard-mounted); "mount_damping": 0.1
+  "frame_modes": [],         // [{"hz": 80, "damping": 0.03, "gain": 0.5}]: frame resonances, peak ~ gain / (2 damping)
+  "accel_rectification": [0, 0, 0]  // DC accel bias per body axis, m/s^2 per g^2 of rms vibration
+}}
+```
+
+Per tone: rigid body about the CG (F/m and I^-1 (r x F) on the IMU's lever arm; the gyro sees its integral), then
+the frame modes and the mount, then the sampler: each HIL_SENSOR is the average over its interval, like PX4's
+integrated IMU samples, so tones above half the sensor rate alias (a tone at a multiple of the rate averages to
+zero). PX4's accel / gyro vibration metrics (its VehicleIMU formula) and clip counts (16 g, 2000 deg/s) are computed
+on what is sent; they appear in the status bar, in the metrics (`accel_vibration_mean/max`,
+`gyro_vibration_mean/max` per phase, `accel_clipping`, `gyro_clipping`) and in the time series (`vib_acc`,
+`vib_gyro`). `airframe-designer vibration --airframe X --motors 9=1,10=0.82 --rate 400 [--target-metric 3.8]` holds
+the fans at fixed speeds without PX4 and lists the tones, their aliases and the metric; `--target-metric` scales
+`imbalance_gmm` to reproduce a logged metric. The metric depends on the sample rate: compare at the log's rate.
+
 Schema 1 files (the AIRFRAME_SIMULATOR format) load transparently: `Airframe.from_dict()` migrates them (mass number
 → `mass`, `prop_diameter` → `diameter`, generated feet → four `legs`, the area/span delta wing → a `polhamus`
 wing positioned by its root leading edge, CG = origin).
@@ -115,6 +145,6 @@ Any numeric leaf can be addressed by a string, used by `--set`, studies and the 
 | `mass.cg[0]`, `mass.mass`, `mass.inertia[1]` | mass segment |
 | `hover_pitch_deg`, `landed_pitch_deg` | attitudes |
 | `px4.MC_PITCHRATE_P` | a PX4 parameter (goes into `px4_overrides`) |
-| `design.cruise_speed_kmh` | design settings |
+| `design.cruise_speed_kmh`, `design.vibration.mount_hz` | design settings (setting a path creates missing `design` levels) |
 
 `airframe-designer paths --airframe X` prints every path with its current value.

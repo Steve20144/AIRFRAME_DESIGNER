@@ -169,6 +169,7 @@ def build_app(state: AppState) -> FastAPI:
         s["sensor_rate"] = sim.sensor_rate
         s["lockstep"] = sim.lockstep
         s["noise"] = sim.sensors.noise.enabled
+        s["vibration"] = sim.sensors.vibration_status()     # design.vibration: fan vibration at the IMU, PX4's metrics
         s["paused"] = sim.paused
         s["physics"] = sim.physics
         return s

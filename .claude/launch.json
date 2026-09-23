@@ -14,6 +14,12 @@
       "port": 8080
     },
     {
+      "name": "app-sitl-check",
+      "runtimeExecutable": "wsl",
+      "runtimeArgs": ["-d", "Ubuntu-24.04", "--", "bash", "-lc", "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --mode sitl --launch-px4 --px4-instance 3 --airframe airframes/atlas_og_flat.json --http 127.0.0.1:8092 --no-browser"],
+      "port": 8092
+    },
+    {
       "name": "throttle-radio",
       "runtimeExecutable": "python",
       "runtimeArgs": ["scripts/throttle_dashboard.py", "--port", "COM6"],

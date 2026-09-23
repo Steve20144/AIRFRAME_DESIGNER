@@ -10,7 +10,8 @@ A PX4-in-the-loop aircraft design simulator. Python 3.12, venv at `.venv` (`.ven
   (`--physics jsbsim` runs the same flight on JSBSim; `compare` runs both and diffs them)
 * Parallel / studies: `batch --tasks t.json --workers 6`, `study --spec studies/<name>.json`. See docs/AI_GUIDE.md.
 * Tests: `.venv/bin/python -m pytest -q` (the `px4` marked test boots a real PX4 on instance 8, ~15 s).
-* Static analysis: `.venv/bin/python -m airframe_designer analyse --airframe X`.
+* Static analysis: `.venv/bin/python -m airframe_designer analyse --airframe X`. Fan vibration without PX4:
+  `vibration --airframe X --motors 9=1,10=0.82 --rate 400` (model: `design.vibration`, docs/SCHEMA.md).
 * MCP server for other assistants: `.venv/bin/python -m airframe_designer mcp` (stdio) / `mcp --http 8765`; tools in
   `airframe_designer/mcp_server.py`, setup in docs/AI_GUIDE.md.
 
@@ -21,7 +22,7 @@ airframe_designer/
               migration, PX4 export, hover check), paths (parameter-path addressing)
   aero/       strip-theory wings, rotor thrust/torque/ram drag, body drag, fastmath
   dynamics/   quaternion, per-leg contact, rigid body about the CG, jsbsim_backend (JSBSim as an alternative engine)
-  sensors/    IMU/mag/baro/GPS -> HIL messages
+  sensors/    IMU/mag/baro/GPS -> HIL messages; vibration (fan imbalance / blade pass at the IMU, PX4 vib metrics)
   px4/        link (MAVLink SITL/HITL), sitl (process, BSON param seeding, instances), connection (runtime SITL<->HITL),
               events, param_meta
   sim/        simulator loop (hooks), scenario runner, metrics

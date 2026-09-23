@@ -7,7 +7,9 @@
 - **App export reverts the board's nose-lift settings** (NL_KQ/KQI to 0.02/0.012, COM_DISARM_PRFLT to 120) and never
   exports NL_LOW_KQ/KQI: put G4 into `design.nose_lift` and export the lowering gains.
 - **Compass**: "Strong magnetic interference" after every fan run; fan wiring near the GPS/compass.
-- **Vibration**: accel vibration metric 3-5 with the fans on; soft-mount the Pixhawk, balance the fans.
+- **Vibration**: accel vibration metric 3-5 with the fans on; soft-mount the Pixhawk, balance the fans. The sim now
+  models it (`design.vibration`, see [vibration model](../architecture/vibration-model.md)); calibrate it to log 164
+  (needs fan rpm and the board's accel rate) and fit the rectification bias to the height drift.
 - **SITL arming flake**: twice in ~40 runs PX4 armed while nose_lift stayed "disarmed"; retry passes.
 - **Uncommitted** on branch nose-lift-firmware (as of 2026-09-23): both firmware fixes, NL_Q_LPF, sim tau_down and
   vibration, the throttle dashboard, the build-script params fix, these brain notes.

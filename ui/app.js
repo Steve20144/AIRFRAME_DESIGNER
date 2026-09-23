@@ -1097,6 +1097,11 @@ $('#sim-physics').addEventListener('change', async e => {
   catch (err) { logLine('[ui] physics switch failed: ' + err.message); }
 });
 $('#sim-noise').addEventListener('change', e => api('/api/sim/noise', { enabled: e.target.checked }));
+$('#sim-vibration').addEventListener('change', e => {
+  airframe.design = airframe.design || {};
+  airframe.design.vibration = Object.assign({}, airframe.design.vibration || {}, { enabled: e.target.checked });
+  pushAirframe(true);
+});
 $('#wind-apply').addEventListener('click', () => api('/api/sim/wind', { north: +$('#wind-n').value, east: +$('#wind-e').value, down: +$('#wind-d').value }));
 $('#home-apply').addEventListener('click', () => api('/api/sim/home', { lat: +$('#home-lat').value, lon: +$('#home-lon').value, alt: +$('#home-alt').value }));
 
@@ -1131,6 +1136,13 @@ function applyStatus(s) {
   const none = !s.conn_mode;
   $('#st-mode').textContent = (none ? 'No link' : (s.mode === 'hitl' ? 'Pixhawk' : 'SITL')) + (s.physics === 'jsbsim' ? ' · JSBSim' : '');
   if (s.physics && document.activeElement !== $('#sim-physics')) $('#sim-physics').value = s.physics;
+  if (s.vibration) {
+    const v = s.vibration, el = $('#st-vib');
+    if (document.activeElement !== $('#sim-vibration')) $('#sim-vibration').checked = !!v.enabled;
+    el.classList.toggle('hidden', !v.enabled);
+    el.textContent = `Vib ${(+v.accel_metric).toFixed(2)}${v.accel_clipping ? ' · clip ' + v.accel_clipping : ''}`;
+    el.classList.toggle('armed', v.accel_metric > 3 || v.accel_clipping > 0);
+  }
   $('#st-conn').textContent = s.paused ? 'PAUSED — PX4 gets no data, press Resume' : none ? (s.conn_error ? 'failed — open Connect' : 'open Connect')
     : s.connected ? (s.mode === 'hitl' ? s.address.replace('/dev/', '') + (s.hil_enabled ? '' : ' · HITL off') : 'PX4 connected')
     : (s.mode === 'sitl' ? (s.px4_running ? 'PX4 starting…' : 'waiting for PX4') : 'no data from ' + s.address.replace('/dev/', ''));

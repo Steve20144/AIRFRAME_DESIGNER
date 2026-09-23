@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .vibration import VibrationMetrics, vibration_from_airframe
+
 R_EARTH = 6371000.0
 FIELDS_ALL = 0x1FFF          # accel | gyro | mag | baro | diff-press (see SimulatorMavlink SensorSource)
 FIELDS_NO_DIFF = 0x1FFF & ~0b10000000000  # PX4 expects diff-press bit only if you supply airspeed
@@ -37,8 +39,9 @@ class SensorNoise:
     gps_vel: float = 0.03     # m/s std
     accel_bias: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     gyro_bias: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
-    # airframe vibration seen by the gyro: two tones (Hz) summed, rad/s amplitude per body axis at full fan speed,
-    # scaled by the fastest fan's actual (lagged) speed. ATLAS_09B on its legs: ~0.35 rad/s pitch at 5-10 Hz
+    # low-frequency rocking seen by the gyro: two tones (Hz) summed, rad/s amplitude per body axis at full fan speed,
+    # scaled by the fastest fan's actual (lagged) speed. ATLAS_09B on its legs: ~0.35 rad/s pitch at 5-10 Hz.
+    # The fans' own vibration (imbalance, blade pass) is design.vibration on the airframe (sensors/vibration.py)
     vib_freqs: list[float] = field(default_factory=lambda: [5.4, 10.3])
     vib_gyro: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     enabled: bool = True
@@ -65,6 +68,17 @@ class SensorSuite:
         self.noise = noise or SensorNoise()
         self.rng = np.random.default_rng(seed)
         self.mag_ned = magnetic_field_ned(self.home.lat, self.home.lon)
+        self.seed = seed
+        self.vibration = None                 # sensors.vibration.VibrationModel (design.vibration), set_airframe
+        self.vib_metrics = VibrationMetrics()   # PX4's vibration metrics and clip counts on what we send
+
+    def set_airframe(self, airframe) -> None:
+        """(Re)build the fan vibration model from ``airframe.design.vibration`` (None when it is off)."""
+        self.vibration = vibration_from_airframe(airframe, seed=self.seed)
+
+    def vibration_status(self) -> dict:
+        v = self.vibration
+        return {"enabled": v is not None, "rms_g": round(v.last_rms_g, 4) if v is not None else 0.0, **self.vib_metrics.status()}
 
     def set_home(self, lat: float, lon: float, alt: float) -> None:
         self.home = Home(lat, lon, alt)
@@ -92,6 +106,11 @@ class SensorSuite:
         R = sim.rotmat
         accel = sim.accel_body + np.asarray(self.noise.accel_bias) + self._n(self.noise.accel)
         gyro = sim.rates + np.asarray(self.noise.gyro_bias) + self._n(self.noise.gyro) + self._vibration(sim, time_usec)
+        if self.vibration is not None:
+            va, vg = self.vibration.sample(sim, time_usec)
+            accel = accel + va
+            gyro = gyro + vg
+        self.vib_metrics.update(accel, gyro)
         mag = R.T @ self.mag_ned + self._n(self.noise.mag)
 
         alt = self.home.alt - sim.pos[2]

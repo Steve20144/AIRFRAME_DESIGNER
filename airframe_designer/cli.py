@@ -8,6 +8,7 @@
   airframe-designer optimise  --airframe X --spec spec.json           (static, no PX4)
   airframe-designer export    --airframe X [--hitl] [--out file.params]
   airframe-designer vehicle   --manifest vehicle-manifest.json --out airframes/X.json   (CAD -> airframe)
+  airframe-designer vibration --airframe X [--motors 9=1,10=0.82 | --hover] [--rate 250]   (fan vibration, no PX4)
   airframe-designer paths     --airframe X                              (every variable path)
   airframe-designer scenarios                                            (list the bundled scenarios)
   airframe-designer migrate   old.json new.json
@@ -144,6 +145,48 @@ def cmd_export(a) -> int:
     return 0
 
 
+def cmd_vibration(a) -> int:
+    """Fan vibration at the IMU with the fans held at fixed speeds: PX4's vibration metrics at a sensor rate, the
+    tones and their aliases; ``--target-metric`` scales the imbalance to reproduce a logged accel metric."""
+    import numpy as np
+    from .geometry.airframe import Airframe
+    from .geometry.paths import apply_variables
+    from .sensors.vibration import bench
+    af = Airframe.load(a.airframe)
+    if a.set:
+        af = apply_variables(af, _parse_set(a.set))
+    af.mass.resolve()
+    rotors = af.active_rotors()
+    om = np.zeros(len(rotors))
+    if a.hover:
+        om[:] = (af.mass.mass * 9.80665 / max(sum(r.effective_max_thrust() for r in rotors), 1e-9)) ** 0.5
+    for it in (a.motors or "").split(","):
+        if it.strip():
+            k, v = it.split("=")
+            om[int(k) - 1] = float(v)             # PX4 motor number (1-based) = normalised fan speed
+    r = bench(af, om, rate=a.rate, seconds=a.seconds, seed=a.seed, noise=False if a.no_noise else None)
+    if a.target_metric and r["accel_metric_vibration_only"] > 0:
+        imb = r["config"]["imbalance_gmm"]
+        scale = a.target_metric / r["accel_metric_vibration_only"]
+        r["calibration"] = {"target_accel_metric": a.target_metric, "scale": round(scale, 4),
+                            "imbalance_gmm": [round(x * scale, 4) for x in imb] if isinstance(imb, list) else round(imb * scale, 4),
+                            "note": "the metric is linear in the imbalance when 1P dominates; sensor noise excluded"}
+    if a.json:
+        print(json.dumps(r, indent=2))
+        return 0
+    fans = ", ".join(f"{i + 1}={x:.2f}" for i, x in enumerate(om) if x > 0) or "stopped"
+    print(f"{af.name}: {a.rate:g} Hz sensors, fans {fans}")
+    print(f"  rms at the IMU {r['rms_g']:.3f} g   PX4 accel metric {r['accel_metric']:.3f} m/s^2   gyro metric "
+          f"{r['gyro_metric']:.4f} rad/s   clipping accel {r['accel_clipping']} gyro {r['gyro_clipping']}")
+    for t in sorted(r["tones"], key=lambda t: -t["accel_amp"])[:12]:
+        print(f"  motor {t['rotor']:2d} {t['source']:10s} {t['hz']:7.1f} Hz -> alias {t['alias_hz']:6.1f} Hz, sampled x{t['sampled_gain']:.3f}"
+              f"   accel {t['accel_amp']:.3f} m/s^2  gyro {t['gyro_amp']:.4f} rad/s")
+    if "calibration" in r:
+        c = r["calibration"]
+        print(f"  calibration: imbalance_gmm {c['imbalance_gmm']} (x{c['scale']}) reproduces an accel metric of {c['target_accel_metric']}")
+    return 0
+
+
 def cmd_paths(a) -> int:
     from .geometry.airframe import Airframe
     from .geometry.paths import list_paths, get_path
@@ -261,6 +304,14 @@ def main(argv=None) -> int:
     p.add_argument("--leg-splay", type=float, default=30.0, dest="leg_splay", help="foot splay from vertical, deg")
     p.add_argument("--symmetrise", choices=["none", "left", "right"], default="none",
                    help="mirror one side's foil-fan positions onto the other (default none: follow the documents)")
+    p = sub.add_parser("vibration", help="fan vibration at the IMU with the fans held at fixed speeds (no PX4)")
+    p.add_argument("--airframe", required=True); p.add_argument("--set", action="append")
+    p.add_argument("--motors", default="", help="PX4 motor number=normalised fan speed, comma separated, e.g. 9=1,10=0.82")
+    p.add_argument("--hover", action="store_true", help="every fan at the speed that carries the weight")
+    p.add_argument("--rate", type=float, default=250.0, help="sensor rate, Hz (the metric and the aliases depend on it)")
+    p.add_argument("--seconds", type=float, default=10.0); p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--no-noise", action="store_true"); p.add_argument("--json", action="store_true")
+    p.add_argument("--target-metric", type=float, default=None, help="a logged accel vibration metric to calibrate the imbalance to")
     p = sub.add_parser("paths", help="list variable paths"); p.add_argument("--airframe", required=True)
     sub.add_parser("scenarios", help="list bundled scenarios")
     p = sub.add_parser("migrate", help="convert a schema-1 airframe"); p.add_argument("src"); p.add_argument("dst")
@@ -277,7 +328,7 @@ def main(argv=None) -> int:
         return cmd_ui(None, [])
     a = ap.parse_args(argv)
     return {"run": cmd_run, "batch": cmd_batch, "compare": cmd_compare, "study": cmd_study, "analyse": cmd_analyse, "optimise": cmd_optimise,
-            "export": cmd_export, "vehicle": cmd_vehicle, "paths": cmd_paths, "scenarios": cmd_scenarios, "migrate": cmd_migrate}[a.cmd](a)
+            "export": cmd_export, "vehicle": cmd_vehicle, "paths": cmd_paths, "vibration": cmd_vibration, "scenarios": cmd_scenarios, "migrate": cmd_migrate}[a.cmd](a)
 
 
 if __name__ == "__main__":

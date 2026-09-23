@@ -62,8 +62,9 @@ def _select(seq, spec: str) -> list[int]:
     return idx
 
 
-def _walk(obj: Any, segs: list[tuple[str, list[str]]]) -> list[tuple[Any, str | int]]:
-    """Resolve a path to (container, key) pairs; a path may fan out over several items."""
+def _walk(obj: Any, segs: list[tuple[str, list[str]]], create: bool = False) -> list[tuple[Any, str | int]]:
+    """Resolve a path to (container, key) pairs; a path may fan out over several items. ``create`` adds missing
+    dict levels on the way (design.vibration.mount_hz on an airframe without a design.vibration block)."""
     targets = [obj]
     for si, (name, idxs) in enumerate(segs):
         last = si == len(segs) - 1
@@ -73,7 +74,7 @@ def _walk(obj: Any, segs: list[tuple[str, list[str]]]) -> list[tuple[Any, str | 
             if isinstance(t, dict):
                 if last and not idxs:
                     nxt.append((t, name)); continue
-                child = t[name]
+                child = t.setdefault(name, {}) if create and not idxs else t[name]
             elif name == "px4" and hasattr(t, "px4_overrides"):
                 child = t.px4_overrides
             else:
@@ -105,7 +106,7 @@ def get_path(obj: Any, path: str):
 
 def set_path(obj: Any, path: str, value) -> Any:
     """Set (in place) every item the path addresses. Returns obj."""
-    for cont, key in _walk(obj, _parse(path)):
+    for cont, key in _walk(obj, _parse(path), create=True):
         if isinstance(cont, (list, dict)):
             cur = cont[key] if (isinstance(cont, list) or key in cont) else None
             cont[key] = _coerce(cur, value)
