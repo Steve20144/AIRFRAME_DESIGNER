@@ -98,6 +98,7 @@ class PX4Link:
         self.board_sys: dict = {}            # SYS_STATUS: comm drop rate etc.
         self.rc: dict = {}                   # RC_CHANNELS from the autopilot
         self.board_att: dict = {}            # ATTITUDE as PX4 estimates it (in its own, possibly rotated, frame)
+        self.board_pos: dict = {}            # LOCAL_POSITION_NED as PX4 estimates it (z down from the EKF origin)
         self.manual_last: dict = {}          # last MANUAL_CONTROL we sent (USB joystick)
         self.rc_override_last: dict = {}     # last RC_CHANNELS_OVERRIDE we sent (scripted transmitter)
         self.nose_lift_fw: dict = {}         # the nose_lift PX4 module's state (DEBUG_VECT "NLIFT")
@@ -400,6 +401,8 @@ class PX4Link:
                         self._shell_buf += bytes(msg.data[:msg.count])
             elif t == "ATTITUDE":
                 self.board_att = {"roll": msg.roll, "pitch": msg.pitch, "yaw": msg.yaw, "t": time.time()}
+            elif t == "LOCAL_POSITION_NED":
+                self.board_pos = {"z": msg.z, "vz": msg.vz, "t": time.time()}
             elif t == "ATTITUDE_TARGET":
                 # the attitude controller's setpoint (PX4 body frame = the hover frame), for setpoint-vs-actual plots
                 w, x, y, z = (float(v) for v in msg.q)

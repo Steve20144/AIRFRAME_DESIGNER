@@ -143,3 +143,33 @@ def test_paths_create_the_vibration_block(quad):
     assert get_path(quad, "design.vibration.mount_hz") == 40
     with pytest.raises(KeyError):
         get_path(quad, "design.nothing.here")
+
+
+def test_metrics_record_motor_jitter_and_height_estimate_error(quad):
+    """cmd_jitter follows the motor command changes; alt_est_err is PX4's height error less its offset at rest."""
+    from airframe_designer.dynamics import RigidBody
+    from airframe_designer.sim.metrics import MetricsRecorder
+    rb = RigidBody(quad)
+
+    class Link:
+        board_pos: dict = {}
+    link = Link()
+    simr = type("S", (), {})()
+    simr.sim, simr.link, simr.sensor_rate, simr.step_count, simr.t = rb, link, 250.0, 0, 0.0
+    m = MetricsRecorder(sample_hz=50.0)
+    m.begin_phase("parked", 0.0)
+    rest = -float(rb.pos[2])
+    for i in range(1000):
+        if i == 500:
+            m.begin_phase("hover", simr.t)
+        rb.cmd = np.full(4, 0.1 if i % 2 else 0.0) if i >= 500 else np.zeros(4)   # the motors chatter in "hover"
+        drift = 0.0 if i < 500 else 0.5 * (i - 500) / 500                       # the estimate climbs 0.5 m
+        link.board_pos = {"z": -(rest + 0.2 + drift)}                            # 0.2 m EKF-origin offset
+        simr.t += 0.004; simr.step_count += 1
+        m(simr)
+    s = m.summary(quad.mass.mass)
+    assert s["phases"]["parked"]["cmd_jitter_mean"] == 0.0
+    assert s["phases"]["hover"]["cmd_jitter_mean"] > 0.05
+    assert s["phases"]["parked"]["alt_est_err_max"] < 1e-6
+    assert s["phases"]["hover"]["alt_est_err_max"] == pytest.approx(0.5, abs=0.01)
+    assert s["alt_est_err_max"] == pytest.approx(0.5, abs=0.01)

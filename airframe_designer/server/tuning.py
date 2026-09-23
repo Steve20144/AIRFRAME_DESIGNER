@@ -51,6 +51,12 @@ def brief(result: dict) -> dict:
         "landing_max": None if not land else max(float(land.get("pitch_max_deg") or 0), float(land.get("roll_max_deg") or 0)),
         "touchdown": nl.get("touchdown_speed", m.get("touchdown_speed")), "nose_down_s": nl.get("lower_duration"),
         "saturation": m.get("saturation_fraction"), "max_tilt": m.get("max_tilt_deg"),
+        # vibration: PX4's accel metric and the motor command jitter in hover, PX4's height error on the legs during
+        # the nose lift (what aborted the bench lift) and over the whole flight
+        "hover_vib": hover.get("accel_vibration_mean"), "hover_jitter": hover.get("cmd_jitter_mean"),
+        "lift_est_err": max([float(ph[k]["alt_est_err_max"]) for k in ("parked", "lift", "hold", "nose_lift")
+                             if k in ph and ph[k].get("alt_est_err_max") is not None], default=None),
+        "est_err": m.get("alt_est_err_max"),
         "sim_s": (result.get("timing") or {}).get("sim_s"), "wall_s": (result.get("timing") or {}).get("wall_s"),
     }
 

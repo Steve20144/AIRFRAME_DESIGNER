@@ -34,6 +34,8 @@ class MetricsRecorder:
         self.saturation_steps = 0
         self.steps = 0
         self.clipping: dict | None = None       # accel / gyro samples at the IMU range (sensors/vibration.py)
+        self.cmd_jitter = 0.0                   # filtered mean |motor command change| per sensor step
+        self._cmd_prev: np.ndarray | None = None
 
     # ------------------------------------------------------------ phases
     def begin_phase(self, name: str, t: float) -> None:
@@ -64,6 +66,12 @@ class MetricsRecorder:
         cmd = s.cmd
         if len(cmd) and float(cmd.max()) > 0.95:
             self.saturation_steps += 1
+        if len(cmd):
+            # motor command activity step to step, filtered like PX4's vibration metrics: gyro vibration reaches the
+            # motors through the rate loop (mostly its D term), so this is what filters and mounts should bring down
+            if self._cmd_prev is not None and len(self._cmd_prev) == len(cmd):
+                self.cmd_jitter = 0.99 * self.cmd_jitter + 0.01 * float(np.abs(cmd - self._cmd_prev).mean())
+            self._cmd_prev = np.array(cmd, float)
         tilt = s.tilt_deg
         alt = -float(s.pos[2])
         self.max_tilt_deg = max(self.max_tilt_deg, tilt)
@@ -84,6 +92,8 @@ class MetricsRecorder:
             sp_cols += [est["roll"], est["pitch"], est["yaw"]] if est else [float("nan")] * 3
             vm = getattr(getattr(simr, "sensors", None), "vib_metrics", None)
             vib_cols = [vm.accel, vm.gyro] if vm is not None else [float("nan")] * 2
+            pos = getattr(link, "board_pos", None)          # PX4's height estimate (LOCAL_POSITION_NED), up positive
+            vib_cols += [-float(pos["z"]) if pos else float("nan"), self.cmd_jitter]
             if vm is not None:
                 self.clipping = {"accel": vm.accel_clipping, "gyro": vm.gyro_clipping}
             self.rows.append([t, *s.pos.tolist(), *s.vel.tolist(), r, p, y, *s.rates.tolist(), tilt,
@@ -94,9 +104,10 @@ class MetricsRecorder:
     # ------------------------------------------------------------ summary
     COLS = ["t", "n", "e", "d", "vn", "ve", "vd", "roll", "pitch", "yaw", "p", "q", "r", "tilt", "thrust", "power", "lift",
             "airspeed", "util_max", "cmd_mean", "airborne", "roll_sp", "pitch_sp", "yaw_sp", "thr_sp", "roll_est", "pitch_est", "yaw_est",
-            "vib_acc", "vib_gyro"]
+            "vib_acc", "vib_gyro", "alt_est", "cmd_jitter"]
     # *_sp: PX4's attitude setpoint (ATTITUDE_TARGET, hover frame), NaN until the first one arrives
     # vib_*: PX4's accel (m/s^2) and gyro (rad/s) vibration metrics on the samples sent (sensors/vibration.py)
+    # alt_est: PX4's height above its EKF origin (NaN until LOCAL_POSITION_NED arrives); cmd_jitter: see __call__
 
     def array(self) -> np.ndarray:
         return np.array(self.rows, float).reshape(-1, len(self.COLS))
@@ -115,6 +126,14 @@ class MetricsRecorder:
             return out
         col = {c: i for i, c in enumerate(self.COLS)}
         weight = mass * G
+        # PX4's height error: its estimate minus the truth, less the offset it shows at rest on the legs at the start
+        # (the EKF origin is not the CG height); vibration rectification shows up as a drift away from that offset
+        est_err = a[:, col["alt_est"]] - (-a[:, col["d"]])
+        fin = np.flatnonzero(np.isfinite(est_err))
+        if len(fin):
+            rest = fin[: max(1, int(self.sample_hz))]           # the first second of estimates
+            est_err = est_err - float(np.median(est_err[rest]))
+            out["alt_est_err_max"] = round(float(np.nanmax(np.abs(est_err))), 3)
         hover_power = None
         for name, ph in self.phases.items():
             m = np.array([p == name for p in self.phase_of_row])
@@ -180,6 +199,11 @@ class MetricsRecorder:
                 if np.isfinite(v).any():
                     d[f"{k}_vibration_mean"] = round(float(np.nanmean(v)), nd)
                     d[f"{k}_vibration_max"] = round(float(np.nanmax(v)), nd)
+            d["cmd_jitter_mean"] = round(float(x[:, col["cmd_jitter"]].mean()), 5)
+            e = est_err[m]
+            if np.isfinite(e).any():
+                d["alt_est_err_mean"] = round(float(np.nanmean(e)), 3)
+                d["alt_est_err_max"] = round(float(np.nanmax(np.abs(e))), 3)
             if "alt" in tgt:
                 e = alt - float(tgt["alt"])
                 d["alt_err_rms"] = round(float(np.sqrt((e ** 2).mean())), 4); d["alt_err_max"] = round(float(np.abs(e).max()), 4)

@@ -1277,6 +1277,10 @@ def build_app(state: AppState) -> FastAPI:
         # reserve a PX4 instance now: two attempts started in the same second would otherwise both pick the first
         # free one and collide on its ports
         taken = {j.get("instance") for j in state.batch_jobs.values() if j.get("running")}
+        # the app's own PX4 (SITL): its lock file is not always seen as held (the ~/PX4-nl build on instance 4 was
+        # handed to an attempt, which then failed on the port), so never offer it
+        if getattr(state.conn, "px4_instance", None) is not None and state.conn.px4_running():
+            taken.add(state.conn.px4_instance)
         if state.study_job.get("running"):
             # a running sweep cycles PX4 on the lowest instances between trials; they look free for a moment
             taken |= set(range(1, int(state.study_job.get("workers", 4)) + 1))

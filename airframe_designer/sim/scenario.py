@@ -167,6 +167,7 @@ class ScenarioRunner:
             if self.link is not None and hasattr(self.link, "request_message"):
                 try:
                     self.link.request_message(83, 50.0)          # ATTITUDE_TARGET for setpoint-vs-actual metrics
+                    self.link.request_message(32, 20.0)          # LOCAL_POSITION_NED: PX4's height estimate vs truth
                 except Exception:
                     pass
             if any(abs(v) > 0 for v in self.sc.wind):
