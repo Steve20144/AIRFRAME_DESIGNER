@@ -224,10 +224,18 @@ def build_app(state: AppState) -> FastAPI:
     async def hover_check():
         return json_safe(sim.airframe.hover_check())
 
+    # Kept out of the Load menu (2026-09-23: the menu shows the model flown on the aircraft, ATLAS_09B, plus anything
+    # saved later). The files stay: tests, studies, scripts and --airframe still use them, and /api/airframe/load
+    # still loads them by name.
+    MENU_HIDDEN = {"_autosave.json", "atlas_og.json", "atlas_og_flat.json", "atlas_og_stand.json",
+                   "atlas_phase01_best.json", "atlas_pivot16.json", "hex_x.json", "multirotor_10.json",
+                   "plane_quad.json", "quad_x.json"}
+    MENU_BUILTINS = False            # the built-in quad_x / hex_x / plane_quad presets
+
     @app.get("/api/airframes")
     async def list_airframes():
-        files = sorted(p.name for p in AIRFRAME_DIR.glob("*.json"))
-        return {"presets": list(PRESETS), "files": files}
+        files = sorted(p.name for p in AIRFRAME_DIR.glob("*.json") if p.name not in MENU_HIDDEN)
+        return {"presets": list(PRESETS) if MENU_BUILTINS else [], "files": files}
 
     @app.post("/api/airframe/load")
     async def load_airframe(body: dict):
