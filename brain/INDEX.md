@@ -22,6 +22,8 @@ current task needs.
 - [Tuning tab](architecture/tuning-tab.md): attempts, sweeps, flight library, charts, API.
 - [Telemetry radio and throttle dashboard](architecture/telemetry-dashboard.md): SiK on TELEM3, the live dashboard,
   per-run records, log download over the radio, PX4 stream quirks.
+- [Design knobs](architecture/design-knobs.md): jetfoil angles, front jets, battery/CG as named values that move
+  rotors and linked CAD parts; Geometry tab card, `knobs.*` paths for sweeps (branch atlas-v5-design).
 - [Fan vibration model](architecture/vibration-model.md): `design.vibration` (imbalance, blade pass, mount, frame
   modes) at the IMU, PX4's vibration metrics, the `vibration` bench command, first numbers.
 

@@ -199,7 +199,10 @@ def sweep_spec(airframe: dict, scenario: str, variables: list[dict], name: str |
     (or {"path": ..., "range": [...]})."""
     vs, levels = [], []
     for v in variables:
-        path = v.get("path") or ("px4." + str(v.get("param", "")).strip())
+        param = str(v.get("param", "")).strip()
+        # a bare name is a PX4 parameter; anything with a dot or a bracket is a parameter path (knobs.foil_1_deg,
+        # rotors[M9].cant_deg, mass.cg[0], px4.MC_ROLL_P)
+        path = v.get("path") or (param if ("." in param or "[" in param) else "px4." + param)
         lo, hi = (v.get("range") or [v.get("min"), v.get("max")])
         vs.append({"path": path, "range": [float(lo), float(hi)]} | ({"type": "int"} if v.get("type") == "int" else {}))
         levels.append(max(1, int(v.get("levels", 3))))

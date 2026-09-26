@@ -80,6 +80,8 @@ function pushAirframe(immediate = false) {
       const res = await api('/api/airframe', { airframe, keep_state: true });
       // the server resolves mass.from_items and normalises rotor axes; take its mass block back so the card is right
       if (res.airframe && res.airframe.mass && airframe.mass && airframe.mass.from_items) { airframe.mass = res.airframe.mass; if (res.airframe.cad) airframe.cad = res.airframe.cad; fillMassCard(); renderCadTotals(); scene.setAirframe(airframe); }
+      else if (res.airframe && res.airframe.cad && airframe.cad && airframe.design && airframe.design.cad_links) { airframe.cad = res.airframe.cad; scene.setAirframe(airframe); }   // parts linked to a rotor follow it
+      renderKnobs();
       showProblems(res.problems);
       showHover(res.hover);
       markDirty();
@@ -146,6 +148,7 @@ function setAirframe(af) {
   renderMotorSliders();
   fillNoseLiftCard();
   fillMotorCard();
+  renderKnobs();
   loadExport();          // fills the edited/affected-parameters section (needs the server's export view)
 }
 function fillMassCard() {
@@ -181,7 +184,7 @@ const cadCentroids = {};             // id -> centroid in the structural frame w
 let cadMeshKey = null;               // file|rotation|origin|scale of the meshes currently in the scene
 const cadKey = (cad) => [cad.file, (cad.rotation_deg || []).join(','), (cad.origin || []).join(','), cad.scale].join('|');
 const cadBody = (id) => (airframe && airframe.cad && airframe.cad.bodies || []).find(b => b.id === id);
-const cadPos = (b) => { const c = cadCentroids[b.id]; return c ? c.map((v, i) => v + (b.offset ? b.offset[i] : 0)) : (b.pos || [0, 0, 0]); };
+const cadPos = (b) => { const c = b.pose_pos || cadCentroids[b.id]; return c ? c.map((v, i) => v + (b.offset ? b.offset[i] : 0)) : (b.pos || [0, 0, 0]); };
 function fillCadCard() {
   const cad = airframe.cad;
   $('#cad-use').checked = !!airframe.mass.from_items;
@@ -295,6 +298,81 @@ async function cadFrameChanged() {
 ['cad-rx', 'cad-ry', 'cad-rz', 'cad-ox', 'cad-oy', 'cad-oz', 'cad-scale'].forEach(id => $('#' + id).addEventListener('change', cadFrameChanged));
 $('#cad-reset-offsets').addEventListener('click', () => { if (!airframe.cad) return; airframe.cad.bodies.forEach(b => b.offset = [0, 0, 0]); scene.syncCad(); renderCadTable(); pushAirframe(true); });
 $('#cad-remove-all').addEventListener('click', (e) => { if (!airframe.cad || !confirmClick(e.currentTarget, 'Click again to remove')) return; airframe.cad = null; cadSelected = null; scene.selectCad(null); setAirframe(airframe); pushAirframe(true); });
+
+// --- design knobs (geometry/knobs.py): named geometry values that move rotors and linked CAD parts together.
+// Rotor knobs read their value off the rotors, so a knob and a hand edit of the rotor never disagree.
+function knobValue(k) {
+  const r = (airframe.rotors || []).find(x => x.name === (k.rotors || [])[0]);
+  if (k.kind === 'tilt') return r ? axisToTilt(r.axis, r.pos[1])[0] : NaN;
+  if (k.kind === 'cant') return r ? Math.abs(axisToTilt(r.axis, r.pos[1])[1]) : NaN;
+  return +k.value || 0;
+}
+function renderKnobs() {
+  const ks = (airframe && airframe.design && airframe.design.knobs) || [];
+  const el = $('#knob-table');
+  if (!ks.length) {
+    el.innerHTML = '<div class="hint">No design knobs yet. <b>Set up knobs</b> makes one per jetfoil station, the front jets&#39; sideways and fore/aft tilt, and the battery position.</div>';
+  } else {
+    const isShift = (k) => String(k.kind).startsWith('shift');
+    el.innerHTML = `<table class="grid knobs"><thead><tr><th>Knob</th><th title="tilt: thrust angle from vertical, deg (a foil fan's jet angle); cant: sideways lean, deg; battery: metres from the CAD position">Value</th><th title="range a sweep covers by default">Sweep range</th><th>Moves</th><th></th></tr></thead><tbody>${ks.map((k, i) => {
+      const v = knobValue(k), step = isShift(k) ? 0.005 : 1, d = isShift(k) ? 3 : 1;
+      const nb = (k.bodies || []).length;
+      const moves = isShift(k) ? (nb ? `${nb} battery part${nb === 1 ? '' : 's'}` : 'the CG directly (no battery parts)') : (k.rotors || []).join(' ');
+      const rg = k.range || [0, 0];
+      return `<tr data-k="${i}"><td title="${esc(k.name)}">${esc(k.label || k.name)}</td>
+        <td><input type="number" class="knob-v" data-k="${i}" step="${step}" value="${isFinite(v) ? +v.toFixed(d) : ''}"></td>
+        <td class="num"><input type="number" class="knob-lo" data-k="${i}" step="${step}" value="${rg[0]}"> – <input type="number" class="knob-hi" data-k="${i}" step="${step}" value="${rg[1]}"></td>
+        <td class="hint">${esc(moves)}</td>
+        <td><button class="pill small knob-sweep" data-k="${i}" title="add this knob to the Tuning tab's sweep, over its range">→ sweep</button></td></tr>`;
+    }).join('')}</tbody></table>`;
+    $$('#knob-table .knob-v').forEach(inp => inp.addEventListener('change', () => { const k = ks[+inp.dataset.k]; const v = parseFloat(inp.value); if (isFinite(v)) setKnobs({ [k.name]: v }); }));
+    $$('#knob-table .knob-lo, #knob-table .knob-hi').forEach(inp => inp.addEventListener('change', () => {
+      const k = ks[+inp.dataset.k]; k.range = k.range || [0, 0]; k.range[inp.classList.contains('knob-lo') ? 0 : 1] = parseFloat(inp.value) || 0; pushAirframe(true);
+    }));
+    $$('#knob-table .knob-sweep').forEach(b => b.addEventListener('click', () => {
+      const k = ks[+b.dataset.k], rg = k.range || [0, 1], path = 'knobs.' + k.name;
+      if (sweepVars.every(v => /^MC_(ROLL|PITCH)RATE_P$/.test(v.param))) sweepVars = [];   // drop the untouched gain defaults
+      if (!sweepVars.some(v => v.param === path)) sweepVars.push({ param: path, min: rg[0], max: rg[1], levels: 5 });
+      renderSweepVars();
+      logLine(`[knobs] ${path} added to the sweep (${rg[0]} to ${rg[1]}, 5 levels); pick the scenario and press Start sweep`);
+      const tab = $('.tabs button[data-tab="tuning"]'); if (tab) tab.click();
+    }));
+  }
+  // link target: a rotor, the battery, or unlink
+  const sel = $('#knob-link-target'), keep = sel.value;
+  sel.innerHTML = (airframe.rotors || []).map(r => `<option value="${esc(r.name)}">rotor ${esc(r.name)}</option>`).join('') + '<option value="ballast">battery (CG knobs)</option><option value="">unlink</option>';
+  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+  const links = (airframe.design && airframe.design.cad_links) || {};
+  const name = (id) => { const b = cadBody(id); return b ? b.name : id; };
+  $('#knob-links').innerHTML = Object.keys(links).length
+    ? 'Parts that turn with their rotor: ' + Object.entries(links).map(([r, l]) => `<b>${esc(r)}</b> ${(l.bodies || []).map(id => esc(name(id))).join(', ')}`).join(' · ')
+    : (airframe.cad && airframe.cad.file ? 'No CAD parts linked to rotors.' : '');
+}
+async function knobCall(url, body) {
+  await api('/api/airframe', { airframe, keep_state: true });     // knobs edit the server's copy: send pending edits first
+  const r = await api(url, body);
+  setAirframe(r.airframe); showProblems(r.problems); showHover(r.hover); markDirty();
+  return r;
+}
+async function setKnobs(values) {
+  try { await knobCall('/api/knobs/set', { values }); } catch (e) { logLine('[knobs] ' + e.message); }
+}
+$('#knob-setup').addEventListener('click', async (e) => {
+  if (airframe.design && (airframe.design.knobs || []).length && !confirmClick(e.currentTarget, 'Click again to replace the knobs')) return;
+  try {
+    const r = await knobCall('/api/knobs/setup', {});
+    logLine(`[knobs] ${r.knobs.length} knobs: ${r.knobs.map(k => k.name).join(', ')}`);
+  } catch (err) { logLine('[knobs] ' + err.message); }
+});
+$('#knob-link').addEventListener('click', async () => {
+  const bodies = scene.selectedCadIds || [];
+  if (!bodies.length) { logLine('[knobs] select CAD parts in the 3D view first (shift-click for several)'); return; }
+  const target = $('#knob-link-target').value;
+  try {
+    await knobCall('/api/knobs/link', { bodies, target });
+    logLine(`[knobs] ${bodies.length} part(s) ${target === '' ? 'unlinked' : target === 'ballast' ? 'set as the battery the CG knobs move' : 'linked to ' + target}`);
+  } catch (err) { logLine('[knobs] ' + err.message); }
+});
 
 
 function bindNumber(id, fn) {

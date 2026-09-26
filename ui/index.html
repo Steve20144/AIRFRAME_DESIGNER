@@ -121,6 +121,18 @@
       </details>
       </div>
 
+      <h3>Design knobs <small>· jetfoil angles, front jets, battery: each moves the fans and their CAD parts together</small></h3>
+      <div class="card" id="knob-card">
+        <div id="knob-table"><div class="hint">No design knobs yet.</div></div>
+        <div class="row tight">
+          <button id="knob-setup" class="pill small" title="one knob per jetfoil station (mirror pair of foil fans), the front jets' sideways and fore/aft tilt, and the battery fore/aft and down/up; links the front fans' CAD parts so they turn with the fans. Replaces existing knobs">Set up knobs</button>
+          <span class="panel-spacer"></span>
+          <label title="what the CAD parts selected in the 3D view (shift-click for several) should follow">Selected parts → <select id="knob-link-target"></select></label>
+          <button id="knob-link" class="pill small" title="link the selected CAD parts: to a rotor (they turn and move with it), to the battery (moved by the CG knobs), or unlink them">Link</button>
+        </div>
+        <div id="knob-links" class="hint"></div>
+      </div>
+
       <h3>Rotors</h3>
       <div id="rotor-table"></div>
       <div class="row tight">
@@ -293,7 +305,7 @@
           <label>Scenario <select id="sweep-scenario"></select></label>
           <label title="parallel PX4 instances (1 to 8)">Workers <input id="sweep-workers" type="number" value="4" min="1" max="8" style="width:52px"></label>
         </div>
-        <table class="grid tune" id="sweep-vars"><thead><tr><th>PX4 parameter</th><th>min</th><th>max</th><th>levels</th><th></th></tr></thead><tbody></tbody></table>
+        <table class="grid tune" id="sweep-vars"><thead><tr><th title="a PX4 parameter name, or a path: knobs.foil_1_deg, knobs.front_cant_deg, knobs.cg_dx (Geometry tab, Design knobs, → sweep)">PX4 parameter or knob</th><th>min</th><th>max</th><th>levels</th><th></th></tr></thead><tbody></tbody></table>
         <div class="row tight">
           <button class="pill small" id="sweep-add">+ variable</button>
           <span id="sweep-count" class="hint"></span>

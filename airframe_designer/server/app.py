@@ -24,6 +24,7 @@ from ..px4.sitl import instance_is_free
 from ..sim.nose_lift import uses_firmware
 from ..aero import airfoils
 from ..geometry import cad as cadmod
+from ..geometry import knobs as knobmod
 from . import tuning
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -396,7 +397,54 @@ def build_app(state: AppState) -> FastAPI:
 
     @app.get("/api/airframe/paths")
     async def airframe_paths():
-        return {"paths": list_paths(sim.airframe)}
+        return {"paths": knobmod.knob_paths(sim.airframe) + list_paths(sim.airframe)}
+
+    # ---------------------------------------------------------------- design knobs (geometry/knobs.py)
+    def knob_reply(af: Airframe) -> dict:
+        hc = af.hover_check()
+        return json_safe({"ok": True, "airframe": af.to_dict(), "knobs": knobmod.describe(af),
+                          "problems": af.validate() + hc["problems"], "hover": hc})
+
+    def knob_edit(fn) -> dict:
+        af = sim.airframe.copy()
+        try:
+            fn(af)
+        except (KeyError, ValueError) as e:
+            return JSONResponse({"ok": False, "error": str(e).strip("'\"")}, status_code=400)
+        af.resolve_mass()
+        sim.set_airframe(af, keep_state=True)
+        autosave(af)
+        return knob_reply(af)
+
+    @app.get("/api/knobs")
+    async def knobs_get():
+        return json_safe({"ok": True, "knobs": knobmod.describe(sim.airframe),
+                          "links": (sim.airframe.design or {}).get("cad_links") or {}})
+
+    @app.post("/api/knobs/setup")
+    async def knobs_setup():
+        """Default knobs for an ATLAS layout: jetfoil stations, front jets, battery (replaces existing ones)."""
+        return knob_edit(lambda af: knobmod.setup_defaults(af))
+
+    @app.post("/api/knobs/set")
+    async def knobs_set(body: dict):
+        """{"values": {"foil_1_deg": 30, ...}} or {"name", "value"}."""
+        values = dict(body.get("values") or ({body["name"]: body["value"]} if "name" in body else {}))
+        return knob_edit(lambda af: [knobmod.set_value(af, k, float(v)) for k, v in values.items()])
+
+    @app.post("/api/knobs/link")
+    async def knobs_link(body: dict):
+        """{"bodies": [ids], "target": "M9" (turn with that rotor) | "ballast" (moved by the CG knobs) | "" (unlink)}."""
+        bodies, target = list(body.get("bodies") or []), str(body.get("target", ""))
+
+        def edit(af):
+            if target == "ballast":
+                knobmod.set_ballast(af, bodies)
+            elif target:
+                knobmod.link(af, target, bodies)
+            else:
+                knobmod.unlink(af, bodies)
+        return knob_edit(edit)
 
     # ---------------------------------------------------------------- design
     def design_speed(body: dict | None) -> float:

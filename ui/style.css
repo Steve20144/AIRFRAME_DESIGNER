@@ -386,6 +386,9 @@ table.grid.trials tr.infeasible td { color: var(--text-3); }
 table.grid.tune input[type=text] { width: 150px; font-family: var(--mono); font-size: 12.5px; }
 table.grid.tune input[type=number] { width: 78px; }
 table.grid.tune td { padding: 2px 3px; }
+table.grid.knobs input[type=number] { width: 58px; }
+table.grid.knobs td.num { white-space: nowrap; }
+table.grid.knobs td { padding: 2px 3px; }
 table.grid.tune .x { color: var(--text-3); padding: 0 6px; }
 table.grid.tune .x:hover { color: var(--red); }
 #tune-runs table.grid tr[data-run] { cursor: pointer; }

@@ -339,7 +339,7 @@ export function createScene(canvas, handlers) {
   }
 
   // ------------------------------------------------------------ CAD bodies (STEP solids from /api/cad/mesh)
-  const cadOffset = (n) => threeToFrd(n.mesh.position).map((v, i) => +(v - n.centroid[i]).toFixed(4));
+  const cadOffset = (n) => threeToFrd(n.mesh.position).map((v, i) => +(v - (n.posed || n.centroid)[i]).toFixed(4));
   function clearCad() {
     for (const n of cadNodes.values()) { cadGroup.remove(n.mesh); n.mesh.geometry.dispose(); n.mesh.material.dispose(); n.marker.geometry.dispose(); }
     cadNodes.clear();
@@ -370,6 +370,19 @@ export function createScene(canvas, handlers) {
     }
     if (airframe) syncCad(airframe);
   }
+  // a row-major FRD rotation (CadBody.rot) as a three.js matrix: M = P R P^T with P the FRD -> three axis map
+  const poseM = new THREE.Matrix4();
+  function poseToThree(r) {
+    if (!r || r.length !== 9) return poseM.identity();
+    const P = [[1, 0, 0], [0, 0, -1], [0, 1, 0]], R = [[r[0], r[1], r[2]], [r[3], r[4], r[5]], [r[6], r[7], r[8]]];
+    const m = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+      let v = 0;
+      for (let k = 0; k < 3; k++) for (let l = 0; l < 3; l++) v += P[i][k] * R[k][l] * P[j][l];
+      m[i][j] = v;
+    }
+    return poseM.set(m[0][0], m[0][1], m[0][2], 0, m[1][0], m[1][1], m[1][2], 0, m[2][0], m[2][1], m[2][2], 0, 0, 0, 0, 1);
+  }
   function syncCad(af) {
     const cad = af && af.cad;
     const showCad = !!(cad && cad.file && cad.visible !== false);
@@ -380,7 +393,10 @@ export function createScene(canvas, handlers) {
     const maxMass = Math.max(0, ...(cad.bodies || []).filter(b => !b.removed).map(b => Math.max(0, +b.mass || 0)));
     for (const b of cad.bodies || []) {
       const n = cadNodes.get(b.id); if (!n) continue;
-      if (!gizmo.dragging || !selectedCadIds.has(b.id)) n.mesh.position.copy(frdToThree(n.centroid.map((v, i) => v + ((b.offset || [0, 0, 0])[i] || 0))));
+      // knob pose (geometry/knobs.py): the part turned about its rotor and carried with it; the drag offset on top
+      n.posed = b.pose_pos || n.centroid;
+      if (!gizmo.dragging || !selectedCadIds.has(b.id)) n.mesh.position.copy(frdToThree(n.posed.map((v, i) => v + ((b.offset || [0, 0, 0])[i] || 0))));
+      n.mesh.quaternion.setFromRotationMatrix(poseToThree(b.rot));
       const massFraction = maxMass > 0 ? Math.max(0, +b.mass || 0) / maxMass : 0;
       n.mesh.material.color.copy(cadMat.color).lerp(cadHeavyColor, massFraction);
       n.mesh.visible = !b.removed;

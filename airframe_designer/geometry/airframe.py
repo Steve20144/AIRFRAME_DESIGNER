@@ -130,7 +130,10 @@ class Airframe:
         }
 
     def resolve_mass(self) -> "Airframe":
-        """Recompute mass / CG / inertia from mass items and CAD bodies when ``mass.from_items`` is set."""
+        """Recompute mass / CG / inertia from mass items and CAD bodies when ``mass.from_items`` is set. CAD parts
+        linked to rotors or moved by the design knobs are posed first (geometry/knobs.py)."""
+        from . import knobs
+        knobs.update_poses(self)
         self.mass.resolve(self.cad.mass_items() if self.cad else None)
         return self
 

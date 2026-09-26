@@ -41,6 +41,11 @@ class CadBody:
     mass: float = 0.0               # kg, set by the user
     offset: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])   # drag offset, FRD metres
     removed: bool = False
+    # pose set by the design knobs (geometry/knobs.py), FRD: the body turned by ``rot`` (row-major 3x3) about
+    # ``pivot`` and moved by ``shift``, before the drag offset. Derived on every resolve, never edited by hand.
+    rot: list[float] = field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+    pivot: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    shift: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     # measured in the CAD frame (native axes, metres): filled by import_step, kept in the airframe file
     volume: float = 0.0             # m^3
     centroid: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
@@ -55,7 +60,18 @@ class CadBody:
         b.offset = [float(v) for v in (b.offset or [0, 0, 0])][:3] + [0.0] * (3 - len(b.offset or []))
         b.centroid = [float(v) for v in (b.centroid or [0, 0, 0])]
         b.inertia_unit = [float(v) for v in (b.inertia_unit or [0] * 6)] + [0.0] * (6 - len(b.inertia_unit or []))
+        b.rot = [float(v) for v in b.rot] if len(b.rot or []) == 9 else [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        b.pivot = [float(v) for v in (b.pivot or [0, 0, 0])][:3]
+        b.shift = [float(v) for v in (b.shift or [0, 0, 0])][:3]
         return b
+
+    def reset_pose(self) -> None:
+        self.rot = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        self.pivot = [0.0, 0.0, 0.0]
+        self.shift = [0.0, 0.0, 0.0]
+
+    def pose_matrix(self) -> np.ndarray:
+        return np.asarray(self.rot, float).reshape(3, 3)
 
 
 @dataclass
@@ -77,9 +93,14 @@ class CadModel:
         """CAD point (native axes, metres) -> structural FRD."""
         return self.matrix() @ (np.asarray(p, float) * self.scale) + np.asarray(self.origin, float)
 
+    def posed_centroid(self, b: CadBody) -> list[float]:
+        """The centroid after the knob pose, before the drag offset (the 3D view adds the offset itself)."""
+        piv = np.asarray(b.pivot, float)
+        return [float(v) for v in b.pose_matrix() @ (self.to_frd(b.centroid) - piv) + piv + np.asarray(b.shift, float)]
+
     def body_pos(self, b: CadBody) -> list[float]:
-        """Where the body's centroid sits in the structural frame, drag offset included."""
-        return [float(v) for v in self.to_frd(b.centroid) + np.asarray(b.offset, float)]
+        """Where the body's centroid sits in the structural frame, knob pose and drag offset included."""
+        return [float(v) for v in np.asarray(self.posed_centroid(b)) + np.asarray(b.offset, float)]
 
     def active(self) -> list[CadBody]:
         return [b for b in self.bodies if not b.removed]
@@ -96,6 +117,8 @@ class CadModel:
             ixx, iyy, izz, ixy, ixz, iyz = b.inertia_unit
             I = np.array([[ixx, -ixy, -ixz], [-ixy, iyy, -iyz], [-ixz, -iyz, izz]]) * (b.mass / b.volume)
             I = (R @ I @ R.T) * (self.scale ** 2)     # rotate into FRD; inertia grows with length^2 under a uniform scale
+            P = b.pose_matrix()
+            I = P @ I @ P.T
             out.append(MassItem(name=f"cad:{b.name}", mass=float(b.mass), pos=self.body_pos(b),
                                 inertia=[float(I[0, 0]), float(I[1, 1]), float(I[2, 2])],
                                 inertia_products=[float(-I[0, 1]), float(-I[0, 2]), float(-I[1, 2])]))
@@ -113,7 +136,7 @@ class CadModel:
     # ------------------------------------------------------------ io
     def to_dict(self) -> dict:
         d = {"file": self.file, "rotation_deg": list(self.rotation_deg), "origin": list(self.origin), "scale": self.scale, "visible": self.visible,
-             "bodies": [b.to_dict() | {"pos": self.body_pos(b)} for b in self.bodies]}
+             "bodies": [b.to_dict() | {"pos": self.body_pos(b), "pose_pos": self.posed_centroid(b)} for b in self.bodies]}
         return d
 
     @classmethod

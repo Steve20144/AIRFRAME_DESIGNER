@@ -14,6 +14,7 @@ Grammar
   hover_pitch_deg
   px4.MC_PITCHRATE_P          a PX4 parameter (stored in px4_overrides)
   design.cruise_speed_kmh     a design setting
+  knobs.foil_1_deg            a design knob (geometry/knobs.py): moves rotors and linked CAD parts together
 
 set_path() writes; get_path() reads (returns a list when the path addresses several items).
 """
@@ -98,6 +99,9 @@ def _walk(obj: Any, segs: list[tuple[str, list[str]]], create: bool = False) -> 
 
 
 def get_path(obj: Any, path: str):
+    if path.startswith("knobs."):
+        from . import knobs
+        return knobs.get_value(obj, path[len("knobs."):])
     res = []
     for cont, key in _walk(obj, _parse(path)):
         res.append(cont[key] if isinstance(cont, (list, dict)) else getattr(cont, key))
@@ -106,6 +110,10 @@ def get_path(obj: Any, path: str):
 
 def set_path(obj: Any, path: str, value) -> Any:
     """Set (in place) every item the path addresses. Returns obj."""
+    if path.startswith("knobs."):
+        from . import knobs
+        knobs.set_value(obj, path[len("knobs."):], value)
+        return obj
     for cont, key in _walk(obj, _parse(path), create=True):
         if isinstance(cont, (list, dict)):
             cur = cont[key] if (isinstance(cont, list) or key in cont) else None
