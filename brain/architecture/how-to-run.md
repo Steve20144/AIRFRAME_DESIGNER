@@ -42,3 +42,16 @@ from the app reserve instances from 9 downward and skip the sweep's.
   (10016 for none_iris) or PX4 resets everything.
 - Keep `run_once` results JSON-serialisable (no NaN in API responses: the Tuning routes null them).
 - When changing physics: run `tests/`, compare forces on random states before and after, keep the per-step cost.
+
+## The aircraft's board (Pixhawk 6X Pro)
+
+- Parameters: `python scripts/board_params.py backup|diff|get|set --port COM3` over USB (Windows Python, which has
+  pymavlink), or `--port udpin:127.0.0.1:14550` over the SiK radio while `scripts/throttle_dashboard.py` runs; `set`
+  reads every value back; backups in `results/board_params/`.
+- Firmware: USB only. `bash scripts/build_nose_lift_firmware.sh board build` (PX4 tree ~/PX4-nl; the script copies the
+  firmware/px4_ext of the tree it is run from), then PX4's `Tools/px_uploader.py` from Windows Python on the board's
+  COM port (never COM6, the radio). Around it: back up parameters, keep the board's image as a rollback
+  (`~/firmware_backups`), compare strings/size, flash, `diff` the parameters, set, confirm with `ver all`.
+- Before a flash, ask the board what it runs (`ver all` over the radio, parameters present or not); a commit message
+  is not evidence of what was flashed.
+

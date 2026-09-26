@@ -1,0 +1,96 @@
+{
+  "name": "fw_nose_lift_midcancel12",
+  "description": "The case that tipped the aircraft back on 23 Sep: SB off 2.5 s into the raise to 12 deg, while the nose is still moving; the lowering must stop it and bring it back to the park without passing 14 deg. Then the kill switch. Needs --px4-dir ~/PX4-nl.",
+  "max_time": 150,
+  "attitude": {
+    "park_pitch_deg": 5.0,
+    "hover_pitch_deg": 24
+  },
+  "design": {
+    "nose_lift": {
+      "executor": "firmware",
+      "target_pitch_deg": 12.0,
+      "timeout_s": 60,
+      "hold_timeout_s": 90
+    }
+  },
+  "params": {
+    "COM_RC_IN_MODE": 0,
+    "RC_CHAN_CNT": 18,
+    "RC_MAP_ROLL": 1,
+    "RC_MAP_PITCH": 2,
+    "RC_MAP_THROTTLE": 3,
+    "RC_MAP_YAW": 4,
+    "RC3_TRIM": 1000,
+    "RC_MAP_KILL_SW": 9,
+    "RC_KILLSWITCH_TH": 0.75,
+    "COM_DISARM_LAND": 3
+  },
+  "abort": {
+    "max_tilt_deg": 60,
+    "max_alt": 2,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "rc",
+      "name": "arm",
+      "channels": {
+        "7": 1500,
+        "9": 1000
+      },
+      "mode": "stabilized",
+      "arm": true,
+      "until": {
+        "armed": true,
+        "nl_state": "parked"
+      },
+      "timeout": 30
+    },
+    {
+      "type": "rc",
+      "name": "parked",
+      "duration": 2
+    },
+    {
+      "type": "rc",
+      "name": "raise",
+      "channels": {
+        "7": 1000
+      },
+      "throttle": 0.0,
+      "duration": 2.5
+    },
+    {
+      "type": "rc",
+      "name": "switch_off",
+      "channels": {
+        "7": 1500
+      },
+      "until": {
+        "nl_state": "lowering"
+      },
+      "timeout": 1
+    },
+    {
+      "type": "rc",
+      "name": "lowered",
+      "duration": 12
+    },
+    {
+      "type": "rc",
+      "name": "kill",
+      "channels": {
+        "9": 2000
+      },
+      "until": {
+        "armed": false
+      },
+      "timeout": 10
+    }
+  ]
+}

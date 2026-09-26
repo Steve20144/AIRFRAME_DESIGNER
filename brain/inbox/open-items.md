@@ -2,7 +2,8 @@
 
 - **Measure the nose fans' step response** (spin-up, spin-down, dead time) on the bench: the sim does not reproduce
   the aircraft's ~1 Hz fan bursts; fit `tau` / `tau_down`, then re-tune `NL_KQ*` / `NL_LOW_KQ*`.
-- **Lowering never fades**: the post-rotation pitch estimate reads ~0.5 deg high, the 0.5 deg fade tolerance is never
+- **Lowering never fades** (cause found 2026-09-23: the fade and hold checks use the raw rate, which the legs'
+  rocking never lets settle; fixed in the NL_CEIL firmware with a 1 Hz settled rate; to confirm on the aircraft): the post-rotation pitch estimate reads ~0.5 deg high, the 0.5 deg fade tolerance is never
   met, thrust bleeds to the 25 s lowering timeout. Fade when the nose stops while the loop still asks it down.
 - **App export reverts the board's nose-lift settings** (NL_KQ/KQI to 0.02/0.012, COM_DISARM_PRFLT to 120) and never
   exports NL_LOW_KQ/KQI: put G4 into `design.nose_lift` and export the lowering gains.
@@ -31,3 +32,10 @@
   series; their rows in the Tuning tab show metrics only.
 - **Foil-fan rotor positions vs CAD**: the eight foil EDF bodies sit 0.1 to 0.3 m ahead of where OG and 09B place
   those rotors (jet exits). Measure the actual jet exit on the CAD and reconcile both models.
+- **Uncommitted as of 2026-09-23 evening**: dashboard Logs tab + fake telemetry, `scripts/board_params.py`,
+  `scripts/nose_lift_smoothing.py`, the 12-deg / balance / indoor nose-lift scenarios, the repo's firmware
+  tree (= the flashed source since 23 Sep 18:26: committed firmware minus NL_Q_LPF, plus the hold fix and NL_CEIL),
+  brain notes.
+- **IMU_GYRO_CUTOFF 25 / IMU_DGYRO_CUTOFF 15** (V4 vibration tune) are in atlas_09b.json but not on the board.
+- **Battery**: PX4 read 7.48 V / 0 % after the 23 Sep session ("Low battery" from 17:59).
+

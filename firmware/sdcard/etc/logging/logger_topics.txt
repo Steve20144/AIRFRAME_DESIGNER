@@ -1,0 +1,149 @@
+# ATLAS system-identification logging. SD card: /etc/logging/
+# PX4 logs exactly this list and ignores SDLOG_PROFILE. It holds the
+# default profile's multicopter topics plus fans, nose lift and gyro at
+# full rate. Delete the file and reboot to return to the default.
+# Format: <topic> <interval ms, 0 = every sample> <instance>
+# Always give all three fields (fewer = every instance, 255-topic cap).
+# Keep every line under 80 characters (the parser reads 80 at a time).
+
+# --- added for system identification: cause and effect at full rate ---
+actuator_motors 0 0
+nose_lift_output 0 0
+nose_lift_feedback 0 0
+debug_vect 0 0
+actuator_outputs 10 0
+actuator_outputs 10 1
+actuator_outputs 10 2
+sensor_combined 0 0
+vehicle_angular_velocity 0 0
+vehicle_acceleration 5 0
+vehicle_attitude 10 0
+vehicle_rates_setpoint 5 0
+vehicle_attitude_setpoint 10 0
+vehicle_torque_setpoint 5 0
+vehicle_torque_setpoint 20 1
+vehicle_thrust_setpoint 5 0
+vehicle_thrust_setpoint 20 1
+input_rc 50 0
+manual_control_setpoint 50 0
+battery_status 100 0
+battery_status 100 1
+battery_status 100 2
+
+# --- default profile, multicopter-relevant topics, default rates ---
+action_request 0 0
+actuator_armed 0 0
+actuator_controls_status_0 300 0
+actuator_servos 100 0
+airspeed 1000 0
+autotune_attitude_control_status 100 0
+battery_info 5000 0
+commander_state 0 0
+config_overrides 0 0
+control_allocator_status 200 0
+control_allocator_status 200 1
+cpuload 0 0
+esc_status 0 0
+failure_detector_status 100 0
+failsafe_flags 0 0
+heater_status 0 0
+home_position 0 0
+hover_thrust_estimate 100 0
+magnetometer_bias_estimate 200 0
+manual_control_switches 0 0
+mission_result 0 0
+navigator_mission_item 0 0
+navigator_status 0 0
+offboard_control_mode 100 0
+parameter_update 0 0
+position_controller_status 500 0
+position_controller_landing_status 100 0
+goto_setpoint 200 0
+position_setpoint_triplet 200 0
+px4io_status 0 0
+radio_status 0 0
+rate_ctrl_status 200 0
+rpm 200 0
+rtl_time_estimate 1000 0
+rtl_status 2000 0
+sensor_correction 0 0
+sensor_gyro_fft 50 0
+sensor_selection 0 0
+sensors_status_imu 200 0
+system_power 500 0
+takeoff_status 1000 0
+telemetry_status 1000 0
+telemetry_status 1000 1
+telemetry_status 1000 2
+timesync_status 1000 0
+trajectory_setpoint 200 0
+vehicle_air_data 200 0
+vehicle_command 0 0
+vehicle_command_ack 0 0
+vehicle_constraints 1000 0
+vehicle_control_mode 0 0
+vehicle_global_position 200 0
+vehicle_gps_position 100 0
+vehicle_land_detected 0 0
+vehicle_local_position 100 0
+vehicle_local_position_setpoint 100 0
+vehicle_magnetometer 200 0
+vehicle_magnetometer 500 1
+vehicle_magnetometer 500 2
+vehicle_roi 1000 0
+vehicle_status 0 0
+wind 1000 0
+
+# --- estimator (default rates: most at 2 Hz, key ones faster) ---
+estimator_selector_status 10 0
+estimator_event_flags 10 0
+estimator_event_flags 10 1
+estimator_status_flags 10 0
+estimator_status_flags 10 1
+estimator_status 200 0
+estimator_status 200 1
+estimator_sensor_bias 1000 0
+estimator_sensor_bias 1000 1
+yaw_estimator_status 1000 0
+estimator_states 500 0
+estimator_innovations 500 0
+estimator_innovation_variances 500 0
+estimator_innovation_test_ratios 500 0
+estimator_gps_status 500 0
+estimator_baro_bias 500 0
+estimator_gnss_hgt_bias 500 0
+estimator_bias3d 500 0
+estimator_aid_src_baro_hgt 500 0
+estimator_aid_src_gnss_hgt 500 0
+estimator_aid_src_rng_hgt 500 0
+estimator_aid_src_fake_hgt 500 0
+estimator_aid_src_fake_pos 500 0
+estimator_aid_src_gnss_pos 500 0
+estimator_aid_src_gnss_vel 500 0
+estimator_aid_src_gnss_yaw 500 0
+estimator_aid_src_gravity 500 0
+estimator_aid_src_mag 500 0
+estimator_aid_src_drag 500 0
+estimator_aid_src_optical_flow 500 0
+
+# --- raw sensors at a low rate (default) ---
+sensor_accel 1000 0
+sensor_accel 1000 1
+sensor_accel 1000 2
+sensor_gyro 1000 0
+sensor_gyro 1000 1
+sensor_gyro 1000 2
+sensor_baro 1000 0
+sensor_baro 1000 1
+sensor_mag 1000 0
+sensor_mag 1000 1
+sensor_mag 1000 2
+sensor_gps 1000 0
+distance_sensor 1000 0
+differential_pressure 1000 0
+vehicle_imu 500 0
+vehicle_imu 500 1
+vehicle_imu 500 2
+vehicle_imu_status 1000 0
+vehicle_imu_status 1000 1
+vehicle_imu_status 1000 2

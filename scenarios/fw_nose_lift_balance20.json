@@ -1,0 +1,96 @@
+{
+  "name": "fw_nose_lift_balance20",
+  "description": "Raise to 20 deg on the two nose fans and hold it with the throttle at zero (PX4 never takes over): SB on for 30 s, then SB off, 15 s of lowering, kill switch. The aircraft tips back near 30 deg (23 Sep 21:00 logs), so 20 leaves a 10 deg margin; the nose must stay below 22. Park 7 deg (the aircraft, 23 Sep 21:00). Needs --px4-dir ~/PX4-nl.",
+  "max_time": 150,
+  "attitude": {
+    "park_pitch_deg": 7.0,
+    "hover_pitch_deg": 24
+  },
+  "design": {
+    "nose_lift": {
+      "executor": "firmware",
+      "target_pitch_deg": 20.0,
+      "timeout_s": 60,
+      "hold_timeout_s": 90
+    }
+  },
+  "params": {
+    "COM_RC_IN_MODE": 0,
+    "RC_CHAN_CNT": 18,
+    "RC_MAP_ROLL": 1,
+    "RC_MAP_PITCH": 2,
+    "RC_MAP_THROTTLE": 3,
+    "RC_MAP_YAW": 4,
+    "RC3_TRIM": 1000,
+    "RC_MAP_KILL_SW": 9,
+    "RC_KILLSWITCH_TH": 0.75,
+    "COM_DISARM_LAND": 3
+  },
+  "abort": {
+    "max_tilt_deg": 60,
+    "max_alt": 2,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "rc",
+      "name": "arm",
+      "channels": {
+        "7": 1500,
+        "9": 1000
+      },
+      "mode": "altitude",
+      "arm": true,
+      "until": {
+        "armed": true,
+        "nl_state": "parked"
+      },
+      "timeout": 30
+    },
+    {
+      "type": "rc",
+      "name": "parked",
+      "duration": 2
+    },
+    {
+      "type": "rc",
+      "name": "raise",
+      "channels": {
+        "7": 1000
+      },
+      "throttle": 0.0,
+      "duration": 30
+    },
+    {
+      "type": "rc",
+      "name": "switch_off",
+      "channels": {
+        "7": 1500
+      },
+      "until": {
+        "nl_state": "lowering"
+      },
+      "timeout": 1
+    },
+    {
+      "type": "rc",
+      "name": "lowered",
+      "duration": 15
+    },
+    {
+      "type": "rc",
+      "name": "kill",
+      "channels": {
+        "9": 2000
+      },
+      "until": {
+        "armed": false
+      },
+      "timeout": 10
+    }
+  ]
+}

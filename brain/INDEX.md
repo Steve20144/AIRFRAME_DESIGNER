@@ -49,8 +49,14 @@ current task needs.
 - [2026-09-21 First piloted HITL session](experiments/2026-09-21-hitl-pilot-session.md): RC setup, integrator wind-up on the legs, hover thrust, stick scale
 - [2026-09-23 Firmware nose lift on the real aircraft](experiments/2026-09-23-aircraft-nose-lift-bench-runs.md): two
   fans, props on; false aborts fixed, sim gains failed, G4 set, rate filter rejected, fan response still unmodelled
+- [2026-09-23 The nose-lift fan bursts](experiments/2026-09-23-nose-lift-fan-bursts.md): 4 Hz off/full switching
+  from the rate gain on the legs' rocking; filters tumble it; KQ 0.03 / K_ANG 0.4 cuts it 6x; the hold check could
+  never pass on the rocking frame (fixed: 1 Hz settled rate), so holding and handover work in SITL
+- [2026-09-23 Nose-lift gains for 24 deg](experiments/2026-09-23-nose-lift-24deg-gains.md): the 1 s spin-down model
+  was optimistic; judged over a bracket of fan models, C5 (KQ .04/.02, K_ANG .3, RATE 1.5, CEIL 1) never tips
 - [2026-09-23 Mitigating fan vibration (Tuning tab)](experiments/2026-09-23-vibration-tuning-rounds.md): vibration
   doubles motor jitter and, indoors, attitude error and drift; soft mount or balance fixes it, gyro filters fix jitter
+- [2026-09-25 Nose hold flights, ULog findings](experiments/2026-09-25-nose-hold-flights.md): no liftoff on 25 Sep; first liftoff 00:21 on the front-fix build (0.8 m, nose held 26-30); M9 clips at full while M10 sits at half (split wastes pitch authority); forward push uncertain
 
 ## Research
 
@@ -71,6 +77,8 @@ current task needs.
 - [Environment and process gotchas](lessons/environment-gotchas.md)
 - [A PX4 module must read the clock after copying its messages](lessons/px4-module-clock-before-copy.md)
 - [Fan vibration drifts the EKF height on the ground](lessons/fan-vibration-drifts-ekf-height.md)
+- [The default ULog cannot identify the nose lift](lessons/ulog-default-profile-misses-nose-lift.md): outputs at
+  10 Hz, `nose_lift_output` not logged, no fan speed anywhere
 
 ## Inbox
 
@@ -87,29 +95,32 @@ pitch, rotate back; first in SITL, then HITL on the Pixhawk 6X Pro, then the rea
 
 ## Current Phase
 
-SITL tuning complete for two models; piloted HITL started 2026-09-21 (see the HITL session note). Bench runs of the
-firmware nose lift on the real aircraft started 2026-09-22 (two nose fans, props on, see the aircraft-runs note):
-the nose rises from a +2 deg park with the G4 gains, but the fans' slow response makes the rise and the lowering
-jerky, and the model does not reproduce it yet.
+The aircraft that flies is ATLAS_09B (V4, no vibration damper; the Load menu shows only it). Bench runs of the
+firmware nose lift on the real aircraft (two nose fans, props on) with a live dashboard that logs every flight arm
+to disarm ([telemetry dashboard](architecture/telemetry-dashboard.md)). State at the end of 2026-09-23
+([fan bursts note](experiments/2026-09-23-nose-lift-fan-bursts.md)):
 
-- ATLAS_OG with flat nose brackets (`airframes/atlas_og_flat.json`): tuned and confirmed hands-off in Stabilized.
-- ATLAS_09B (imported from upstream, corrected, `airframes/atlas_09b.json`): flies the full sequence with the softened
-  yaw loop (set A); 0.12 deg roll bias and 1.8 m hands-off drift in 12 s remain, a yaw-authority limit the pilot trims.
-- The PHASE_0_V4 STEP is integrated (CAD bodies with masses, meshes in the 3D view) on ATLAS_09B, ATLAS_OG and
-  ATLAS_OG_FLAT; STEP import needs OpenCascade (cadquery-ocp) in the venv.
-- ATLAS_OG as built (canted +-30 nose brackets): cannot hover hands-off in Stabilized, no gain fixes it.
+- The fans burst off <-> full at ~4 Hz with the G4 gains: the rate loop amplifies the legs' 5-10 Hz rocking. Gentle
+  gains raised smoothly but over-sped and, cancelled mid-rise, tipped the nose back to 45-48 deg; G4 restored.
+- The hold check could never pass on the rocking frame (no Holding, no handover, no lowering fade). The board now
+  runs `~/firmware_backups/FLASH_nearest_board_holdfix_ceiling.px4`, which fixes that and adds NL_CEIL: above target +
+  ceiling the nose is brought back like the lowering. SITL: smooth 12 deg balance, never above 14.
+- What the board ran was a 22 Sep 22:49 PDT build not in git ([board firmware](experiments/2026-09-23-nose-lift-fan-bursts.md)).
+  Parameters are set over the radio with `scripts/board_params.py`; flashing needs USB.
+- The simulator models fan vibration (calibrated on the bench, on by default for ATLAS_09B) and the legs' rocking;
+  the aircraft-like model (`scripts/nose_lift_smoothing.py --fans 0.15,1.0 --rocking 0.35`) reproduces the bursts.
+- Earlier: ATLAS_OG_FLAT tuned hands-off in Stabilized; ATLAS_09B flies the full SITL sequence with yaw set A.
 
 ## Current Priorities
 
-0. Aircraft nose lift: measure the nose fans' step response on the bench, fit the model (`tau`, `tau_down`), re-tune
-   the lift gains in SITL; fix the lowering fade; make the app export carry the board's gains. Keep raises short
-   (SB off by ~10 deg) until then.
-1. HITL session on the board with `atlas_og_flat.params` (or `atlas_09b.params`), comparing against the SITL
-   confirmation numbers in the experiments notes.
-2. Measure the fans' reaction-torque coefficient on a thrust stand; it decides ATLAS_09B's controllability. Ask
-   whether counter-rotating fan pairs are possible: they would remove the yaw-authority limit outright.
-3. Decide which model represents the aircraft that will fly (OG from Fusion vs 09B from upstream).
-4. Remote-switch takeoff and land sequences for Stabilized in HITL (see inbox).
+0. Fly the 12 deg balance on the NL_CEIL firmware (flashed 23 Sep 18:26, build Sep 23 18:15:30; parameters set and
+   read back: NL_TGT 12, NL_CEIL 1, NL_KQ 0.03 / KQI 0.015, NL_K_ANG 0.4, lowering G4 0.06 / 0.03, NL_TOUT 60) on a
+   charged battery. Check each log for flips, the peak (must stay <= 14), Holding reached, and what SB off does.
+1. Calibrate the firmware's fan figures (NL_A0/1) from the logged lift-off command; every new gain set must pass
+   the SITL balance and mid-rise-cancel scenarios on the aircraft-like model before it flies.
+2. Pull a flight's ULog over USB (full-rate gyro) to measure the rocking and the fans' real response; balance the fans.
+3. Make the app's export carry the board's NL gains (it still writes 0.02/0.012 and no lowering gains).
+4. Measure km on a thrust stand; counter-rotating fan pairs would remove the yaw-authority limit.
 
 ## Important Constraints
 

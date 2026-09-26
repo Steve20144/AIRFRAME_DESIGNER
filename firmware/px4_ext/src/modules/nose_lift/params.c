@@ -116,22 +116,6 @@ PARAM_DEFINE_FLOAT(NL_LOW_KQ, 0.3f);
 PARAM_DEFINE_FLOAT(NL_LOW_KQI, 0.1f);
 
 /**
- * Low-pass cutoff on the body rates the nose lift works on
- *
- * First-order filter on the pitch rate (and the roll and yaw rates of the split damping), against the frame's
- * 5-10 Hz shake on its legs. 0 disables it. Off by default: in SITL with the fans' measured slow spin-down
- * (tau 0.3 s up, 1.0 s down) a 2 Hz filter's lag raised the worst rise from 9 to 14 deg/s and the worst drop
- * while lowering from -4 to -33 deg/s.
- *
- * @unit Hz
- * @min 0
- * @max 20
- * @decimal 1
- * @group Nose Lift
- */
-PARAM_DEFINE_FLOAT(NL_Q_LPF, 0.0f);
-
-/**
  * Roll and yaw rate damping in the thrust split
  *
  * @min 0
@@ -196,6 +180,118 @@ PARAM_DEFINE_FLOAT(NL_FADE_S, 2.0f);
  * @group Nose Lift
  */
 PARAM_DEFINE_FLOAT(NL_HO_TOUT, 8.0f);
+
+/**
+ * Nose fans hold the pitch for the whole flight
+ *
+ * 0: the throttle-up hands the nose fans over to PX4 (NL_HO_*). 1: they never go to PX4. From the hold, the
+ * throttle-up starts the flight hold: the nose fans keep NL_TGT on their own loop (NL_F_*) while PX4 flies the
+ * rear fans (thrust, roll, yaw). Set PX4's pitch rate gains to 0 with it, or PX4 pitches with the rear fans
+ * against the nose fans. After landing, the switch off with the throttle at minimum lowers the nose. The kill
+ * switch stops every motor as before.
+ *
+ * @boolean
+ * @group Nose Lift
+ */
+PARAM_DEFINE_INT32(NL_FLY_HOLD, 0);
+
+/**
+ * Flight hold: pitch angle gain
+ *
+ * Pitch rate asked per degree of pitch error.
+ *
+ * @unit 1/s
+ * @min 0
+ * @max 10
+ * @decimal 2
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_F_K_ANG, 2.0f);
+
+/**
+ * Flight hold: pitch rate limit
+ *
+ * @unit deg/s
+ * @min 1
+ * @max 90
+ * @decimal 1
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_F_RATE, 30.0f);
+
+/**
+ * Flight hold: pitch rate gain
+ *
+ * Nose-fan thrust fraction per deg/s of pitch rate error.
+ *
+ * @min 0
+ * @max 0.2
+ * @decimal 4
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_F_KQ, 0.015f);
+
+/**
+ * Flight hold: pitch rate integral gain
+ *
+ * @min 0
+ * @max 0.5
+ * @decimal 4
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_F_KQI, 0.03f);
+
+/**
+ * Flight hold: nose-fan thrust per rear-fan thrust
+ *
+ * Feed-forward: the nose fans' mean thrust fraction is this times the rear fans' mean thrust (as PX4 commands
+ * them), the ratio at which their pitch moments about the centre of gravity cancel. The integral covers the error.
+ *
+ * @min 0
+ * @max 5
+ * @decimal 3
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_F_FF, 1.5f);
+
+/**
+ * Flight hold: nose angle at liftoff thrust
+ *
+ * In the flight hold the nose angle follows the rear fans' mean thrust: NL_TGT with them idle, rising in
+ * proportion to their thrust to this angle at NL_F_TGT_THR and held there above it, moving at most NL_F_TGT_RATE
+ * (tilting the rear fans' forward push back as it builds; down again as the throttle comes down).
+ *
+ * @unit deg
+ * @min 0
+ * @max 60
+ * @decimal 1
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_F_TGT, 26.0f);
+
+/**
+ * Flight hold: rear-fan thrust that counts as liftoff
+ *
+ * Mean thrust fraction PX4 commands to the rear fans (low-passed over 0.3 s) at which the nose reaches NL_F_TGT.
+ * About the hover thrust (MPC_THR_HOVER); with THR_MDL_FAC 1, 0.30 is ~1540 us on a rear fan.
+ *
+ * @min 0
+ * @max 1
+ * @decimal 2
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_F_TGT_THR, 0.30f);
+
+/**
+ * Flight hold: rate of the nose's move between NL_TGT and NL_F_TGT
+ *
+ * @unit deg/s
+ * @min 0.5
+ * @max 20
+ * @decimal 1
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_F_TGT_RATE, 4.0f);
 
 /**
  * Lift timeout
@@ -264,6 +360,21 @@ PARAM_DEFINE_FLOAT(NL_ROLL_MAX, 8.0f);
  * @group Nose Lift
  */
 PARAM_DEFINE_FLOAT(NL_OVERSHOOT, 12.0f);
+
+/**
+ * Ceiling above the target
+ *
+ * Above NL_TGT + NL_CEIL the raise and the hold bring the nose back the way the lowering does (down at NL_RATE on
+ * the lowering gains NL_LOW_KQ / NL_LOW_KQI) until it is back at NL_TGT, then hold it there again. 0 disables it.
+ * NL_OVERSHOOT still cuts the motors further up.
+ *
+ * @unit deg
+ * @min 0
+ * @max 20
+ * @decimal 1
+ * @group Nose Lift
+ */
+PARAM_DEFINE_FLOAT(NL_CEIL, 0.0f);
 
 /**
  * Height gain that counts as leaving the ground during the lift

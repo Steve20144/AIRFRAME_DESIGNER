@@ -4,38 +4,108 @@
     {
       "name": "reports",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8090", "--directory", "results"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8090",
+        "--directory",
+        "results"
+      ],
       "port": 8090
     },
     {
       "name": "app",
       "runtimeExecutable": "wsl",
-      "runtimeArgs": ["-d", "Ubuntu-24.04", "--", "bash", "-lc", "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --mode auto --launch-px4 --airframe airframes/atlas_09b.json --no-browser"],
+      "runtimeArgs": [
+        "-d",
+        "Ubuntu-24.04",
+        "--",
+        "bash",
+        "-lc",
+        "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --mode auto --launch-px4 --airframe airframes/atlas_09b.json --no-browser"
+      ],
       "port": 8080
     },
     {
       "name": "app-sitl-check",
       "runtimeExecutable": "wsl",
-      "runtimeArgs": ["-d", "Ubuntu-24.04", "--", "bash", "-lc", "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --mode sitl --launch-px4 --px4-instance 3 --airframe airframes/atlas_og_flat.json --http 127.0.0.1:8092 --no-browser"],
+      "runtimeArgs": [
+        "-d",
+        "Ubuntu-24.04",
+        "--",
+        "bash",
+        "-lc",
+        "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --mode sitl --launch-px4 --px4-instance 3 --airframe airframes/atlas_og_flat.json --http 127.0.0.1:8092 --no-browser"
+      ],
       "port": 8092
+    },
+    {
+      "name": "throttle-fake",
+      "runtimeExecutable": "wsl",
+      "runtimeArgs": [
+        "-d",
+        "Ubuntu-24.04",
+        "--",
+        "bash",
+        "-lc",
+        "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python scripts/throttle_dashboard.py --port udpin:127.0.0.1:14660 --http 8097 --qgc-port 0 --runs-dir /tmp/throttle_fake_runs"
+      ],
+      "port": 8097
     },
     {
       "name": "throttle-radio",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["scripts/throttle_dashboard.py", "--port", "COM6"],
+      "runtimeArgs": [
+        "scripts/throttle_dashboard.py",
+        "--port",
+        "COM6"
+      ],
       "port": 8095
     },
     {
       "name": "throttle-usb",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["scripts/throttle_dashboard.py", "--port", "COM3", "--baud", "115200", "--dev", "/dev/ttyACM0", "--http", "8096"],
+      "runtimeArgs": [
+        "scripts/throttle_dashboard.py",
+        "--port",
+        "COM3",
+        "--baud",
+        "115200",
+        "--dev",
+        "/dev/ttyACM0",
+        "--http",
+        "8096"
+      ],
       "port": 8096
     },
     {
       "name": "app-nose-lift-fw",
       "runtimeExecutable": "wsl",
-      "runtimeArgs": ["-d", "Ubuntu-24.04", "--", "bash", "-lc", "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --airframe airframes/atlas_09b.json --px4-dir ~/PX4-nl --px4-instance 4 --http 127.0.0.1:8091 --no-browser"],
+      "runtimeArgs": [
+        "-d",
+        "Ubuntu-24.04",
+        "--",
+        "bash",
+        "-lc",
+        "cd ~/utopia/AIRFRAME_DESIGNER && exec ~/.venvs/airframe/bin/python -m airframe_designer ui --airframe airframes/atlas_09b.json --px4-dir ~/PX4-nl --px4-instance 4 --http 127.0.0.1:8091 --no-browser"
+      ],
       "port": 8091
+    },
+    {
+      "name": "study-progress",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "scripts/study_progress.py",
+        "--dir",
+        "results/nose_lift_smoothing/refit20",
+        "--total",
+        "19",
+        "--limit",
+        "22",
+        "--port",
+        "8098"
+      ],
+      "port": 8098
     }
   ]
 }

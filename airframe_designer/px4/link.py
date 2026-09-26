@@ -33,7 +33,7 @@ PARAM_TYPE_REAL32 = mavlink.MAV_PARAM_TYPE_REAL32
 
 # NoseLift::State and NoseLift::Abort of the nose_lift PX4 module (firmware/px4_ext), in enum order; the module
 # streams them as DEBUG_VECT "NLIFT" with x = state + abort / 100
-NOSE_LIFT_STATES = ("disabled", "disarmed", "parked", "ramping", "holding", "handover", "flying", "lowering", "aborted")
+NOSE_LIFT_STATES = ("disabled", "disarmed", "parked", "ramping", "holding", "handover", "flying", "lowering", "aborted", "nosehold")
 NOSE_LIFT_ABORTS = ("none", "kill switch", "switch off", "radio lost", "attitude lost", "roll limit", "overshoot",
                     "left the ground", "lift timeout", "motors cannot hold the nose", "hold timeout", "lowering timeout")
 DEBUG_VECT_ID = 250

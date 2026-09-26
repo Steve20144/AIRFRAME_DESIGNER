@@ -1,0 +1,41 @@
+{
+  "name": "fw_nose_lift_balance",
+  "description": "Balance on the rear feet with the two nose fans only: arm in Stabilized with the throttle at zero (PX4 keeps every motor stopped), SB (channel 7, active low) raises the nose on motors 9 and 10 from the 5.3 deg park of the aircraft's 2026-09-23 flight to 12 deg and the nose lift holds it there for 30 s; the throttle never rises, so PX4 never takes over and the rear motors never run. Then SB off lowers the nose back onto its leg and the module disarms. Needs the SITL build from scripts/build_nose_lift_firmware.sh and --px4-dir ~/PX4-nl.",
+  "max_time": 150,
+  "attitude": {"park_pitch_deg": 5.3, "hover_pitch_deg": 24},
+  "design": {
+    "nose_lift": {
+      "executor": "firmware",
+      "target_pitch_deg": 12.0,
+      "hold_timeout_s": 90
+    }
+  },
+  "params": {
+    "COM_RC_IN_MODE": 0,
+    "RC_CHAN_CNT": 18,
+    "RC_MAP_ROLL": 1,
+    "RC_MAP_PITCH": 2,
+    "RC_MAP_THROTTLE": 3,
+    "RC_MAP_YAW": 4,
+    "RC3_TRIM": 1000,
+    "RC_MAP_KILL_SW": 9,
+    "RC_KILLSWITCH_TH": 0.75,
+    "COM_DISARM_LAND": 3
+  },
+  "abort": {
+    "max_tilt_deg": 60,
+    "max_alt": 2,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {"type": "wait_ready", "timeout": 45},
+    {"type": "rc", "name": "arm", "channels": {"7": 1500, "9": 1000}, "mode": "stabilized", "arm": true,
+     "until": {"armed": true, "nl_state": "parked"}, "timeout": 30},
+    {"type": "rc", "name": "parked", "duration": 2},
+    {"type": "rc", "name": "raise", "channels": {"7": 1000}, "until": {"nl_state": "holding"}, "timeout": 40},
+    {"type": "rc", "name": "balance", "throttle": 0.0, "duration": 30},
+    {"type": "rc", "name": "switch_off", "channels": {"7": 1500}, "until": {"nl_state": "lowering"}, "timeout": 1},
+    {"type": "rc", "name": "lowered", "until": {"armed": false}, "timeout": 40},
+    {"type": "rc", "name": "at_park", "until": {"pitch_deg": 5.3, "tol": 2.5, "motors_off": true}, "timeout": 3}
+  ]
+}

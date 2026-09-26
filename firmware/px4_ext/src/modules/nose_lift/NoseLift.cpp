@@ -51,25 +51,23 @@ void NoseLift::update_attitude(hrt_abstime now)
 	_roll = math::degrees(e.phi());
 	_pitch = math::degrees(e.theta());
 
-	const Vector3f w_raw = Rh.transpose() * Vector3f(_angvel.xyz);
+	const Vector3f w_s = Rh.transpose() * Vector3f(_angvel.xyz);
+	_p_rad = w_s(0);
+	_q = math::degrees(w_s(1));
+	_r_rad = w_s(2);
 
-	// low-pass the rates the loop works on: on the aircraft the frame shakes at 5-10 Hz on its legs (+-20 deg/s of
-	// pitch rate with the attitude still within 0.3 deg, log 184) and the loop gains turned that into 0 <-> 60 % fan
-	// bursts. The fans cannot follow faster than about 1 Hz anyway.
-	const float fc = _param_nl_q_lpf.get();
+	// the hold and fade decisions ask whether the nose has settled; on its legs the frame never stops rocking (+-20
+	// deg/s at 5-10 Hz), so against the raw rate "under 3 deg/s" was never true and the lift could not reach
+	// Holding (no handover to PX4) nor the lowering fade. A decision can wait: 1 Hz, and only for these checks.
+	if (_q_settled_t == 0) {
+		_q_settled = _q;
 
-	if (fc <= 0.f || _rate_t == 0) {
-		_w_f = w_raw;
-
-	} else if (_angvel.timestamp_sample != _rate_t) {
-		const float dt = math::constrain((_angvel.timestamp_sample - _rate_t) * 1e-6f, 0.f, 0.05f);
-		_w_f += (w_raw - _w_f) * (dt / (dt + 1.f / (2.f * M_PI_F * fc)));
+	} else if (_angvel.timestamp_sample != _q_settled_t) {
+		const float dt = math::constrain((_angvel.timestamp_sample - _q_settled_t) * 1e-6f, 0.f, 0.05f);
+		_q_settled += (_q - _q_settled) * (dt / (dt + 1.f / (2.f * M_PI_F * 1.f)));
 	}
 
-	_rate_t = _angvel.timestamp_sample;
-	_p_rad = _w_f(0);
-	_q = math::degrees(_w_f(1));
-	_r_rad = _w_f(2);
+	_q_settled_t = _angvel.timestamp_sample;
 }
 
 void NoseLift::update_switch(hrt_abstime now)
@@ -269,6 +267,7 @@ void NoseLift::try_start(hrt_abstime now)
 	_target = _param_nl_tgt.get();
 	_integral = 0.f;
 	_cmd = 0.f;
+	_ceiling = false;
 	_hold_since = 0;
 	_fading = false;
 	_z0 = _lpos.z_valid ? _lpos.z : NAN;
@@ -278,6 +277,33 @@ void NoseLift::try_start(hrt_abstime now)
 	set_state(State::Ramping, now);
 	mavlink_log_info(&_mavlink_log_pub, "Nose lift: raising the nose from %.1f to %.1f deg\t", (double)_pitch0,
 			 (double)_target);
+}
+
+// NL_CEIL: above NL_TGT + NL_CEIL the raise and the hold bring the nose back the way the lowering does (down at
+// NL_RATE on the lowering gains) until it is back at the target, then balance again. On the aircraft a gentle loop
+// cannot take the lift-off surplus away fast enough and the nose ran through the target (23 Sep: 45-48 deg after a
+// cancel); the stronger lowering gains catch it. The integrator's contribution is kept across the gain change.
+bool NoseLift::over_ceiling(hrt_abstime now)
+{
+	const float ceil = _param_nl_ceil.get();
+
+	if (ceil <= 0.f) {
+		_ceiling = false;
+		return false;
+	}
+
+	if (!_ceiling && _pitch > _target + ceil) {
+		_ceiling = true;
+		_integral *= _param_nl_kqi.get() / math::max(_param_nl_low_kqi.get(), 1e-6f);
+		mavlink_log_info(&_mavlink_log_pub, "Nose lift: above %.1f deg, bringing it back to %.1f	", (double)(_target + ceil),
+				 (double)_target);
+
+	} else if (_ceiling && _pitch <= _target) {
+		_ceiling = false;
+		_integral *= _param_nl_low_kqi.get() / math::max(_param_nl_kqi.get(), 1e-6f);
+	}
+
+	return _ceiling;
 }
 
 void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
@@ -327,12 +353,14 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 			// the nose is asked to rotate at NL_RATE (easing in over 1.5 s, slowing proportionally over the last
 			// degrees); the thrust regulates the pitch rate around that on top of the balance feed-forward
 			const float ease = math::min(1.f, el / 1.5f);
-			const float q_des = math::constrain(k_ang * (_target - _pitch), -rate, rate * ease);
+			const bool down = over_ceiling(now);
+			const float q_des = down ? -rate : math::constrain(k_ang * (_target - _pitch), -rate, rate * ease);
 			const float eq = q_des - _q;
 			_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
-			_cmd = thrust_to_cmd(ease * ff + _param_nl_kq.get() * eq + _param_nl_kqi.get() * _integral);
+			_cmd = down ? thrust_to_cmd(ff + _param_nl_low_kq.get() * eq + _param_nl_low_kqi.get() * _integral)
+			       : thrust_to_cmd(ease * ff + _param_nl_kq.get() * eq + _param_nl_kqi.get() * _integral);
 
-			if (fabsf(_pitch - _target) < tol && fabsf(_q) < 3.f) {
+			if (!_ceiling && fabsf(_pitch - _target) < tol && fabsf(_q_settled) < 3.f) {
 				if (_hold_since == 0) { _hold_since = now; }
 
 				if ((now - _hold_since) * 1e-6f >= _param_nl_hold_s.get()) {
@@ -351,15 +379,22 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 	case State::Holding: {
 			if ((now - _state_since) * 1e-6f > _param_nl_hold_tout.get()) { abort(Abort::HoldTimeout, true, now); return; }
 
-			const float q_des = math::constrain(k_ang * (_target - _pitch), -rate, rate);
+			const bool down = over_ceiling(now);
+			const float q_des = down ? -rate : math::constrain(k_ang * (_target - _pitch), -rate, rate);
 			const float eq = q_des - _q;
 			_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
-			_cmd = thrust_to_cmd(ff + _param_nl_kq.get() * eq + _param_nl_kqi.get() * _integral);
+			_cmd = down ? thrust_to_cmd(ff + _param_nl_low_kq.get() * eq + _param_nl_low_kqi.get() * _integral)
+			       : thrust_to_cmd(ff + _param_nl_kq.get() * eq + _param_nl_kqi.get() * _integral);
 
 			if (throttle() > _param_nl_ho_thr.get()) {
-				set_state(State::Handover, now);
-				_fading = false;
-				mavlink_log_info(&_mavlink_log_pub, "Nose lift: handing over to PX4\t");
+				if (_param_nl_fly_hold.get()) {
+					start_nose_hold(now);
+
+				} else {
+					set_state(State::Handover, now);
+					_fading = false;
+					mavlink_log_info(&_mavlink_log_pub, "Nose lift: handing over to PX4\t");
+				}
 			}
 
 			break;
@@ -384,12 +419,15 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 				}
 			}
 
-			const bool taken_over = px4_share >= 0.95f * hold;
+			// judged against at least the balance thrust: the rate term on the legs' rocking can take the hold to 0 for
+			// a moment, and "PX4 above 0" then passed at once and faded from 0 (23 Sep 23:25: nose 22 -> 9 deg in 0.3 s)
+			const float ref = math::max(hold, thrust_to_cmd(ff));
+			const bool taken_over = px4_share >= 0.95f * ref;
 
 			if (!_fading && (taken_over || (now - _state_since) * 1e-6f > _param_nl_ho_tout.get() || !_rc_ok)) {
 				_fading = true;
 				_fade_start = now;
-				_fade_from = hold;
+				_fade_from = ref;
 				_fade_reason = taken_over ? "PX4 took over" : (!_rc_ok ? "radio lost" : "handover timed out");
 			}
 
@@ -410,6 +448,48 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 			break;
 		}
 
+	case State::NoseHold: {
+			// the nose fans hold NL_TGT on their own loop for the whole flight; PX4 flies the rear fans. The radio,
+			// roll, overshoot and liftoff checks of the ground sequence do not apply: cutting the nose fans in the air
+			// drops the nose. The kill switch (above) still stops everything.
+			if (_sb_fell) { _low_thr_told = false; }
+
+			if (!_sb_on && _rc_ok) {
+				if (throttle() <= _param_nl_start_thr.get()) {
+					lower_from_nose_hold(now);
+					return;
+
+				} else if (!_low_thr_told) {
+					_low_thr_told = true;
+					mavlink_log_critical(&_mavlink_log_pub, "Nose lift: land and lower the throttle first, then the switch\t");
+				}
+			}
+
+			// the rear fans' thrust leans forward and pushes the aircraft along the floor in proportion to it: the nose
+			// angle follows their thrust, NL_TGT with them idle up to NL_F_TGT at NL_F_TGT_THR (liftoff), tilting that
+			// push back as it builds, and down again as the throttle comes down for the landing
+			const float rear = rear_thrust();
+			_rear_f += (rear - _rear_f) * (dt / (dt + 0.3f));
+			const float frac = math::constrain(_rear_f / math::max(_param_nl_f_tgt_thr.get(), 1e-3f), 0.f, 1.f);
+			const float goal = _param_nl_tgt.get() + frac * (_param_nl_f_tgt.get() - _param_nl_tgt.get());
+			const float step = _param_nl_f_tgt_rate.get() * dt;
+			_target += math::constrain(goal - _target, -step, step);
+
+			const float f_rate = _param_nl_f_rate.get();
+			const float q_des = math::constrain(_param_nl_f_k_ang.get() * (_target - _pitch), -f_rate, f_rate);
+			const float eq = q_des - _q;
+			const float f = _param_nl_f_ff.get() * rear + _param_nl_f_kq.get() * eq
+					+ _param_nl_f_kqi.get() * _integral;
+
+			// no integration into a saturated command
+			if (!((f >= _param_nl_max_cmd.get() && eq > 0.f) || (f <= 0.f && eq < 0.f))) {
+				_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
+			}
+
+			_cmd = thrust_to_cmd(f);
+			break;
+		}
+
 	case State::Lowering: {
 			// a cancel: bring the nose back to where the lift started, then stop the motors and disarm
 			if ((now - _state_since) * 1e-6f > _param_nl_tout.get()) { abort(Abort::LowerTimeout, false, now); return; }
@@ -417,7 +497,10 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 			if (!_fading) {
 				// ease the descent in over 1 s: a full-rate demand at once, through the stiffer lowering gain,
 				// dips the thrust and drops the nose for a moment (nose_lift.py NoseLower eases the same way)
-				const float ease = math::min(1.f, (now - _state_since) * 1e-6f / 1.f);
+				// (not above the ceiling: a cancel while the nose is still running up must brake at once)
+				const float ceil = _param_nl_ceil.get();
+				const bool high = ceil > 0.f && _pitch > _param_nl_tgt.get() + ceil;
+				const float ease = high ? 1.f : math::min(1.f, (now - _state_since) * 1e-6f / 1.f);
 				const float q_des = math::constrain(k_ang * (_target - _pitch), -rate * ease, rate);
 				const float eq = q_des - _q;
 				_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
@@ -425,7 +508,7 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 
 				// fade only once the nose sits on its front leg again: fading from further up drops the last degrees
 				// (one-sided: legs that compress a little more than before may leave it slightly below where it started)
-				if (_pitch - _target < math::min(tol, 0.5f) && fabsf(_q) < 1.f) {
+				if (_pitch - _target < math::min(tol, 0.5f) && fabsf(_q_settled) < 1.f) {
 					if (_hold_since == 0) { _hold_since = now; }
 
 					if ((now - _hold_since) * 1e-6f >= _param_nl_hold_s.get()) {
@@ -455,6 +538,62 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 	default:
 		break;
 	}
+}
+
+// mean thrust PX4 commands to the motors the nose lift does not own (the rear fans); 0 without fresh feedback
+float NoseLift::rear_thrust() const
+{
+	if (hrt_elapsed_time(&_feedback.timestamp) > 100_ms) {
+		return 0.f;
+	}
+
+	const int n = math::constrain(static_cast<int>(_param_ca_rotor_count.get()), 1, NUM_MOTORS);
+	const int mask = _param_nl_mot_msk.get();
+	float sum = 0.f;
+	int count = 0;
+
+	for (int i = 0; i < n; i++) {
+		if (!(mask & (1 << i))) {
+			const float c = _feedback.allocator_control[i];
+			sum += PX4_ISFINITE(c) ? math::max(c, 0.f) : 0.f;
+			count++;
+		}
+	}
+
+	return count > 0 ? sum / count : 0.f;
+}
+
+void NoseLift::start_nose_hold(hrt_abstime now)
+{
+	// bumpless: the integral starts where the flight loop gives the thrust the hold had
+	const float f_prev = powf(math::max(_cmd, 0.f), math::max(_param_nl_expo.get(), 1e-3f));
+	const float f_rate = _param_nl_f_rate.get();
+	const float eq = math::constrain(_param_nl_f_k_ang.get() * (_target - _pitch), -f_rate, f_rate) - _q;
+	const float rest = f_prev - _param_nl_f_ff.get() * rear_thrust() - _param_nl_f_kq.get() * eq;
+	_integral = math::constrain(rest / math::max(_param_nl_f_kqi.get(), 1e-6f), -40.f, 40.f);
+	_low_thr_told = false;
+	_rear_f = rear_thrust();
+	set_state(State::NoseHold, now);
+	mavlink_log_info(&_mavlink_log_pub, "Nose lift: nose fans hold %.1f deg for the flight, PX4 flies the rear fans\t",
+			 (double)_target);
+}
+
+void NoseLift::lower_from_nose_hold(hrt_abstime now)
+{
+	// back on the ground with the throttle down: the cancel's lowering, from the thrust the flight loop had, with the
+	// liftoff check's height references taken here (the estimate has moved since the lift started)
+	const float f_prev = powf(math::max(_cmd, 0.f), math::max(_param_nl_expo.get(), 1e-3f));
+	const float rest = f_prev - balance_fraction() - _param_nl_low_kq.get() * (0.f - _q);
+	_integral = math::constrain(rest / math::max(_param_nl_low_kqi.get(), 1e-6f), -40.f, 40.f);
+	_target = _pitch0;
+	_fading = false;
+	_hold_since = 0;
+	_z0 = _lpos.z_valid ? _lpos.z : NAN;
+	_z_reset_counter = _lpos.z_reset_counter;
+	_baro0 = _baro_f;
+	_abort_reason = Abort::SwitchOff;
+	set_state(State::Lowering, now);
+	mavlink_log_info(&_mavlink_log_pub, "Nose lift: landed, lowering the nose to %.1f deg\t", (double)_target);
 }
 
 void NoseLift::abort(Abort reason, bool controlled, hrt_abstime now)
@@ -540,17 +679,46 @@ void NoseLift::publish(hrt_abstime now)
 	case State::Holding:
 	case State::Lowering:
 	case State::Handover:
+	case State::NoseHold:
 		out.active = true;
 
 		if (_state == State::Handover) {
 			out.floor_mask = lift_mask;
 
+		} else if (_state == State::NoseHold) {
+			out.override_mask = lift_mask;	// the nose fans only: PX4 keeps the rear fans
+
 		} else {
 			out.override_mask = all;
 		}
 
-		for (int k = 0; k < _lift_count; k++) {
-			out.control[_lift_motor[k]] = motor_thrust(math::constrain(_cmd * _split[k], 0.f, 1.f));
+		if (_state == State::NoseHold) {
+			// pitch before the roll/yaw split: a fan the split pushes past full hands the thrust it cannot give to
+			// the others (25 Sep: M9 held at full while M10 sat at half and the nose fell, a quarter of the nose
+			// fans' thrust unused)
+			float t[MAX_LIFT] {};
+			float excess = 0.f;
+
+			for (int k = 0; k < _lift_count; k++) {
+				t[k] = motor_thrust(math::max(_cmd * _split[k], 0.f));
+
+				if (t[k] > 1.f) {
+					excess += t[k] - 1.f;
+					t[k] = 1.f;
+				}
+			}
+
+			for (int k = 0; k < _lift_count; k++) {
+				const float add = math::min(1.f - t[k], excess);
+				t[k] += add;
+				excess -= add;
+				out.control[_lift_motor[k]] = t[k];
+			}
+
+		} else {
+			for (int k = 0; k < _lift_count; k++) {
+				out.control[_lift_motor[k]] = motor_thrust(math::constrain(_cmd * _split[k], 0.f, 1.f));
+			}
 		}
 
 		break;
@@ -673,6 +841,7 @@ void NoseLift::Run()
 	case State::Holding:
 	case State::Handover:
 	case State::Lowering:
+	case State::NoseHold:
 		step_sequence(now, dt, kill);
 		break;
 
@@ -710,6 +879,8 @@ const char *NoseLift::state_name(State s)
 	case State::Lowering: return "lowering the nose";
 
 	case State::Aborted: return "aborted";
+
+	case State::NoseHold: return "holding the nose";
 	}
 
 	return "?";

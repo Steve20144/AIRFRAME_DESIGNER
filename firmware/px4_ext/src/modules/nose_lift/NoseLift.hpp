@@ -76,6 +76,7 @@ public:
 		Flying,
 		Lowering,
 		Aborted,
+		NoseHold,	// NL_FLY_HOLD: the nose fans hold the pitch for the whole flight, PX4 flies the rest
 	};
 
 	enum class Abort : uint8_t {
@@ -104,6 +105,10 @@ private:
 	void update_lift_motors();
 	void update_split();
 	float balance_fraction() const;
+	bool over_ceiling(hrt_abstime now);
+	float rear_thrust() const;
+	void start_nose_hold(hrt_abstime now);
+	void lower_from_nose_hold(hrt_abstime now);
 	float thrust_to_cmd(float frac) const;
 	float motor_thrust(float command) const;
 	float motor_command(float thrust) const;
@@ -120,7 +125,7 @@ private:
 
 	static const char *state_name(State s);
 	static const char *abort_name(Abort a);
-	static bool is_sequence(State s) { return s == State::Ramping || s == State::Holding || s == State::Handover || s == State::Lowering; }
+	static bool is_sequence(State s) { return s == State::Ramping || s == State::Holding || s == State::Handover || s == State::Lowering || s == State::NoseHold; }
 
 	uORB::Publication<nose_lift_output_s> _output_pub{ORB_ID(nose_lift_output)};
 	uORB::Publication<debug_vect_s> _debug_pub{ORB_ID(debug_vect)};
@@ -164,6 +169,8 @@ private:
 	float _pitch{0.f};		// [deg]
 	float _roll{0.f};		// [deg]
 	float _q{0.f};			// [deg/s] pitch rate
+	float _q_settled{0.f};		// [deg/s] pitch rate low-passed at 1 Hz: only for the "has it settled" checks
+	hrt_abstime _q_settled_t{0};	// sample time of the last rate it took
 	float _p_rad{0.f};		// [rad/s] roll rate
 	float _r_rad{0.f};		// [rad/s] yaw rate
 	bool _att_ok{false};
@@ -187,17 +194,18 @@ private:
 	float _pitch0{0.f};		// [deg] where the lift started (the lowering goes back there)
 	float _target{0.f};		// [deg] current target
 	float _integral{0.f};
+	bool _ceiling{false};		// above NL_TGT + NL_CEIL: being brought back (lowering gains)
 	float _cmd{0.f};
 	float _fade_from{0.f};
 	float _z0{NAN};
 	uint8_t _z_reset_counter{0};
-	matrix::Vector3f _w_f{};	// [rad/s] low-passed body rates in the structural frame
-	hrt_abstime _rate_t{0};		// sample time of the last rate used
 	float _baro_f{NAN};		// [m] low-passed barometric altitude
 	float _baro0{NAN};		// [m] ... at the start of the lift
 	hrt_abstime _baro_t{0};		// sample time of the last baro update
 	bool _fading{false};
 	const char *_fade_reason{""};
+	bool _low_thr_told{false};	// NoseHold: "lower the throttle first" said for this switch-off
+	float _rear_f{0.f};		// NoseHold: rear fans' mean thrust, low-passed
 
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::NL_EN>) _param_nl_en,
@@ -219,11 +227,20 @@ private:
 		(ParamFloat<px4::params::NL_TOUT>) _param_nl_tout,
 		(ParamFloat<px4::params::NL_HOLD_TOUT>) _param_nl_hold_tout,
 		(ParamFloat<px4::params::NL_HO_THR>) _param_nl_ho_thr,
+		(ParamInt<px4::params::NL_FLY_HOLD>) _param_nl_fly_hold,
+		(ParamFloat<px4::params::NL_F_K_ANG>) _param_nl_f_k_ang,
+		(ParamFloat<px4::params::NL_F_RATE>) _param_nl_f_rate,
+		(ParamFloat<px4::params::NL_F_KQ>) _param_nl_f_kq,
+		(ParamFloat<px4::params::NL_F_KQI>) _param_nl_f_kqi,
+		(ParamFloat<px4::params::NL_F_FF>) _param_nl_f_ff,
+		(ParamFloat<px4::params::NL_F_TGT>) _param_nl_f_tgt,
+		(ParamFloat<px4::params::NL_F_TGT_THR>) _param_nl_f_tgt_thr,
+		(ParamFloat<px4::params::NL_F_TGT_RATE>) _param_nl_f_tgt_rate,
 		(ParamFloat<px4::params::NL_START_THR>) _param_nl_start_thr,
 		(ParamFloat<px4::params::NL_ROLL_MAX>) _param_nl_roll_max,
 		(ParamFloat<px4::params::NL_OVERSHOOT>) _param_nl_overshoot,
+		(ParamFloat<px4::params::NL_CEIL>) _param_nl_ceil,
 		(ParamFloat<px4::params::NL_LIFT_DZ>) _param_nl_lift_dz,
-		(ParamFloat<px4::params::NL_Q_LPF>) _param_nl_q_lpf,
 		(ParamInt<px4::params::NL_RC_CH>) _param_nl_rc_ch,
 		(ParamInt<px4::params::NL_RC_TH>) _param_nl_rc_th,
 		(ParamInt<px4::params::NL_RC_LOW>) _param_nl_rc_low,

@@ -1,0 +1,123 @@
+{
+  "name": "fw_nose_lift_takeoff20",
+  "description": "The flight as flown on 23 Sep, in Altitude mode: SB raises the nose to 20 deg on the two nose fans and holds it; the throttle above NL_HO_THR hands over to PX4, which spins up the rear fans, lifts off and pitches the last 4 deg to the hover pitch in the air; hover at stick centre, descend, throttle to zero, kill switch. Park 7. Needs --px4-dir ~/PX4-nl.",
+  "max_time": 150,
+  "attitude": {
+    "park_pitch_deg": 7.0,
+    "hover_pitch_deg": 24
+  },
+  "design": {
+    "nose_lift": {
+      "executor": "firmware",
+      "target_pitch_deg": 20.0,
+      "timeout_s": 60,
+      "hold_timeout_s": 90
+    }
+  },
+  "params": {
+    "COM_RC_IN_MODE": 0,
+    "RC_CHAN_CNT": 18,
+    "RC_MAP_ROLL": 1,
+    "RC_MAP_PITCH": 2,
+    "RC_MAP_THROTTLE": 3,
+    "RC_MAP_YAW": 4,
+    "RC3_TRIM": 1000,
+    "RC_MAP_KILL_SW": 9,
+    "RC_KILLSWITCH_TH": 0.75,
+    "COM_DISARM_LAND": 120.0
+  },
+  "abort": {
+    "max_tilt_deg": 60,
+    "max_alt": 6,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "rc",
+      "name": "arm",
+      "channels": {
+        "7": 1500,
+        "9": 1000
+      },
+      "mode": "altitude",
+      "arm": true,
+      "until": {
+        "armed": true,
+        "nl_state": "parked"
+      },
+      "timeout": 30
+    },
+    {
+      "type": "rc",
+      "name": "parked",
+      "duration": 2
+    },
+    {
+      "type": "rc",
+      "name": "lift",
+      "channels": {
+        "7": 1000
+      },
+      "throttle": 0.0,
+      "until": {
+        "nl_state": "holding"
+      },
+      "timeout": 40
+    },
+    {
+      "type": "rc",
+      "name": "hold",
+      "duration": 3
+    },
+    {
+      "type": "rc",
+      "name": "liftoff",
+      "throttle": 0.7,
+      "throttle_from": 0.0,
+      "ramp_s": 2,
+      "until": {
+        "nl_state": "flying"
+      },
+      "timeout": 20
+    },
+    {
+      "type": "rc",
+      "name": "climb",
+      "throttle": 0.62,
+      "duration": 3
+    },
+    {
+      "type": "rc",
+      "name": "hover",
+      "throttle": 0.5,
+      "duration": 10
+    },
+    {
+      "type": "rc",
+      "name": "descend",
+      "throttle": 0.3,
+      "duration": 10
+    },
+    {
+      "type": "rc",
+      "name": "cut",
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "rc",
+      "name": "kill",
+      "channels": {
+        "9": 2000
+      },
+      "until": {
+        "armed": false
+      },
+      "timeout": 10
+    }
+  ]
+}

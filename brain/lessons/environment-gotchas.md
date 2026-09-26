@@ -34,3 +34,9 @@ Fix: `state.attitude_base` remembers the pre-attitude airframe plus a fingerprin
 `base_airframe()` in `server/app.py` returns the base while the live airframe is still exactly that, and headless
 work and saves start from it. Check the first trial's `SENS_BOARD_Y_OFF` in `px4_params_verified` and the nose
 lift's `start_pitch_deg` when a sweep behaves unlike the model's history.
+
+- WSL runs in America/Los_Angeles like Windows: PX4 build dates, file mtimes and `date` are PDT. Reading the board's
+  "Build datetime" as UTC once matched the wrong commit by a 7-hour coincidence (2026-09-23).
+- A copied shell script can lose its execute bit on the way through /mnt/c; `scripts/x.sh` then fails with
+  "Permission denied" and a pipeline that greps its output looks like a silent success. Call it with `bash`.
+
