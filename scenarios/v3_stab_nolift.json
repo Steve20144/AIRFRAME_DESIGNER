@@ -1,6 +1,6 @@
 {
   "name": "v3_stab_nolift",
-  "description": "ATLAS V3 small (airframes/atlas_v3_small.json): parked at its hover pitch on a re-solved stand, arm in Stabilized, lift off, hover, land; no nose-lift stage. The first closed-loop check of a V3 geometry. Hover pitch 10.5 is the static trim of the 2026-09-26 draft; change it with the design.",
+  "description": "ATLAS V3 small (airframes/atlas_v3_small.json): parked at its hover pitch on a re-solved stand, arm in Stabilized, lift off, hover, land; no nose-lift stage. The first closed-loop check of a V3 geometry. Hover pitch 'trim': each geometry flies at its own static trim, parked at it, with MPC_THR_HOVER matched to it.",
   "max_time": 200,
   "params": {
     "COM_RC_IN_MODE": 3,
@@ -86,7 +86,8 @@
     }
   ],
   "attitude": {
-    "park_pitch_deg": 10.5,
-    "hover_pitch_deg": 10.5
+    "park_pitch_deg": "hover",
+    "hover_pitch_deg": "trim",
+    "hover_thrust": "trim"
   }
 }

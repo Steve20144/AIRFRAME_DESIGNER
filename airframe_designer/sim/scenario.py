@@ -50,7 +50,7 @@ class Scenario:
     wind: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     abort: dict = field(default_factory=dict)
     description: str = ""
-    attitude: dict = field(default_factory=dict)     # {"park_pitch_deg": -10, "hover_pitch_deg": 25}: the flight starts
+    attitude: dict = field(default_factory=dict)     # {"park_pitch_deg": -10, "hover_pitch_deg": 25} ("trim" / "hover" allowed; "hover_thrust": "trim"): the flight starts
                                                      # parked at the first, PX4 levels at the second (legs re-solved)
     design: dict = field(default_factory=dict)       # merged into airframe.design, e.g. {"nose_lift": {"executor": "firmware"}}
 
@@ -68,9 +68,20 @@ class Scenario:
 
     def apply_attitude(self, airframe):
         """The airframe as this scenario wants it parked and hovering (unchanged when the scenario says nothing)."""
-        a = self.attitude or {}
+        a = dict(self.attitude or {})
+        # "trim": the airframe's own static hover trim (geometry sweeps); park "hover": parked at that hover pitch
+        if a.get("hover_pitch_deg") == "trim":
+            a["hover_pitch_deg"] = airframe.trim_hover_pitch()
+            if a["hover_pitch_deg"] is None:
+                raise ValueError("no hover pitch between -10 and 40 deg balances the hover mix for this geometry")
+        if a.get("park_pitch_deg") == "hover":
+            a["park_pitch_deg"] = a["hover_pitch_deg"] if a.get("hover_pitch_deg") is not None else airframe.hover_pitch_deg
         if a.get("park_pitch_deg") is not None or a.get("hover_pitch_deg") is not None:
             airframe = airframe.with_attitude(park_pitch_deg=a.get("park_pitch_deg"), hover_pitch_deg=a.get("hover_pitch_deg"))
+        if a.get("hover_thrust") == "trim":      # MPC_THR_HOVER to match the geometry (mid stick hovers)
+            import copy
+            airframe = copy.deepcopy(airframe)
+            airframe.px4_overrides["MPC_THR_HOVER"] = airframe.hover_thrust_fraction()
         if self.design:
             import copy
             airframe = copy.deepcopy(airframe)

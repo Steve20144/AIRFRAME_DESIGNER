@@ -212,6 +212,36 @@ class Airframe:
         return problems
 
     # -------------------------------------------------------- parked / hover attitude
+    def trim_hover_pitch(self, lo: float = -10.0, hi: float = 40.0, step: float = 0.05) -> float | None:
+        """The nose-up hover pitch where PX4's pseudo-inverse hover mix balances force and roll/pitch torque and its
+        weakest motor keeps the largest share (most margin before a motor clips at zero). A geometry change (a
+        jetfoil angle, the CG) moves this, so a geometry sweep flies each candidate at its own trim (scenario attitude
+        ``"hover_pitch_deg": "trim"``). The pitch is returned even when that best share is negative (the mix clips a
+        motor): the flight then shows what that costs. None only when no pitch balances at all."""
+        probe = self.copy()
+        sp = np.array([0, 0, 0, 0, 0, -1.0])
+        best = None
+        for p in np.arange(lo, hi + 1e-9, step):
+            probe.hover_pitch_deg = float(p)
+            E = probe.effectiveness()
+            u = np.linalg.pinv(E) @ sp
+            if np.abs((E @ u - sp)[[0, 1, 3, 4]]).max() > 1e-3 or u.max() <= 1e-9:
+                continue
+            margin = float(u.min() / u.max())
+            if best is None or margin > best[1] + 1e-9:
+                best = (round(float(p), 3), margin)
+        return best[0] if best else None
+
+    def hover_thrust_fraction(self) -> float:
+        """PX4's hover thrust (MPC_THR_HOVER) for this geometry: weight over the fans' combined full thrust along the
+        hover-frame vertical (PX4 normalises collective thrust that way). Matches the V3 draft's measured 0.26."""
+        th = math.radians(self.hover_pitch_deg)
+        up = 0.0
+        for r in self.active_rotors():
+            a = np.asarray(unit(r.axis), float)
+            up += r.effective_max_thrust() * max(0.0, -(a[2] * math.cos(th) - a[0] * math.sin(th)))
+        return round(self.mass.mass * G / up, 3) if up > 0 else 1.0
+
     def with_attitude(self, park_pitch_deg: float | None = None, hover_pitch_deg: float | None = None) -> "Airframe":
         """A copy standing at ``park_pitch_deg`` (legs re-solved under the same hard points, ``landed_pitch_deg``
         updated) and hovering at ``hover_pitch_deg`` (PX4's level, SENS_BOARD_Y_OFF, the rotor export). The nose

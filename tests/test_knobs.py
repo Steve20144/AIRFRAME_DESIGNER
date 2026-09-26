@@ -87,3 +87,13 @@ def test_v3_front_tilt_keeps_the_centre_nose_fan_upright():
     assert k["rotors"] == ["M7", "M8", "M9"] and k["signs"] == [-1.0, -1.0, 0.0]
     b = apply_variables(af, {"knobs.front_cant_deg": 15})
     assert [round(r.cant_deg, 2) + 0.0 for r in b.rotors[6:]] == [-15.0, -15.0, 0.0]
+
+
+def test_trim_pitch_follows_the_jetfoil_angles():
+    af = Airframe.load(ROOT / "airframes" / "atlas_v3_small.json")
+    p0 = af.trim_hover_pitch()
+    assert 10.4 <= p0 <= 11.3
+    af.hover_pitch_deg = p0
+    assert af.hover_check()["ok"]
+    b = apply_variables(af, {"knobs.foil_1_deg": 10, "knobs.foil_2_deg": 20, "knobs.foil_3_deg": 30})
+    assert b.trim_hover_pitch() > p0 + 1          # more forward tilt on average: hovers more nose-up

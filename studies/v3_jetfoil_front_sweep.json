@@ -1,0 +1,63 @@
+{
+  "name": "v3_jetfoil_front_sweep",
+  "description": "ATLAS V3 small (draft masses): grid over the three jetfoil jet angles (thrust tilt from vertical, per station) and the nose jets' sideways tilt. Every candidate flies Stabilized at its own static trim pitch (v3_stab_nolift, attitude 'trim'). Score: hover attitude error plus heading drift and position drift (the V3 draft's weak points), liftoff/landing upsets, touchdown speed and saturation.",
+  "airframe": "airframes/atlas_v3_small.json",
+  "scenario": "scenarios/v3_stab_nolift.json",
+  "variables": [
+    {
+      "path": "knobs.foil_1_deg",
+      "range": [
+        10,
+        25
+      ]
+    },
+    {
+      "path": "knobs.foil_2_deg",
+      "range": [
+        10,
+        25
+      ]
+    },
+    {
+      "path": "knobs.foil_3_deg",
+      "range": [
+        10,
+        25
+      ]
+    },
+    {
+      "path": "knobs.front_cant_deg",
+      "range": [
+        0,
+        40
+      ]
+    }
+  ],
+  "objective": "phases.hover.pitch_err_rms_deg + phases.hover.roll_err_rms_deg + 0.05 * abs(phases.hover.yaw_drift_deg) + 0.5 * phases.hover.pos_drift + 0.2 * (phases.liftoff.pitch_max_deg + phases.liftoff.roll_max_deg) + 0.2 * (phases.landing.pitch_max_deg + phases.landing.roll_max_deg) + 2 * metrics.touchdown_speed + 5 * metrics.saturation_fraction",
+  "maximize": false,
+  "constraints": [
+    "ok",
+    "not metrics.crashed"
+  ],
+  "penalty": 100,
+  "algorithm": {
+    "name": "grid",
+    "levels": [
+      3,
+      3,
+      3,
+      5
+    ],
+    "budget": 135,
+    "batch": 8
+  },
+  "workers": 8,
+  "timeseries": true,
+  "sim": {
+    "rate": 250,
+    "substeps": 2,
+    "noise": true,
+    "speed": 0,
+    "seed": 1
+  }
+}
