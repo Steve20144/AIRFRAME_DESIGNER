@@ -42,3 +42,16 @@ With guessed masses (7.8 kg, `results/v3_jetfoil_front_sweep_7kg`) the best was 
 ## Caveats
 
 Battery position (nose carrier), fan thrust 36 N, km 0.002 and full jet attachment are still assumptions.
+
+## CG sweep on the best configuration (same day)
+
+Battery (3.225 kg) moved fore/aft -0.20..+0.10 m and down/up +-0.04 m (`studies/v3_best_cg_sweep_s1..3.json`,
+three seeds), then per fore/aft point five hover pitches (trim -1..+1 deg, `results/v3_cg_pitch`). CG x -3.1..+5.1 cm.
+
+- **No CG optimum in the flights.** Best-over-pitch scores 1.39-1.99 at every CG, medians 2.3-3.4, no trend.
+- **The flights are dominated by a sensitivity to the exact hover pitch**: at one CG, 0.5 deg of hover pitch swings the
+  hover drift between 0.5 and 6 m (pitch tracking error 0.03 vs 0.67 deg), periodic with about 1.5 deg, identical
+  across seeds. A pitch-rate integrator (0.2) makes it worse, so it is not the missing MC_PITCHRATE_I. Unexplained;
+  it also blurs the fine ranking of the jetfoil sweep's tie band. Root-cause it before trusting any fine ranking.
+- Static (reliable): forward CG lowers the busiest hover fan (0.60 at +2.4 cm, 0.48 at +5.1) and the trim pitch
+  (about 0.46 deg per cm); aft CG raises trim to 19 deg. Recommendation: keep +2.4 cm or move up to 2-3 cm forward.

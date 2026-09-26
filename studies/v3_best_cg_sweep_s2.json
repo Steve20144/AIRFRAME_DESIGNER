@@ -1,0 +1,47 @@
+{
+  "name": "v3_best_cg_sweep_s2",
+  "description": "ATLAS V3 small best configuration (17.5/25/25 jetfoil lean, nose fans 30, ATLAS_09B masses 11.785 kg): CG swept by moving the 3.225 kg battery fore/aft (-0.20..+0.10 m) and down/up (-0.04..+0.04 m). Each point at its own trim pitch and hover thrust. Seed 2.",
+  "airframe": "airframes/atlas_v3_small_best.json",
+  "scenario": "scenarios/v3_stab_nolift.json",
+  "variables": [
+    {
+      "path": "knobs.cg_dx",
+      "range": [
+        -0.2,
+        0.1
+      ]
+    },
+    {
+      "path": "knobs.cg_dz",
+      "range": [
+        -0.04,
+        0.04
+      ]
+    }
+  ],
+  "objective": "phases.hover.pitch_err_rms_deg + phases.hover.roll_err_rms_deg + 0.05 * abs(phases.hover.yaw_drift_deg) + 0.5 * phases.hover.pos_drift + 0.2 * (phases.liftoff.pitch_max_deg + phases.liftoff.roll_max_deg) + 0.2 * (phases.landing.pitch_max_deg + phases.landing.roll_max_deg) + 2 * metrics.touchdown_speed + 5 * metrics.saturation_fraction",
+  "maximize": false,
+  "constraints": [
+    "ok",
+    "not metrics.crashed"
+  ],
+  "penalty": 100,
+  "algorithm": {
+    "name": "grid",
+    "levels": [
+      7,
+      3
+    ],
+    "budget": 21,
+    "batch": 8
+  },
+  "workers": 8,
+  "timeseries": true,
+  "sim": {
+    "rate": 250,
+    "substeps": 2,
+    "noise": true,
+    "speed": 0,
+    "seed": 2
+  }
+}

@@ -63,7 +63,8 @@ current task needs.
 - [2026-09-25 Nose hold flights, ULog findings](experiments/2026-09-25-nose-hold-flights.md): no liftoff on 25 Sep; first liftoff 00:21 on the front-fix build (0.8 m, nose held 26-30); M9 clips at full while M10 sits at half (split wastes pitch authority); forward push uncertain
 - [2026-09-26 V3 jetfoil x front tilt sweep](experiments/2026-09-26-v3-jetfoil-front-sweep.md): at ATLAS_09B's masses
   (11.785 kg) best outer 17.5 / middle 25 / inner 25 deg lean, nose fans 30 as built; the draft fails; mixed station
-  angles win, nose tilt barely matters; mass.resolve() ignored CAD bodies (fixed)
+  angles win, nose tilt barely matters; mass.resolve() ignored CAD bodies (fixed). CG sweep: no optimum, flights
+  swing 0.5-6 m drift with 0.5 deg of hover pitch (unexplained, blocks fine rankings)
 
 ## Research
 
