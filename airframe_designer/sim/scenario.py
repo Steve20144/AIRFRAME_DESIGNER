@@ -74,6 +74,8 @@ class Scenario:
             a["hover_pitch_deg"] = airframe.trim_hover_pitch()
             if a["hover_pitch_deg"] is None:
                 raise ValueError("no hover pitch between -10 and 40 deg balances the hover mix for this geometry")
+        if a.get("hover_pitch_offset_deg") and a.get("hover_pitch_deg") is not None:   # fly off trim on purpose
+            a["hover_pitch_deg"] = float(a["hover_pitch_deg"]) + float(a["hover_pitch_offset_deg"])
         if a.get("park_pitch_deg") == "hover":
             a["park_pitch_deg"] = a["hover_pitch_deg"] if a.get("hover_pitch_deg") is not None else airframe.hover_pitch_deg
         if a.get("park_pitch_deg") is not None or a.get("hover_pitch_deg") is not None:

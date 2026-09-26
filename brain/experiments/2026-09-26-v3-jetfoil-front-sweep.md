@@ -55,3 +55,18 @@ three seeds), then per fore/aft point five hover pitches (trim -1..+1 deg, `resu
   ([lesson](../lessons/v3-hover-pitch-sensitivity-is-yaw-authority.md)); with km 0 it disappears.
 - Static (reliable): forward CG lowers the busiest hover fan (0.60 at +2.4 cm, 0.48 at +5.1) and the trim pitch
   (about 0.46 deg per cm); aft CG raises trim to 19 deg. Recommendation: keep +2.4 cm or move up to 2-3 cm forward.
+
+## Jetfoil resweep on the nose-pair battery layout (12.8 kg, same day)
+
+`studies/v3_jetfoil_sweep_batt.json`: the three stations at 10/15/20/25 deg lean (64 designs), nose fans 30 as built,
+each flown at trim and trim +-0.5 deg (`scenarios/v3_stab_nolift_m05/_p05`, `hover_pitch_offset_deg`), scored on the
+mean of the three so a design cannot win on one lucky pitch. (The study's objective expression first missed the
+`metrics.` level of multi-scenario results, so every trial scored 200; the trials were re-scored from the saved
+flights and the spec fixed.) 42 / 64 fly all three pitches. Top 5 re-flown on seeds 2 and 3 (9 flights each).
+
+**Best: outer 25 / middle 10 / inner 25 deg lean, nose 30** (`airframes/atlas_v3_small_best.json`, trim 17.0 deg,
+MPC_THR_HOVER 0.431): 9/9 flights, mean score 1.98, worst 2.23, drift median 1.2 m, worst 1.55 m; hover fans 46-59 %,
+nose fans 21 %. Runner-up 20 / 10 / 25: 9/9, drift worst 1.52 m. The middle station at 10 deg means the jet turned
+80 deg there, more than the CAD foil's 74.6; outer and inner at 65 deg are gentler than the CAD foil.
+Views: `scripts/v3_foil_views.py` writes side, front and top views with the CAD foil and best layers
+(results/v3_foil_angles.html).

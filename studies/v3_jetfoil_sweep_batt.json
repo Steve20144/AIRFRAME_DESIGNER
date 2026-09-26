@@ -1,0 +1,65 @@
+{
+  "name": "v3_jetfoil_sweep_batt",
+  "description": "ATLAS V3 small, batteries one pair in the nose + two pairs at the centre (12.8 kg): the three jetfoil stations' thrust lean 10/15/20/25 deg each, nose fans 30 deg as built. Each candidate flies at its trim pitch and at +-0.5 deg off it (three scenarios); the score is the mean of the three, so it rewards designs that do not depend on hitting one exact pitch.",
+  "airframe": "airframes/atlas_v3_small.json",
+  "variables": [
+    {
+      "path": "knobs.foil_1_deg",
+      "range": [
+        10,
+        25
+      ]
+    },
+    {
+      "path": "knobs.foil_2_deg",
+      "range": [
+        10,
+        25
+      ]
+    },
+    {
+      "path": "knobs.foil_3_deg",
+      "range": [
+        10,
+        25
+      ]
+    }
+  ],
+  "objective": "((scenarios.v3_stab_nolift.metrics.phases.hover.pitch_err_rms_deg + scenarios.v3_stab_nolift.metrics.phases.hover.roll_err_rms_deg + 0.05 * abs(scenarios.v3_stab_nolift.metrics.phases.hover.yaw_drift_deg) + 0.5 * scenarios.v3_stab_nolift.metrics.phases.hover.pos_drift + 0.2 * (scenarios.v3_stab_nolift.metrics.phases.liftoff.pitch_max_deg + scenarios.v3_stab_nolift.metrics.phases.liftoff.roll_max_deg) + 0.2 * (scenarios.v3_stab_nolift.metrics.phases.landing.pitch_max_deg + scenarios.v3_stab_nolift.metrics.phases.landing.roll_max_deg) + 2 * scenarios.v3_stab_nolift.metrics.touchdown_speed + 5 * scenarios.v3_stab_nolift.metrics.saturation_fraction) + (scenarios.v3_stab_nolift_m05.metrics.phases.hover.pitch_err_rms_deg + scenarios.v3_stab_nolift_m05.metrics.phases.hover.roll_err_rms_deg + 0.05 * abs(scenarios.v3_stab_nolift_m05.metrics.phases.hover.yaw_drift_deg) + 0.5 * scenarios.v3_stab_nolift_m05.metrics.phases.hover.pos_drift + 0.2 * (scenarios.v3_stab_nolift_m05.metrics.phases.liftoff.pitch_max_deg + scenarios.v3_stab_nolift_m05.metrics.phases.liftoff.roll_max_deg) + 0.2 * (scenarios.v3_stab_nolift_m05.metrics.phases.landing.pitch_max_deg + scenarios.v3_stab_nolift_m05.metrics.phases.landing.roll_max_deg) + 2 * scenarios.v3_stab_nolift_m05.metrics.touchdown_speed + 5 * scenarios.v3_stab_nolift_m05.metrics.saturation_fraction) + (scenarios.v3_stab_nolift_p05.metrics.phases.hover.pitch_err_rms_deg + scenarios.v3_stab_nolift_p05.metrics.phases.hover.roll_err_rms_deg + 0.05 * abs(scenarios.v3_stab_nolift_p05.metrics.phases.hover.yaw_drift_deg) + 0.5 * scenarios.v3_stab_nolift_p05.metrics.phases.hover.pos_drift + 0.2 * (scenarios.v3_stab_nolift_p05.metrics.phases.liftoff.pitch_max_deg + scenarios.v3_stab_nolift_p05.metrics.phases.liftoff.roll_max_deg) + 0.2 * (scenarios.v3_stab_nolift_p05.metrics.phases.landing.pitch_max_deg + scenarios.v3_stab_nolift_p05.metrics.phases.landing.roll_max_deg) + 2 * scenarios.v3_stab_nolift_p05.metrics.touchdown_speed + 5 * scenarios.v3_stab_nolift_p05.metrics.saturation_fraction)) / 3",
+  "maximize": false,
+  "constraints": [
+    "ok",
+    "not metrics.crashed",
+    "not scenarios.v3_stab_nolift.metrics.crashed",
+    "not scenarios.v3_stab_nolift_m05.metrics.crashed",
+    "not scenarios.v3_stab_nolift_p05.metrics.crashed"
+  ],
+  "penalty": 100,
+  "algorithm": {
+    "name": "grid",
+    "levels": [
+      4,
+      4,
+      4
+    ],
+    "budget": 64,
+    "batch": 8
+  },
+  "workers": 8,
+  "timeseries": true,
+  "sim": {
+    "rate": 250,
+    "substeps": 2,
+    "noise": true,
+    "speed": 0,
+    "seed": 1
+  },
+  "scenarios": [
+    "scenarios/v3_stab_nolift.json",
+    "scenarios/v3_stab_nolift_m05.json",
+    "scenarios/v3_stab_nolift_p05.json"
+  ],
+  "base_variables": {
+    "knobs.front_cant_deg": 30
+  }
+}

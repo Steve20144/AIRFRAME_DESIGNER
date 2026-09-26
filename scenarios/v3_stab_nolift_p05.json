@@ -1,0 +1,94 @@
+{
+  "name": "v3_stab_nolift_p05",
+  "description": "v3_stab_nolift flown +0.5 deg off the static trim pitch: with v3_stab_nolift, a robustness check (the yaw-limit sensitivity makes one pitch a lottery).",
+  "max_time": 200,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 3,
+      "duration": 8,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 12,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 30,
+      "alt_hold": {
+        "target": -0.5,
+        "rate": 0.4,
+        "min": 0.2
+      },
+      "until_ground": true,
+      "settle": 0.3
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "stabilized",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ],
+  "attitude": {
+    "park_pitch_deg": "hover",
+    "hover_pitch_deg": "trim",
+    "hover_thrust": "trim",
+    "hover_pitch_offset_deg": 0.5
+  }
+}
