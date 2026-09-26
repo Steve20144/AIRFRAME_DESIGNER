@@ -52,7 +52,7 @@ BASE = ROOT / "airframes" / "atlas_09b.json"        # PX4 gains, fan model, vibr
 
 # ATLAS_09B's masses (airframes/atlas_09b.json CAD bodies): 10 fans 3.4, battery 3.225, avionics 0.5, foils 2.6,
 # other structure 2.4 = 12.125 kg; V3 has nine fans
-BATTERY_EACH_KG = 4.6          # user, 26 Sep: "each one of them weighs 4.6kgs"
+BATTERY_EACH_KG = 4.6 / 6      # user, 26 Sep: 4.6 kg for all six (first read as 4.6 kg each: 35.8 kg, cannot fly)
 BATTERY_CENTRE = [0.0, 0.0, 0.0]   # FRD: on the centreline at boom level, between the nose and foil fans
 BATTERY_TRI_RADIUS = 0.07      # m, centre of each triangle to each battery
 BATTERY_LAYER = 0.06           # m, each triangle's plane above (-z) / below (+z) the centre

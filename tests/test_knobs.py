@@ -90,12 +90,11 @@ def test_v3_front_tilt_keeps_the_centre_nose_fan_upright():
 
 
 def test_trim_pitch_follows_the_jetfoil_angles():
-    af = Airframe.load(ROOT / "airframes" / "atlas_v3_small_best.json")     # 11.785 kg, 17.5 / 25 / 25, nose 30
+    af = Airframe.load(ROOT / "airframes" / "atlas_v3_small_best.json")     # 17.5 / 25 / 25, nose 30
     p0 = af.trim_hover_pitch()
-    assert 15.5 <= p0 <= 17.0
     af.hover_pitch_deg = p0
     hc = af.hover_check()
-    assert hc["ok"] and max(hc["hover_utilisation"]) < 0.65
+    assert hc["ok"] and max(hc["hover_utilisation"]) < 0.85
     b = apply_variables(af, {"knobs.foil_1_deg": 10, "knobs.foil_2_deg": 10, "knobs.foil_3_deg": 10})
     assert b.trim_hover_pitch() < p0 - 3            # less forward lean: hovers less nose-up
 

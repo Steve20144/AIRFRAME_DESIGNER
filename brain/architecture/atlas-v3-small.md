@@ -15,10 +15,13 @@
 ## Assumed (constants at the top of the script)
 
 26 Sep, later (user): motors 0.3 kg each; six batteries near the centre in two triangles (one above the boom plane,
-one below, turned 60 deg; radius 0.07 m, layers +-0.06 m: layout assumed), BATTERY_EACH_KG = 4.6 as stated. That is
-35.8 kg against 306 N of total fan thrust (thrust/weight 0.87): it cannot lift off. At 0.46 kg each: 10.96 kg,
-thrust/weight 2.85, but the busiest fan needs 86 % at trim on the draft geometry (CG moved 4.6 cm aft of the
-nose-battery case). The CG knobs now move the battery point masses (knob `items`).
+one below, turned 60 deg; radius 0.07 m, layers +-0.06 m: layout assumed), 4.6 kg for all six (0.767 kg each; first
+misread as 4.6 kg each = 35.8 kg, which cannot lift off). Total 12.8 kg, thrust/weight 2.44, CG x -6.2 cm (8.6 cm
+aft of the nose-battery case; the foil fans carry nearly all the weight, nose fans at 8 %). SITL v3_stab_nolift:
+the draft geometry crashes at lift-off (3/3 seeds); the best configuration (17.5 / 25 / 25, trim 21.35 deg) flies
+3/3 but drifts 5-6 m, pitch error 0.6-0.7 deg, touchdown 0.7-0.8 m/s (the yaw-authority leak). To bring the CG back
+to +2.4 cm the battery cluster would have to sit about 24 cm further forward. The CG knobs move the battery point
+masses (knob `items`).
 
 Since 26 Sep the masses are ATLAS_09B's with nine fans (11.785 kg, see the sweep note); the 7.8 kg figures below and
 the first results are from the earlier guess.
