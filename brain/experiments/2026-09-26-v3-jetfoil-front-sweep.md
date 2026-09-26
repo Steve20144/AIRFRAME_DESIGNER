@@ -68,5 +68,5 @@ flights and the spec fixed.) 42 / 64 fly all three pitches. Top 5 re-flown on se
 MPC_THR_HOVER 0.431): 9/9 flights, mean score 1.98, worst 2.23, drift median 1.2 m, worst 1.55 m; hover fans 46-59 %,
 nose fans 21 %. Runner-up 20 / 10 / 25: 9/9, drift worst 1.52 m. The middle station at 10 deg means the jet turned
 80 deg there, more than the CAD foil's 74.6; outer and inner at 65 deg are gentler than the CAD foil.
-Views: `scripts/v3_foil_views.py` writes side, front and top views with the CAD foil and best layers
-(results/v3_foil_angles.html).
+Views: `scripts/v3_foil_views.py` writes `docs/v3_views/v3_foil_angles.html` (side, front and top views with the CAD
+foil and best layers, Save PNG buttons) and, through headless Edge on Windows, `docs/v3_views/v3_{side,front,top}.png`.
