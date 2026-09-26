@@ -64,7 +64,7 @@ current task needs.
 - [2026-09-26 V3 jetfoil x front tilt sweep](experiments/2026-09-26-v3-jetfoil-front-sweep.md): at ATLAS_09B's masses
   (11.785 kg) best outer 17.5 / middle 25 / inner 25 deg lean, nose fans 30 as built; the draft fails; mixed station
   angles win, nose tilt barely matters; mass.resolve() ignored CAD bodies (fixed). CG sweep: no optimum, flights
-  swing 0.5-6 m drift with 0.5 deg of hover pitch (unexplained, blocks fine rankings)
+  swing 0.5-6 m drift with 0.5 deg of hover pitch (cause: yaw authority, see lessons)
 
 ## Research
 
@@ -85,6 +85,9 @@ current task needs.
 - [Environment and process gotchas](lessons/environment-gotchas.md)
 - [A PX4 module must read the clock after copying its messages](lessons/px4-module-clock-before-copy.md)
 - [Fan vibration drifts the EKF height on the ground](lessons/fan-vibration-drifts-ekf-height.md)
+- [V3's hover-pitch sensitivity is the yaw authority limit](lessons/v3-hover-pitch-sensitivity-is-yaw-authority.md):
+  same-spin reaction torque keeps yaw at its limit, it leaks into pitch, hands-off Stabilized turns that into drift;
+  km 0 removes it; judge V3 sweeps over a km bracket or with counter-rotating fans
 - [The default ULog cannot identify the nose lift](lessons/ulog-default-profile-misses-nose-lift.md): outputs at
   10 Hz, `nose_lift_output` not logged, no fan speed anywhere
 
