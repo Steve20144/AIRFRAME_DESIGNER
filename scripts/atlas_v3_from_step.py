@@ -15,9 +15,10 @@ Assumed, NOT in the CAD (change the constants below and rerun):
     motors and add one in the front"): avionics 0.5 kg as a point mass at the flight controller; the foils 2.6 kg
     (09B's four JET_FOIL parts) over V3's nozzles and curved foils, and 2.4 kg of other structure (0.2 of it the nose
     carrier shell) over the tubes, clamps, hubs and ESCs in proportion to volume (tube 1.6, printed 1.0 g/cm3).
-    Later the same day (user): motors 0.3 kg each, and six batteries of BATTERY_EACH_KG near the centre in two
-    triangles, one above the boom plane and one below (point masses with a brick's inertia; the layout constants
-    BATTERY_* below are assumptions, the CAD has no batteries).
+    Later the same day (user): motors 0.3 kg each and six batteries of BATTERY_EACH_KG (4.6 kg in total). First two
+    triangles at the centre (CG 6.2 cm aft, the draft crashed); then (user) one pair near the nose and two pairs in
+    the centre: the nose pair side by side in the slide-in carrier, the centre pairs one above the boom plane and one
+    below (point masses with a brick's inertia; the BATTERY_* spacings are assumptions, the CAD has no batteries).
   * jet angle: the jet is taken to leave along the foil's exit (full Coanda attachment), i.e. thrust 14.6-17.3 deg
     forward of vertical. Real jets separate early, so the true turning is smaller; the design knobs change it.
   * fan thrust 36 N quadratic, spool 0.12 s, km 0.002 all the same way (the ATLAS_09B figures).
@@ -54,8 +55,9 @@ BASE = ROOT / "airframes" / "atlas_09b.json"        # PX4 gains, fan model, vibr
 # other structure 2.4 = 12.125 kg; V3 has nine fans
 BATTERY_EACH_KG = 4.6 / 6      # user, 26 Sep: 4.6 kg for all six (first read as 4.6 kg each: 35.8 kg, cannot fly)
 BATTERY_CENTRE = [0.0, 0.0, 0.0]   # FRD: on the centreline at boom level, between the nose and foil fans
-BATTERY_TRI_RADIUS = 0.07      # m, centre of each triangle to each battery
-BATTERY_LAYER = 0.06           # m, each triangle's plane above (-z) / below (+z) the centre
+BATTERY_PAIR_HALF_SPAN = 0.045     # m, each battery of a pair this far left / right of the centreline
+BATTERY_LAYER = 0.06           # m, the centre pairs above (-z) / below (+z) the centre
+BATTERY_NOSE_HALF_SPAN = 0.065     # m, the nose pair side by side in the 0.26 m wide carrier
 BATTERY_BRICK = (0.16, 0.08, 0.06)   # m, a pack's size for its own inertia
 FAN_KG = 0.30                  # user, 26 Sep: "each motor weighs 300grams"
 AVIONICS_KG = 0.5
@@ -130,12 +132,14 @@ def main() -> None:
     af.mass.items = [MassItem(name="avionics (ATLAS_09B)", mass=AVIONICS_KG, pos=[round(float(v), 4) for v in frd(PIXHAWK_CAD)])]
     a, b, c = BATTERY_BRICK
     own = [BATTERY_EACH_KG * (b * b + c * c) / 12, BATTERY_EACH_KG * (a * a + c * c) / 12, BATTERY_EACH_KG * (a * a + b * b) / 12]
-    for layer, dz, start in (("upper", -BATTERY_LAYER, 0.0), ("lower", BATTERY_LAYER, 60.0)):   # the lower one turned 60 deg
-        for j in range(3):
-            ang = math.radians(start + 120.0 * j)
-            pos = [BATTERY_CENTRE[0] + BATTERY_TRI_RADIUS * math.cos(ang), BATTERY_CENTRE[1] + BATTERY_TRI_RADIUS * math.sin(ang),
-                   BATTERY_CENTRE[2] + dz]
-            af.mass.items.append(MassItem(name=f"battery {layer} {j + 1}", mass=BATTERY_EACH_KG,
+    nose = frd(by_k[CARRIER]["centroid"])
+    layout = [("nose", nose, BATTERY_NOSE_HALF_SPAN),
+              ("centre upper", np.asarray(BATTERY_CENTRE) + [0.0, 0.0, -BATTERY_LAYER], BATTERY_PAIR_HALF_SPAN),
+              ("centre lower", np.asarray(BATTERY_CENTRE) + [0.0, 0.0, BATTERY_LAYER], BATTERY_PAIR_HALF_SPAN)]
+    for where, c, half in layout:
+        for side, sy in (("L", -1.0), ("R", 1.0)):
+            pos = [float(c[0]), float(c[1]) + sy * half, float(c[2])]
+            af.mass.items.append(MassItem(name=f"battery {where} {side}", mass=BATTERY_EACH_KG,
                                           pos=[round(v, 4) + 0.0 for v in pos], inertia=[round(v, 6) for v in own]))
     af.mass.from_items = True
     af.mass.manual = None

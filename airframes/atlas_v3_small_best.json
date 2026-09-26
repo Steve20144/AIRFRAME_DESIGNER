@@ -4,19 +4,19 @@
   "mass": {
     "mass": 12.79999,
     "cg": [
-      -0.06194,
+      -0.01897,
       1e-05,
-      0.07429
+      0.0778
     ],
     "inertia": [
-      0.763425,
-      0.784427,
-      1.227333
+      0.753815,
+      1.003906,
+      1.459276
     ],
     "inertia_products": [
-      4.4e-05,
-      -0.184009,
-      -0.0
+      3.9e-05,
+      -0.207903,
+      -1e-06
     ],
     "items": [
       {
@@ -39,11 +39,49 @@
         ]
       },
       {
-        "name": "battery upper 1",
+        "name": "battery nose L",
         "mass": 0.7666666666666666,
         "pos": [
-          0.07,
+          0.3587,
+          -0.065,
+          0.0293
+        ],
+        "inertia": [
+          0.000639,
+          0.001866,
+          0.002044
+        ],
+        "inertia_products": [
           0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "battery nose R",
+        "mass": 0.7666666666666666,
+        "pos": [
+          0.3587,
+          0.065,
+          0.0293
+        ],
+        "inertia": [
+          0.000639,
+          0.001866,
+          0.002044
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "battery centre upper L",
+        "mass": 0.7666666666666666,
+        "pos": [
+          0.0,
+          -0.045,
           -0.06
         ],
         "inertia": [
@@ -58,11 +96,11 @@
         ]
       },
       {
-        "name": "battery upper 2",
+        "name": "battery centre upper R",
         "mass": 0.7666666666666666,
         "pos": [
-          -0.035,
-          0.0606,
+          0.0,
+          0.045,
           -0.06
         ],
         "inertia": [
@@ -77,30 +115,11 @@
         ]
       },
       {
-        "name": "battery upper 3",
+        "name": "battery centre lower L",
         "mass": 0.7666666666666666,
         "pos": [
-          -0.035,
-          -0.0606,
-          -0.06
-        ],
-        "inertia": [
-          0.000639,
-          0.001866,
-          0.002044
-        ],
-        "inertia_products": [
           0.0,
-          0.0,
-          0.0
-        ]
-      },
-      {
-        "name": "battery lower 1",
-        "mass": 0.7666666666666666,
-        "pos": [
-          0.035,
-          0.0606,
+          -0.045,
           0.06
         ],
         "inertia": [
@@ -115,30 +134,11 @@
         ]
       },
       {
-        "name": "battery lower 2",
+        "name": "battery centre lower R",
         "mass": 0.7666666666666666,
         "pos": [
-          -0.07,
           0.0,
-          0.06
-        ],
-        "inertia": [
-          0.000639,
-          0.001866,
-          0.002044
-        ],
-        "inertia_products": [
-          0.0,
-          0.0,
-          0.0
-        ]
-      },
-      {
-        "name": "battery lower 3",
-        "mass": 0.7666666666666666,
-        "pos": [
-          0.035,
-          -0.0606,
+          0.045,
           0.06
         ],
         "inertia": [
@@ -488,12 +488,12 @@
       "enabled": true
     }
   ],
-  "hover_pitch_deg": 21.35,
+  "hover_pitch_deg": 18.9,
   "landed_pitch_deg": 4.0,
   "px4_overrides": {
     "MIS_TAKEOFF_ALT": 1,
     "MPC_TKO_RAMP_T": 0.20000000298023224,
-    "MPC_THR_HOVER": 0.431,
+    "MPC_THR_HOVER": 0.43,
     "MC_AIRMODE": 1,
     "MPC_MAN_Y_MAX": 60,
     "MC_YAWRATE_I": 0.02,
@@ -535,7 +535,7 @@
         7,
         8
       ],
-      "target_pitch_deg": 14.15,
+      "target_pitch_deg": 12.85,
       "rate_deg_s": 3,
       "assist_cmd": 0.0,
       "rc_channel": 7,
@@ -650,12 +650,12 @@
         "kind": "shift_x",
         "bodies": [],
         "items": [
-          "battery upper 1",
-          "battery upper 2",
-          "battery upper 3",
-          "battery lower 1",
-          "battery lower 2",
-          "battery lower 3"
+          "battery nose L",
+          "battery nose R",
+          "battery centre upper L",
+          "battery centre upper R",
+          "battery centre lower L",
+          "battery centre lower R"
         ],
         "value": 0.0,
         "range": [
@@ -669,12 +669,12 @@
         "kind": "shift_z",
         "bodies": [],
         "items": [
-          "battery upper 1",
-          "battery upper 2",
-          "battery upper 3",
-          "battery lower 1",
-          "battery lower 2",
-          "battery lower 3"
+          "battery nose L",
+          "battery nose R",
+          "battery centre upper L",
+          "battery centre upper R",
+          "battery centre lower L",
+          "battery centre lower R"
         ],
         "value": 0.0,
         "range": [
@@ -731,7 +731,7 @@
       }
     }
   },
-  "notes": "Best of the 2026-09-26 jetfoil x front-tilt sweep with ATLAS_09B's masses (11.785 kg; results/v3_jetfoil_front_sweep, top 8 re-flown on seeds 1-3; brain/experiments/2026-09-26-v3-jetfoil-front-sweep.md): thrust 17.5 deg forward of vertical at the outer foil station (jet turned 72.5 deg), 25 deg at the middle and inner (65 deg), nose side fans canted 30 deg inward as built. Masses since 26 Sep: six centre batteries 4.6 kg in total, 0.3 kg motors (12.8 kg).\n\nBuild airframes/atlas_v3_small.json: the small-scale ATLAS V3 from the STEP export SMALL_SCALE_V3.step\n(Fusion, 26 Sep 2026), on branch atlas-v5-design.\n\nFrom the CAD (measured on the imported solids, see brain/architecture/atlas-v3-small.md):\n  * nine fans. Six foil fans, three a side, ducts 106 mm OD with a 96 mm rotor disc, all pointing straight aft; the\n    jet runs through a rectangular nozzle and then along the curved lower wall (a Coanda foil) that ends 72.7 /\n    74.6 / 75.4 deg below horizontal (inner / middle / outer station). Three XFLY 80 mm EDFs in the nose: the two\n    side ones canted 30 deg inward, the centre one vertical.\n  * the V (anhedral about 37 deg) of the fan line, the booms, the two rear legs (hub on top of the nose to feet aft\n    and outboard), part volumes, centroids and inertia.\n\nAssumed, NOT in the CAD (change the constants below and rerun):\n  * masses: ATLAS_09B's structure (user, 26 Sep: \"the weights from the previous version, remove the two rear\n    motors and add one in the front\"): avionics 0.5 kg as a point mass at the flight controller; the foils 2.6 kg\n    (09B's four JET_FOIL parts) over V3's nozzles and curved foils, and 2.4 kg of other structure (0.2 of it the nose\n    carrier shell) over the tubes, clamps, hubs and ESCs in proportion to volume (tube 1.6, printed 1.0 g/cm3).\n    Later the same day (user): motors 0.3 kg each, and six batteries of BATTERY_EACH_KG near the centre in two\n    triangles, one above the boom plane and one below (point masses with a brick's inertia; the layout constants\n    BATTERY_* below are assumptions, the CAD has no batteries).\n  * jet angle: the jet is taken to leave along the foil's exit (full Coanda attachment), i.e. thrust 14.6-17.3 deg\n    forward of vertical. Real jets separate early, so the true turning is smaller; the design knobs change it.\n  * fan thrust 36 N quadratic, spool 0.12 s, km 0.002 all the same way (the ATLAS_09B figures).\n  * motor order: M1/M2 outer foil fans L/R, M3/M4 middle, M5/M6 inner, M7/M8 nose side fans L/R, M9 nose centre.\n  * a nose leg: the CAD has only the two rear legs; without a nose support the aircraft tips onto the nose\n    carrier. NOSE_LEG_* sets a provisional one that parks it at PARK_PITCH_DEG.\n\nFrames: the CAD is x right, y up, z aft (metres after import); FRD = (-z, x, -y), origin at the boom level\n(CAD y = 0.45) on the centreline.\n\nBuilt by scripts/atlas_v3_from_step.py. NO feasible hover pitch in 0-30 deg",
+  "notes": "Best of the 2026-09-26 jetfoil x front-tilt sweep with ATLAS_09B's masses (11.785 kg; results/v3_jetfoil_front_sweep, top 8 re-flown on seeds 1-3; brain/experiments/2026-09-26-v3-jetfoil-front-sweep.md): thrust 17.5 deg forward of vertical at the outer foil station (jet turned 72.5 deg), 25 deg at the middle and inner (65 deg), nose side fans canted 30 deg inward as built. Masses since 26 Sep: six batteries 4.6 kg in total (one pair in the nose carrier, two pairs at the centre), 0.3 kg motors (12.8 kg).\n\nBuild airframes/atlas_v3_small.json: the small-scale ATLAS V3 from the STEP export SMALL_SCALE_V3.step\n(Fusion, 26 Sep 2026), on branch atlas-v5-design.\n\nFrom the CAD (measured on the imported solids, see brain/architecture/atlas-v3-small.md):\n  * nine fans. Six foil fans, three a side, ducts 106 mm OD with a 96 mm rotor disc, all pointing straight aft; the\n    jet runs through a rectangular nozzle and then along the curved lower wall (a Coanda foil) that ends 72.7 /\n    74.6 / 75.4 deg below horizontal (inner / middle / outer station). Three XFLY 80 mm EDFs in the nose: the two\n    side ones canted 30 deg inward, the centre one vertical.\n  * the V (anhedral about 37 deg) of the fan line, the booms, the two rear legs (hub on top of the nose to feet aft\n    and outboard), part volumes, centroids and inertia.\n\nAssumed, NOT in the CAD (change the constants below and rerun):\n  * masses: ATLAS_09B's structure (user, 26 Sep: \"the weights from the previous version, remove the two rear\n    motors and add one in the front\"): avionics 0.5 kg as a point mass at the flight controller; the foils 2.6 kg\n    (09B's four JET_FOIL parts) over V3's nozzles and curved foils, and 2.4 kg of other structure (0.2 of it the nose\n    carrier shell) over the tubes, clamps, hubs and ESCs in proportion to volume (tube 1.6, printed 1.0 g/cm3).\n    Later the same day (user): motors 0.3 kg each and six batteries of BATTERY_EACH_KG (4.6 kg in total). First two\n    triangles at the centre (CG 6.2 cm aft, the draft crashed); then (user) one pair near the nose and two pairs in\n    the centre: the nose pair side by side in the slide-in carrier, the centre pairs one above the boom plane and one\n    below (point masses with a brick's inertia; the BATTERY_* spacings are assumptions, the CAD has no batteries).\n  * jet angle: the jet is taken to leave along the foil's exit (full Coanda attachment), i.e. thrust 14.6-17.3 deg\n    forward of vertical. Real jets separate early, so the true turning is smaller; the design knobs change it.\n  * fan thrust 36 N quadratic, spool 0.12 s, km 0.002 all the same way (the ATLAS_09B figures).\n  * motor order: M1/M2 outer foil fans L/R, M3/M4 middle, M5/M6 inner, M7/M8 nose side fans L/R, M9 nose centre.\n  * a nose leg: the CAD has only the two rear legs; without a nose support the aircraft tips onto the nose\n    carrier. NOSE_LEG_* sets a provisional one that parks it at PARK_PITCH_DEG.\n\nFrames: the CAD is x right, y up, z aft (metres after import); FRD = (-z, x, -y), origin at the boom level\n(CAD y = 0.45) on the centreline.\n\nBuilt by scripts/atlas_v3_from_step.py. NO feasible hover pitch in 0-30 deg",
   "mesh": {},
   "cad": {
     "file": "airframes/cad/SMALL_SCALE_V3.step",

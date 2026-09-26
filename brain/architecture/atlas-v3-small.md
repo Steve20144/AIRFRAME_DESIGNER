@@ -14,14 +14,17 @@
 
 ## Assumed (constants at the top of the script)
 
-26 Sep, later (user): motors 0.3 kg each; six batteries near the centre in two triangles (one above the boom plane,
-one below, turned 60 deg; radius 0.07 m, layers +-0.06 m: layout assumed), 4.6 kg for all six (0.767 kg each; first
-misread as 4.6 kg each = 35.8 kg, which cannot lift off). Total 12.8 kg, thrust/weight 2.44, CG x -6.2 cm (8.6 cm
-aft of the nose-battery case; the foil fans carry nearly all the weight, nose fans at 8 %). SITL v3_stab_nolift:
-the draft geometry crashes at lift-off (3/3 seeds); the best configuration (17.5 / 25 / 25, trim 21.35 deg) flies
-3/3 but drifts 5-6 m, pitch error 0.6-0.7 deg, touchdown 0.7-0.8 m/s (the yaw-authority leak). To bring the CG back
-to +2.4 cm the battery cluster would have to sit about 24 cm further forward. The CG knobs move the battery point
-masses (knob `items`).
+26 Sep, later (user): motors 0.3 kg each; six batteries, 4.6 kg in total (0.767 kg each; first misread as 4.6 kg
+each = 35.8 kg, which cannot lift off). 12.8 kg, thrust/weight 2.44. Layouts (spacings assumed, the CAD has none):
+
+- All six at the centre (two triangles above/below the boom plane): CG x -6.2 cm; nose fans hover at 8 %. Best
+  configuration (17.5 / 25 / 25): drift 5.3-10.1 m at every hover pitch trim-1..+1 (median 6.8), touchdown 0.7-0.95.
+- **One pair in the nose carrier, two pairs at the centre (user, current)**: CG x -1.9 cm; nose fans 21 %, busiest
+  fan 62 %. Best configuration: 3/3 seeds at trim 18.9 deg drift 0.7-1.4 m, pitch error 0.04-0.12, touchdown 0.37;
+  over trim-1..+1 drift 0.8 / 6.8 / 0.8 / 3.3 / 2.3 m (median 2.3). Better at every pitch, but the yaw-authority
+  sensitivity is still there. The draft geometry crashes at lift-off in both layouts (busiest fan 88 %).
+
+The CG knobs move the battery point masses (knob `items`).
 
 Since 26 Sep the masses are ATLAS_09B's with nine fans (11.785 kg, see the sweep note); the 7.8 kg figures below and
 the first results are from the earlier guess.
