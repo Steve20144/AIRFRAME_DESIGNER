@@ -16,7 +16,8 @@ Kinds:
   cant     sideways lean, deg, as a magnitude; ``signs`` says which way each rotor leans (kept so 0 is reversible;
            0 = a rotor that stays upright, like a centre nose fan).
   shift_x  moves the listed CAD bodies (the battery) fore/aft by ``value`` metres, which moves the CG the way the
-  shift_z  real aircraft would; with no CAD bodies it shifts mass.cg itself from ``base_cg``.
+  shift_z  real aircraft would; ``items`` names mass items (batteries placed as point masses) moved the same way;
+           with neither it shifts mass.cg itself from ``base_cg``.
 
 ``design.cad_links`` ties CAD bodies to a rotor: {"M9": {"bodies": [...], "pos0": [...], "axis0": [...]}} where
 pos0 / axis0 are the rotor as the CAD draws it. On every resolve the linked bodies are turned by the rotation that
@@ -75,7 +76,19 @@ def set_value(af, name: str, value: float) -> None:
             r.cant_deg = value * (0.0 if s == 0 else (1.0 if s > 0 else -1.0))
     elif kind in SHIFT_AXES:
         k["value"] = value
-        if not (af.cad and k.get("bodies")):         # no CAD parts to move: shift the CG itself
+        ax = SHIFT_AXES[kind]
+        # mass items (batteries placed as point masses) move from the position they had when the knob first moved them
+        items = {i.name: i for i in af.mass.items}
+        bases = k.setdefault("item_base", {})
+        for name in k.get("items") or []:
+            it = items.get(name)
+            if it is None:
+                continue
+            base = bases.setdefault(name, list(it.pos))
+            pos = list(base)
+            pos[ax] = base[ax] + value
+            it.pos = [round(float(v), 5) for v in pos]
+        if not (af.cad and k.get("bodies")) and not k.get("items"):   # nothing to move: shift the CG itself
             base = k.setdefault("base_cg", list(af.mass.cg))
             cg = list(base)
             cg[SHIFT_AXES[kind]] = base[SHIFT_AXES[kind]] + value
@@ -173,11 +186,14 @@ def unlink(af, bodies: list[str]) -> None:
         del links[name]
 
 
-def set_ballast(af, bodies: list[str]) -> None:
-    """The CAD bodies the CG knobs move (normally the battery packs)."""
+def set_ballast(af, bodies: list[str], items: list[str] | None = None) -> None:
+    """The CAD bodies (and mass items, by name) the CG knobs move: normally the battery packs."""
     for k in knobs(af):
         if k.get("kind") in SHIFT_AXES:
             k["bodies"] = list(bodies)
+            if items is not None:
+                k["items"] = list(items)
+                k.pop("item_base", None)
 
 
 # ------------------------------------------------------------------ defaults
@@ -216,9 +232,10 @@ def setup_defaults(af, link_front_parts: bool = True) -> list[dict]:
         ks.append({"name": "front_tilt_deg", "label": "Front jets fore/aft tilt", "kind": "tilt",
                    "rotors": [r.name for r in front], "range": [-20.0, 20.0]})
     battery = [b.id for b in (af.cad.active() if af.cad else []) if "BATT" in b.name.upper() and b.mass > 0]
+    battery_items = [i.name for i in af.mass.items if "BATT" in i.name.upper()]
     for name, kind, label in (("cg_dx", "shift_x", "Battery fore/aft (moves CG), m"),
                               ("cg_dz", "shift_z", "Battery down/up (moves CG), m")):
-        ks.append({"name": name, "label": label, "kind": kind, "bodies": battery, "value": 0.0,
+        ks.append({"name": name, "label": label, "kind": kind, "bodies": battery, "items": battery_items, "value": 0.0,
                    "range": [-0.08, 0.08] if kind == "shift_x" else [-0.04, 0.04]})
     if af.design is None:
         af.design = {}

@@ -11,12 +11,13 @@ From the CAD (measured on the imported solids, see brain/architecture/atlas-v3-s
     and outboard), part volumes, centroids and inertia.
 
 Assumed, NOT in the CAD (change the constants below and rerun):
-  * masses (user, 2026-09-26: "the weights from the previous version, remove the two rear motors and add one in
-    the front"): ATLAS_09B's breakdown with nine fans instead of ten, 11.785 kg. Fans 0.34 kg each; battery 3.225 kg
-    in the slide-in carrier (the only battery-sized part, in the nose); avionics 0.5 kg as a point mass at the
-    flight controller; the foils 2.6 kg (09B's four JET_FOIL parts) over V3's nozzles and curved foils, and 2.4 kg of
-    other structure over the tubes, clamps, hubs, ESCs and carrier shell, both split in proportion to volume
-    (tube 1.6, printed 1.0 g/cm3).
+  * masses: ATLAS_09B's structure (user, 26 Sep: "the weights from the previous version, remove the two rear
+    motors and add one in the front"): avionics 0.5 kg as a point mass at the flight controller; the foils 2.6 kg
+    (09B's four JET_FOIL parts) over V3's nozzles and curved foils, and 2.4 kg of other structure (0.2 of it the nose
+    carrier shell) over the tubes, clamps, hubs and ESCs in proportion to volume (tube 1.6, printed 1.0 g/cm3).
+    Later the same day (user): motors 0.3 kg each, and six batteries of BATTERY_EACH_KG near the centre in two
+    triangles, one above the boom plane and one below (point masses with a brick's inertia; the layout constants
+    BATTERY_* below are assumptions, the CAD has no batteries).
   * jet angle: the jet is taken to leave along the foil's exit (full Coanda attachment), i.e. thrust 14.6-17.3 deg
     forward of vertical. Real jets separate early, so the true turning is smaller; the design knobs change it.
   * fan thrust 36 N quadratic, spool 0.12 s, km 0.002 all the same way (the ATLAS_09B figures).
@@ -51,8 +52,12 @@ BASE = ROOT / "airframes" / "atlas_09b.json"        # PX4 gains, fan model, vibr
 
 # ATLAS_09B's masses (airframes/atlas_09b.json CAD bodies): 10 fans 3.4, battery 3.225, avionics 0.5, foils 2.6,
 # other structure 2.4 = 12.125 kg; V3 has nine fans
-BATTERY_KG = 3.225
-FAN_KG = 0.34
+BATTERY_EACH_KG = 4.6          # user, 26 Sep: "each one of them weighs 4.6kgs"
+BATTERY_CENTRE = [0.0, 0.0, 0.0]   # FRD: on the centreline at boom level, between the nose and foil fans
+BATTERY_TRI_RADIUS = 0.07      # m, centre of each triangle to each battery
+BATTERY_LAYER = 0.06           # m, each triangle's plane above (-z) / below (+z) the centre
+BATTERY_BRICK = (0.16, 0.08, 0.06)   # m, a pack's size for its own inertia
+FAN_KG = 0.30                  # user, 26 Sep: "each motor weighs 300grams"
 AVIONICS_KG = 0.5
 FOIL_KG = 2.6
 OTHER_STRUCTURE_KG = 2.4
@@ -90,7 +95,7 @@ def body_mass(k: int, b: dict) -> float:
     if k in ESC_SMALL:
         return 0.02
     if k == CARRIER:
-        return BATTERY_KG
+        return 0.2                          # the carrier shell; the batteries are point masses at the centre
     if "carbon_tube" in name:
         return vol * TUBE_DENSITY
     if vol < 5e-6 and "XFLY" in name:
@@ -115,7 +120,7 @@ def main() -> None:
     fixed = set(FOIL_DUCTS.values()) | set(NOSE_FANS.values()) | {CARRIER}
     foil = [i for i in raw if kidx(i) in FOIL_BODIES]
     other = [i for i in raw if kidx(i) not in FOIL_BODIES and kidx(i) not in fixed]
-    for group, total in ((foil, FOIL_KG), (other, OTHER_STRUCTURE_KG)):
+    for group, total in ((foil, FOIL_KG), (other, OTHER_STRUCTURE_KG - 0.2)):
         s = sum(raw[i] for i in group)
         for i in group:
             raw[i] = raw[i] * total / s
@@ -123,6 +128,15 @@ def main() -> None:
         b.mass = round(raw[b.id], 5)
     from airframe_designer.geometry.mass import MassItem
     af.mass.items = [MassItem(name="avionics (ATLAS_09B)", mass=AVIONICS_KG, pos=[round(float(v), 4) for v in frd(PIXHAWK_CAD)])]
+    a, b, c = BATTERY_BRICK
+    own = [BATTERY_EACH_KG * (b * b + c * c) / 12, BATTERY_EACH_KG * (a * a + c * c) / 12, BATTERY_EACH_KG * (a * a + b * b) / 12]
+    for layer, dz, start in (("upper", -BATTERY_LAYER, 0.0), ("lower", BATTERY_LAYER, 60.0)):   # the lower one turned 60 deg
+        for j in range(3):
+            ang = math.radians(start + 120.0 * j)
+            pos = [BATTERY_CENTRE[0] + BATTERY_TRI_RADIUS * math.cos(ang), BATTERY_CENTRE[1] + BATTERY_TRI_RADIUS * math.sin(ang),
+                   BATTERY_CENTRE[2] + dz]
+            af.mass.items.append(MassItem(name=f"battery {layer} {j + 1}", mass=BATTERY_EACH_KG,
+                                          pos=[round(v, 4) + 0.0 for v in pos], inertia=[round(v, 6) for v in own]))
     af.mass.from_items = True
     af.mass.manual = None
 
@@ -197,7 +211,7 @@ def main() -> None:
 
     af.px4_overrides["MPC_THR_HOVER"] = af.hover_thrust_fraction()   # mid stick hovers (0.26 measured on the 7.8 kg draft)
     knobs.setup_defaults(af)
-    knobs.set_ballast(af, [b.id for b in af.cad.bodies if b.id.startswith(f"{CARRIER}:")])
+    knobs.set_ballast(af, [], [i.name for i in af.mass.items if i.name.startswith("battery")])
     af.resolve_mass()
     af.notes = (__doc__ or "").strip() + (f"\n\nBuilt by scripts/atlas_v3_from_step.py. Feasible hover pitch window "
                                           f"{feasible[0][0]:g}-{feasible[-1][0]:g} deg" if feasible else

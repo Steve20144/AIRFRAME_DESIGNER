@@ -2,21 +2,21 @@
   "schema": 2,
   "name": "ATLAS_V3_SMALL",
   "mass": {
-    "mass": 11.78504,
+    "mass": 35.79999,
     "cg": [
-      0.02375,
-      1e-05,
-      0.09326
+      -0.02215,
+      0.0,
+      0.02656
     ],
     "inertia": [
-      0.77334,
-      1.208369,
-      1.728017
+      0.967088,
+      1.056476,
+      1.432878
     ],
     "inertia_products": [
-      4.9e-05,
-      -0.246204,
-      -4e-06
+      3.9e-05,
+      -0.221849,
+      5e-06
     ],
     "items": [
       {
@@ -31,6 +31,120 @@
           0.0,
           0.0,
           0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "battery upper 1",
+        "mass": 4.6,
+        "pos": [
+          0.07,
+          0.0,
+          -0.06
+        ],
+        "inertia": [
+          0.003833,
+          0.011193,
+          0.012267
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "battery upper 2",
+        "mass": 4.6,
+        "pos": [
+          -0.035,
+          0.0606,
+          -0.06
+        ],
+        "inertia": [
+          0.003833,
+          0.011193,
+          0.012267
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "battery upper 3",
+        "mass": 4.6,
+        "pos": [
+          -0.035,
+          -0.0606,
+          -0.06
+        ],
+        "inertia": [
+          0.003833,
+          0.011193,
+          0.012267
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "battery lower 1",
+        "mass": 4.6,
+        "pos": [
+          0.035,
+          0.0606,
+          0.06
+        ],
+        "inertia": [
+          0.003833,
+          0.011193,
+          0.012267
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "battery lower 2",
+        "mass": 4.6,
+        "pos": [
+          -0.07,
+          0.0,
+          0.06
+        ],
+        "inertia": [
+          0.003833,
+          0.011193,
+          0.012267
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "battery lower 3",
+        "mass": 4.6,
+        "pos": [
+          0.035,
+          -0.0606,
+          0.06
+        ],
+        "inertia": [
+          0.003833,
+          0.011193,
+          0.012267
         ],
         "inertia_products": [
           0.0,
@@ -374,12 +488,12 @@
       "enabled": true
     }
   ],
-  "hover_pitch_deg": 11.7,
+  "hover_pitch_deg": 13.15,
   "landed_pitch_deg": 4.0,
   "px4_overrides": {
     "MIS_TAKEOFF_ALT": 1,
     "MPC_TKO_RAMP_T": 0.20000000298023224,
-    "MPC_THR_HOVER": 0.393,
+    "MPC_THR_HOVER": 1.195,
     "MC_AIRMODE": 1,
     "MPC_MAN_Y_MAX": 60,
     "MC_YAWRATE_I": 0.02,
@@ -421,7 +535,7 @@
         7,
         8
       ],
-      "target_pitch_deg": 11.7,
+      "target_pitch_deg": 13.15,
       "rate_deg_s": 3,
       "assist_cmd": 0.0,
       "rc_channel": 7,
@@ -534,8 +648,14 @@
         "name": "cg_dx",
         "label": "Battery fore/aft (moves CG), m",
         "kind": "shift_x",
-        "bodies": [
-          "31:Solid_slide_in_carrier"
+        "bodies": [],
+        "items": [
+          "battery upper 1",
+          "battery upper 2",
+          "battery upper 3",
+          "battery lower 1",
+          "battery lower 2",
+          "battery lower 3"
         ],
         "value": 0.0,
         "range": [
@@ -547,8 +667,14 @@
         "name": "cg_dz",
         "label": "Battery down/up (moves CG), m",
         "kind": "shift_z",
-        "bodies": [
-          "31:Solid_slide_in_carrier"
+        "bodies": [],
+        "items": [
+          "battery upper 1",
+          "battery upper 2",
+          "battery upper 3",
+          "battery lower 1",
+          "battery lower 2",
+          "battery lower 3"
         ],
         "value": 0.0,
         "range": [
@@ -605,7 +731,7 @@
       }
     }
   },
-  "notes": "Build airframes/atlas_v3_small.json: the small-scale ATLAS V3 from the STEP export SMALL_SCALE_V3.step\n(Fusion, 26 Sep 2026), on branch atlas-v5-design.\n\nFrom the CAD (measured on the imported solids, see brain/architecture/atlas-v3-small.md):\n  * nine fans. Six foil fans, three a side, ducts 106 mm OD with a 96 mm rotor disc, all pointing straight aft; the\n    jet runs through a rectangular nozzle and then along the curved lower wall (a Coanda foil) that ends 72.7 /\n    74.6 / 75.4 deg below horizontal (inner / middle / outer station). Three XFLY 80 mm EDFs in the nose: the two\n    side ones canted 30 deg inward, the centre one vertical.\n  * the V (anhedral about 37 deg) of the fan line, the booms, the two rear legs (hub on top of the nose to feet aft\n    and outboard), part volumes, centroids and inertia.\n\nAssumed, NOT in the CAD (change the constants below and rerun):\n  * masses (user, 2026-09-26: \"the weights from the previous version, remove the two rear motors and add one in\n    the front\"): ATLAS_09B's breakdown with nine fans instead of ten, 11.785 kg. Fans 0.34 kg each; battery 3.225 kg\n    in the slide-in carrier (the only battery-sized part, in the nose); avionics 0.5 kg as a point mass at the\n    flight controller; the foils 2.6 kg (09B's four JET_FOIL parts) over V3's nozzles and curved foils, and 2.4 kg of\n    other structure over the tubes, clamps, hubs, ESCs and carrier shell, both split in proportion to volume\n    (tube 1.6, printed 1.0 g/cm3).\n  * jet angle: the jet is taken to leave along the foil's exit (full Coanda attachment), i.e. thrust 14.6-17.3 deg\n    forward of vertical. Real jets separate early, so the true turning is smaller; the design knobs change it.\n  * fan thrust 36 N quadratic, spool 0.12 s, km 0.002 all the same way (the ATLAS_09B figures).\n  * motor order: M1/M2 outer foil fans L/R, M3/M4 middle, M5/M6 inner, M7/M8 nose side fans L/R, M9 nose centre.\n  * a nose leg: the CAD has only the two rear legs; without a nose support the aircraft tips onto the nose\n    carrier. NOSE_LEG_* sets a provisional one that parks it at PARK_PITCH_DEG.\n\nFrames: the CAD is x right, y up, z aft (metres after import); FRD = (-z, x, -y), origin at the boom level\n(CAD y = 0.45) on the centreline.\n\nBuilt by scripts/atlas_v3_from_step.py. Feasible hover pitch window 11.5-11.5 deg",
+  "notes": "Build airframes/atlas_v3_small.json: the small-scale ATLAS V3 from the STEP export SMALL_SCALE_V3.step\n(Fusion, 26 Sep 2026), on branch atlas-v5-design.\n\nFrom the CAD (measured on the imported solids, see brain/architecture/atlas-v3-small.md):\n  * nine fans. Six foil fans, three a side, ducts 106 mm OD with a 96 mm rotor disc, all pointing straight aft; the\n    jet runs through a rectangular nozzle and then along the curved lower wall (a Coanda foil) that ends 72.7 /\n    74.6 / 75.4 deg below horizontal (inner / middle / outer station). Three XFLY 80 mm EDFs in the nose: the two\n    side ones canted 30 deg inward, the centre one vertical.\n  * the V (anhedral about 37 deg) of the fan line, the booms, the two rear legs (hub on top of the nose to feet aft\n    and outboard), part volumes, centroids and inertia.\n\nAssumed, NOT in the CAD (change the constants below and rerun):\n  * masses: ATLAS_09B's structure (user, 26 Sep: \"the weights from the previous version, remove the two rear\n    motors and add one in the front\"): avionics 0.5 kg as a point mass at the flight controller; the foils 2.6 kg\n    (09B's four JET_FOIL parts) over V3's nozzles and curved foils, and 2.4 kg of other structure (0.2 of it the nose\n    carrier shell) over the tubes, clamps, hubs and ESCs in proportion to volume (tube 1.6, printed 1.0 g/cm3).\n    Later the same day (user): motors 0.3 kg each, and six batteries of BATTERY_EACH_KG near the centre in two\n    triangles, one above the boom plane and one below (point masses with a brick's inertia; the layout constants\n    BATTERY_* below are assumptions, the CAD has no batteries).\n  * jet angle: the jet is taken to leave along the foil's exit (full Coanda attachment), i.e. thrust 14.6-17.3 deg\n    forward of vertical. Real jets separate early, so the true turning is smaller; the design knobs change it.\n  * fan thrust 36 N quadratic, spool 0.12 s, km 0.002 all the same way (the ATLAS_09B figures).\n  * motor order: M1/M2 outer foil fans L/R, M3/M4 middle, M5/M6 inner, M7/M8 nose side fans L/R, M9 nose centre.\n  * a nose leg: the CAD has only the two rear legs; without a nose support the aircraft tips onto the nose\n    carrier. NOSE_LEG_* sets a provisional one that parks it at PARK_PITCH_DEG.\n\nFrames: the CAD is x right, y up, z aft (metres after import); FRD = (-z, x, -y), origin at the boom level\n(CAD y = 0.45) on the centreline.\n\nBuilt by scripts/atlas_v3_from_step.py. NO feasible hover pitch in 0-30 deg",
   "mesh": {},
   "cad": {
     "file": "airframes/cad/SMALL_SCALE_V3.step",
@@ -625,7 +751,7 @@
       {
         "id": "0:16x1000mm_carbon_tube",
         "name": "16x1000mm_carbon_tube",
-        "mass": 0.11291,
+        "mass": 0.1035,
         "offset": [
           0.0,
           0.0,
@@ -681,7 +807,7 @@
       {
         "id": "1:16x1000mm_carbon_tube (2)",
         "name": "16x1000mm_carbon_tube (2)",
-        "mass": 0.11291,
+        "mass": 0.1035,
         "offset": [
           0.0,
           0.0,
@@ -737,7 +863,7 @@
       {
         "id": "2:16x500mm_carbon_tube",
         "name": "16x500mm_carbon_tube",
-        "mass": 0.05645,
+        "mass": 0.05175,
         "offset": [
           0.0,
           0.0,
@@ -793,7 +919,7 @@
       {
         "id": "3:XFLY 80mm EDF",
         "name": "XFLY 80mm EDF",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -1129,7 +1255,7 @@
       {
         "id": "9:COMPOUND (5)",
         "name": "COMPOUND (5)",
-        "mass": 0.01439,
+        "mass": 0.01319,
         "offset": [
           0.0,
           0.0,
@@ -1353,7 +1479,7 @@
       {
         "id": "13:COMPOUND (9)",
         "name": "COMPOUND (9)",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -1409,7 +1535,7 @@
       {
         "id": "14:COMPOUND (10)",
         "name": "COMPOUND (10)",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -1465,7 +1591,7 @@
       {
         "id": "15:COMPOUND (11)",
         "name": "COMPOUND (11)",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -1521,7 +1647,7 @@
       {
         "id": "16:16x250mm_carbon_tube",
         "name": "16x250mm_carbon_tube",
-        "mass": 0.02823,
+        "mass": 0.02587,
         "offset": [
           0.0,
           0.0,
@@ -1577,7 +1703,7 @@
       {
         "id": "17:Open CASCADE STEP translator 7.9 2.1",
         "name": "Open CASCADE STEP translator 7.9 2.1",
-        "mass": 0.10886,
+        "mass": 0.09979,
         "offset": [
           0.0,
           0.0,
@@ -1633,7 +1759,7 @@
       {
         "id": "18:Open CASCADE STEP translator 7.9 2.2",
         "name": "Open CASCADE STEP translator 7.9 2.2",
-        "mass": 0.1053,
+        "mass": 0.09652,
         "offset": [
           0.0,
           0.0,
@@ -1689,7 +1815,7 @@
       {
         "id": "19:Open CASCADE STEP translator 7.9 2.3",
         "name": "Open CASCADE STEP translator 7.9 2.3",
-        "mass": 0.12371,
+        "mass": 0.1134,
         "offset": [
           0.0,
           0.0,
@@ -1745,7 +1871,7 @@
       {
         "id": "20:Open CASCADE STEP translator 7.9 2.4",
         "name": "Open CASCADE STEP translator 7.9 2.4",
-        "mass": 0.12014,
+        "mass": 0.11013,
         "offset": [
           0.0,
           0.0,
@@ -1801,7 +1927,7 @@
       {
         "id": "21:Open CASCADE STEP translator 7.9 2.5",
         "name": "Open CASCADE STEP translator 7.9 2.5",
-        "mass": 0.09309,
+        "mass": 0.08533,
         "offset": [
           0.0,
           0.0,
@@ -1857,7 +1983,7 @@
       {
         "id": "22:Open CASCADE STEP translator 7.9 2.6",
         "name": "Open CASCADE STEP translator 7.9 2.6",
-        "mass": 0.09002,
+        "mass": 0.08252,
         "offset": [
           0.0,
           0.0,
@@ -1913,7 +2039,7 @@
       {
         "id": "23:Open CASCADE STEP translator 7.9 2.7",
         "name": "Open CASCADE STEP translator 7.9 2.7",
-        "mass": 0.09309,
+        "mass": 0.08533,
         "offset": [
           0.0,
           0.0,
@@ -1969,7 +2095,7 @@
       {
         "id": "24:Open CASCADE STEP translator 7.9 2.8",
         "name": "Open CASCADE STEP translator 7.9 2.8",
-        "mass": 0.09002,
+        "mass": 0.08252,
         "offset": [
           0.0,
           0.0,
@@ -2025,7 +2151,7 @@
       {
         "id": "25:Open CASCADE STEP translator 7.9 2.9",
         "name": "Open CASCADE STEP translator 7.9 2.9",
-        "mass": 0.12371,
+        "mass": 0.1134,
         "offset": [
           0.0,
           0.0,
@@ -2081,7 +2207,7 @@
       {
         "id": "26:Open CASCADE STEP translator 7.9 2.10",
         "name": "Open CASCADE STEP translator 7.9 2.10",
-        "mass": 0.12014,
+        "mass": 0.11013,
         "offset": [
           0.0,
           0.0,
@@ -2137,7 +2263,7 @@
       {
         "id": "27:Open CASCADE STEP translator 7.9 2.11",
         "name": "Open CASCADE STEP translator 7.9 2.11",
-        "mass": 0.0744,
+        "mass": 0.0682,
         "offset": [
           0.0,
           0.0,
@@ -2193,7 +2319,7 @@
       {
         "id": "28:Open CASCADE STEP translator 7.9 2.12",
         "name": "Open CASCADE STEP translator 7.9 2.12",
-        "mass": 0.07236,
+        "mass": 0.06633,
         "offset": [
           0.0,
           0.0,
@@ -2249,7 +2375,7 @@
       {
         "id": "29:Open CASCADE STEP translator 7.9 2.13",
         "name": "Open CASCADE STEP translator 7.9 2.13",
-        "mass": 0.0744,
+        "mass": 0.0682,
         "offset": [
           0.0,
           0.0,
@@ -2305,7 +2431,7 @@
       {
         "id": "30:Open CASCADE STEP translator 7.9 2.14",
         "name": "Open CASCADE STEP translator 7.9 2.14",
-        "mass": 0.07236,
+        "mass": 0.06633,
         "offset": [
           0.0,
           0.0,
@@ -2361,7 +2487,7 @@
       {
         "id": "31:Solid_slide_in_carrier",
         "name": "Solid_slide_in_carrier",
-        "mass": 3.225,
+        "mass": 0.2,
         "offset": [
           0.0,
           0.0,
@@ -2417,7 +2543,7 @@
       {
         "id": "32:Open CASCADE STEP translator 7.9 2.1 (2)",
         "name": "Open CASCADE STEP translator 7.9 2.1 (2)",
-        "mass": 0.00719,
+        "mass": 0.00659,
         "offset": [
           0.0,
           0.0,
@@ -2473,7 +2599,7 @@
       {
         "id": "33:Open CASCADE STEP translator 7.9 2.1 (3)",
         "name": "Open CASCADE STEP translator 7.9 2.1 (3)",
-        "mass": 0.00719,
+        "mass": 0.00659,
         "offset": [
           0.0,
           0.0,
@@ -2529,7 +2655,7 @@
       {
         "id": "34:Open CASCADE STEP translator 7.9 2.1 (4)",
         "name": "Open CASCADE STEP translator 7.9 2.1 (4)",
-        "mass": 0.00719,
+        "mass": 0.00659,
         "offset": [
           0.0,
           0.0,
@@ -2585,7 +2711,7 @@
       {
         "id": "35:Open CASCADE STEP translator 7.9 2.1 (5)",
         "name": "Open CASCADE STEP translator 7.9 2.1 (5)",
-        "mass": 0.00719,
+        "mass": 0.00659,
         "offset": [
           0.0,
           0.0,
@@ -2641,7 +2767,7 @@
       {
         "id": "36:ESC",
         "name": "ESC",
-        "mass": 0.07487,
+        "mass": 0.06863,
         "offset": [
           0.0,
           0.0,
@@ -2697,7 +2823,7 @@
       {
         "id": "37:ESC (2)",
         "name": "ESC (2)",
-        "mass": 0.02995,
+        "mass": 0.02745,
         "offset": [
           0.0,
           0.0,
@@ -2753,7 +2879,7 @@
       {
         "id": "38:Clamp_cap_1",
         "name": "Clamp_cap_1",
-        "mass": 0.01148,
+        "mass": 0.01052,
         "offset": [
           0.0,
           0.0,
@@ -2809,7 +2935,7 @@
       {
         "id": "39:Clamp_cap_3",
         "name": "Clamp_cap_3",
-        "mass": 0.01124,
+        "mass": 0.0103,
         "offset": [
           0.0,
           0.0,
@@ -2865,7 +2991,7 @@
       {
         "id": "40:16x1000mm_carbon_tube(Mirror)",
         "name": "16x1000mm_carbon_tube(Mirror)",
-        "mass": 0.11291,
+        "mass": 0.1035,
         "offset": [
           0.0,
           0.0,
@@ -2921,7 +3047,7 @@
       {
         "id": "41:16x1000mm_carbon_tube(Mirror) (2)",
         "name": "16x1000mm_carbon_tube(Mirror) (2)",
-        "mass": 0.11291,
+        "mass": 0.1035,
         "offset": [
           0.0,
           0.0,
@@ -2977,7 +3103,7 @@
       {
         "id": "42:16x500mm_carbon_tube(Mirror)",
         "name": "16x500mm_carbon_tube(Mirror)",
-        "mass": 0.05645,
+        "mass": 0.05175,
         "offset": [
           0.0,
           0.0,
@@ -3033,7 +3159,7 @@
       {
         "id": "43:XFLY 80mm EDF(Mirror)",
         "name": "XFLY 80mm EDF(Mirror)",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -3369,7 +3495,7 @@
       {
         "id": "49:COMPOUND (16)",
         "name": "COMPOUND (16)",
-        "mass": 0.01439,
+        "mass": 0.01319,
         "offset": [
           0.0,
           0.0,
@@ -3593,7 +3719,7 @@
       {
         "id": "53:COMPOUND (20)",
         "name": "COMPOUND (20)",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -3649,7 +3775,7 @@
       {
         "id": "54:COMPOUND (21)",
         "name": "COMPOUND (21)",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -3705,7 +3831,7 @@
       {
         "id": "55:COMPOUND (22)",
         "name": "COMPOUND (22)",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -3761,7 +3887,7 @@
       {
         "id": "56:JET-FOIL_PHASE-0_WING(Mirror)",
         "name": "JET-FOIL_PHASE-0_WING(Mirror)",
-        "mass": 0.07487,
+        "mass": 0.06863,
         "offset": [
           0.0,
           0.0,
@@ -3817,7 +3943,7 @@
       {
         "id": "57:JET-FOIL_PHASE-0_WING(Mirror) (2)",
         "name": "JET-FOIL_PHASE-0_WING(Mirror) (2)",
-        "mass": 0.02995,
+        "mass": 0.02745,
         "offset": [
           0.0,
           0.0,
@@ -3873,7 +3999,7 @@
       {
         "id": "58:Clamp_cap_1(Mirror)",
         "name": "Clamp_cap_1(Mirror)",
-        "mass": 0.01148,
+        "mass": 0.01052,
         "offset": [
           0.0,
           0.0,
@@ -3929,7 +4055,7 @@
       {
         "id": "59:Clamp_cap_3(Mirror)",
         "name": "Clamp_cap_3(Mirror)",
-        "mass": 0.01124,
+        "mass": 0.0103,
         "offset": [
           0.0,
           0.0,
@@ -3985,7 +4111,7 @@
       {
         "id": "60:ESC (3)",
         "name": "ESC (3)",
-        "mass": 0.07487,
+        "mass": 0.06863,
         "offset": [
           0.0,
           0.0,
@@ -4041,7 +4167,7 @@
       {
         "id": "61:ESC (4)",
         "name": "ESC (4)",
-        "mass": 0.02995,
+        "mass": 0.02745,
         "offset": [
           0.0,
           0.0,
@@ -4097,7 +4223,7 @@
       {
         "id": "62:XFLY 80mm EDF (3)",
         "name": "XFLY 80mm EDF (3)",
-        "mass": 0.34,
+        "mass": 0.3,
         "offset": [
           0.0,
           0.0,
@@ -4209,7 +4335,7 @@
       {
         "id": "64:16x250mm_carbon_tube (2)",
         "name": "16x250mm_carbon_tube (2)",
-        "mass": 0.02823,
+        "mass": 0.02587,
         "offset": [
           0.0,
           0.0,

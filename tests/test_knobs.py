@@ -90,15 +90,24 @@ def test_v3_front_tilt_keeps_the_centre_nose_fan_upright():
 
 
 def test_trim_pitch_follows_the_jetfoil_angles():
-    af = Airframe.load(ROOT / "airframes" / "atlas_v3_small.json")
+    af = Airframe.load(ROOT / "airframes" / "atlas_v3_small_best.json")     # 11.785 kg, 17.5 / 25 / 25, nose 30
     p0 = af.trim_hover_pitch()
-    assert 11.0 <= p0 <= 12.5                      # the draft with ATLAS_09B's masses
-    best = apply_variables(af, {"knobs.foil_1_deg": 10, "knobs.foil_2_deg": 25, "knobs.foil_3_deg": 10, "knobs.front_cant_deg": 0})
-    best.hover_pitch_deg = best.trim_hover_pitch()
-    hc = best.hover_check()
-    assert hc["ok"] and max(hc["hover_utilisation"]) < 0.6
-    b = apply_variables(af, {"knobs.foil_1_deg": 10, "knobs.foil_2_deg": 20, "knobs.foil_3_deg": 30})
-    assert b.trim_hover_pitch() > p0 + 1          # more forward lean on average: hovers more nose-up
+    assert 15.5 <= p0 <= 17.0
+    af.hover_pitch_deg = p0
+    hc = af.hover_check()
+    assert hc["ok"] and max(hc["hover_utilisation"]) < 0.65
+    b = apply_variables(af, {"knobs.foil_1_deg": 10, "knobs.foil_2_deg": 10, "knobs.foil_3_deg": 10})
+    assert b.trim_hover_pitch() < p0 - 3            # less forward lean: hovers less nose-up
+
+
+def test_battery_knob_moves_battery_point_masses():
+    af = Airframe.load(ROOT / "airframes" / "atlas_v3_small.json")
+    k = knobs.find(af, "cg_dx")
+    assert len(k["items"]) == 6
+    b = apply_variables(af, {"knobs.cg_dx": 0.05})
+    batt = sum(i.mass for i in af.mass.items if i.name.startswith("battery"))
+    assert b.mass.cg[0] - af.mass.cg[0] == pytest.approx(0.05 * batt / af.mass.mass, abs=2e-5)
+    assert apply_variables(b, {"knobs.cg_dx": 0.0}).mass.cg == af.mass.cg
 
 
 def test_trim_matches_the_flown_atlas_09b():

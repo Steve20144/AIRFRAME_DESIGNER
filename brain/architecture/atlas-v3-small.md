@@ -14,6 +14,12 @@
 
 ## Assumed (constants at the top of the script)
 
+26 Sep, later (user): motors 0.3 kg each; six batteries near the centre in two triangles (one above the boom plane,
+one below, turned 60 deg; radius 0.07 m, layers +-0.06 m: layout assumed), BATTERY_EACH_KG = 4.6 as stated. That is
+35.8 kg against 306 N of total fan thrust (thrust/weight 0.87): it cannot lift off. At 0.46 kg each: 10.96 kg,
+thrust/weight 2.85, but the busiest fan needs 86 % at trim on the draft geometry (CG moved 4.6 cm aft of the
+nose-battery case). The CG knobs now move the battery point masses (knob `items`).
+
 Since 26 Sep the masses are ATLAS_09B's with nine fans (11.785 kg, see the sweep note); the 7.8 kg figures below and
 the first results are from the earlier guess.
 

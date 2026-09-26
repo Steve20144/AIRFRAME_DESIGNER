@@ -316,7 +316,7 @@ function renderKnobs() {
     const isShift = (k) => String(k.kind).startsWith('shift');
     el.innerHTML = `<table class="grid knobs"><thead><tr><th>Knob</th><th title="tilt: thrust angle from vertical, deg (a foil fan's jet angle); cant: sideways lean, deg; battery: metres from the CAD position">Value</th><th title="range a sweep covers by default">Sweep range</th><th>Moves</th><th></th></tr></thead><tbody>${ks.map((k, i) => {
       const v = knobValue(k), step = isShift(k) ? 0.005 : 1, d = isShift(k) ? 3 : 1;
-      const nb = (k.bodies || []).length;
+      const nb = (k.bodies || []).length + (k.items || []).length;
       const moves = isShift(k) ? (nb ? `${nb} battery part${nb === 1 ? '' : 's'}` : 'the CG directly (no battery parts)') : (k.rotors || []).join(' ');
       const rg = k.range || [0, 0];
       return `<tr data-k="${i}"><td title="${esc(k.name)}">${esc(k.label || k.name)}</td>
