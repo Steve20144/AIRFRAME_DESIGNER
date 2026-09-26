@@ -24,6 +24,8 @@ current task needs.
   per-run records, log download over the radio, PX4 stream quirks.
 - [Design knobs](architecture/design-knobs.md): jetfoil angles, front jets, battery/CG as named values that move
   rotors and linked CAD parts; Geometry tab card, `knobs.*` paths for sweeps (branch atlas-v5-design).
+- [ATLAS V3 small draft](architecture/atlas-v3-small.md): SMALL_SCALE_V3.step as an airframe; what is CAD, what is
+  assumed; flies Stabilized at 10.5 deg in SITL but the heading turns 52 deg in 12 s.
 - [Fan vibration model](architecture/vibration-model.md): `design.vibration` (imbalance, blade pass, mount, frame
   modes) at the IMU, PX4's vibration metrics, the `vibration` bench command, first numbers.
 

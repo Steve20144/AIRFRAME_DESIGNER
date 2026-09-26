@@ -13,7 +13,8 @@ Kinds:
   tilt     forward lean of the thrust axis from vertical, deg; the value IS the rotors' tilt (read back from them),
            so editing a rotor by hand and turning the knob never disagree. For a foil fan this is the jet angle the
            foil gives (90 minus the foil's deflection).
-  cant     sideways lean, deg, as a magnitude; ``signs`` says which way each rotor leans (kept so 0 is reversible).
+  cant     sideways lean, deg, as a magnitude; ``signs`` says which way each rotor leans (kept so 0 is reversible;
+           0 = a rotor that stays upright, like a centre nose fan).
   shift_x  moves the listed CAD bodies (the battery) fore/aft by ``value`` metres, which moves the CG the way the
   shift_z  real aircraft would; with no CAD bodies it shifts mass.cg itself from ``base_cg``.
 
@@ -71,7 +72,7 @@ def set_value(af, name: str, value: float) -> None:
         signs = list(k.get("signs") or [])
         signs += [1.0] * (len(rs) - len(signs))
         for r, s in zip(rs, signs):
-            r.cant_deg = value * (1.0 if s >= 0 else -1.0)
+            r.cant_deg = value * (0.0 if s == 0 else (1.0 if s > 0 else -1.0))
     elif kind in SHIFT_AXES:
         k["value"] = value
         if not (af.cad and k.get("bodies")):         # no CAD parts to move: shift the CG itself
@@ -209,7 +210,7 @@ def setup_defaults(af, link_front_parts: bool = True) -> list[dict]:
         ks.append({"name": f"foil_{i}_deg", "label": f"Jetfoil {i}{' (' + where + ')' if where else ''} jet angle",
                    "kind": "tilt", "rotors": [r.name for r in pair], "range": [15.0, 55.0]})
     if front:
-        signs = [1.0 if r.cant_deg >= 0 else -1.0 for r in front]
+        signs = [0.0 if abs(r.cant_deg) < 1.0 else (1.0 if r.cant_deg > 0 else -1.0) for r in front]   # 0: stays upright
         ks.append({"name": "front_cant_deg", "label": "Front jets sideways tilt", "kind": "cant",
                    "rotors": [r.name for r in front], "signs": signs, "range": [0.0, 40.0]})
         ks.append({"name": "front_tilt_deg", "label": "Front jets fore/aft tilt", "kind": "tilt",

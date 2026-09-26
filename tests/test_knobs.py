@@ -79,3 +79,11 @@ def test_sweep_form_takes_knob_paths_and_px4_names():
                                        {"param": "MC_ROLL_P", "min": 3, "max": 6, "levels": 2}], name="n")
     assert [v["path"] for v in spec["variables"]] == ["knobs.front_cant_deg", "px4.MC_ROLL_P"]
     assert spec["name"] == "n" and spec["algorithm"]["budget"] == 8
+
+
+def test_v3_front_tilt_keeps_the_centre_nose_fan_upright():
+    af = Airframe.load(ROOT / "airframes" / "atlas_v3_small.json")
+    k = knobs.find(af, "front_cant_deg")
+    assert k["rotors"] == ["M7", "M8", "M9"] and k["signs"] == [-1.0, -1.0, 0.0]
+    b = apply_variables(af, {"knobs.front_cant_deg": 15})
+    assert [round(r.cant_deg, 2) + 0.0 for r in b.rotors[6:]] == [-15.0, -15.0, 0.0]

@@ -37,4 +37,4 @@ Code: `airframe_designer/geometry/knobs.py`; tests `tests/test_knobs.py`.
 
 ## Open
 
-- The new version's STEP file is not imported yet; after import, place the rotors, *Set up knobs*, check the links.
+- V3 imported 2026-09-26 ([atlas-v3-small](atlas-v3-small.md)); a front-cant sign of 0 keeps a centre nose fan upright.
