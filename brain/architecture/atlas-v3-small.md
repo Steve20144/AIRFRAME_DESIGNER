@@ -14,6 +14,9 @@
 
 ## Assumed (constants at the top of the script)
 
+Since 26 Sep the masses are ATLAS_09B's with nine fans (11.785 kg, see the sweep note); the 7.8 kg figures below and
+the first results are from the earlier guess.
+
 Masses (no materials in the file): fans 0.34 kg, tube 1.6 g/cm3, printed 1.0 g/cm3, battery 2.0 kg in the nose
 carrier: total 7.8 kg, CG 5 cm ahead of the origin. Jet fully attached (thrust 14.6-17.3 deg forward of vertical).
 Fan 36 N, km 0.002 same spin, ATLAS_09B PX4 gains, provisional nose leg parking at +4 deg, motor order M1/M2 outer

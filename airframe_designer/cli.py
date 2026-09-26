@@ -155,7 +155,7 @@ def cmd_vibration(a) -> int:
     af = Airframe.load(a.airframe)
     if a.set:
         af = apply_variables(af, _parse_set(a.set))
-    af.mass.resolve()
+    af.resolve_mass()
     rotors = af.active_rotors()
     om = np.zeros(len(rotors))
     if a.hover:

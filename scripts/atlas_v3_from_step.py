@@ -11,9 +11,12 @@ From the CAD (measured on the imported solids, see brain/architecture/atlas-v3-s
     and outboard), part volumes, centroids and inertia.
 
 Assumed, NOT in the CAD (change the constants below and rerun):
-  * masses: the file has no materials. XFLY units and the foil fans 0.34 kg each (the ATLAS_09B value for an
-    XFLY 80 with motor); carbon tube 1.6 g/cm3; ESCs 50 / 20 g; printed parts 1.0 g/cm3 of solid volume; the
-    battery BATTERY_KG in the slide-in carrier in the nose.
+  * masses (user, 2026-09-26: "the weights from the previous version, remove the two rear motors and add one in
+    the front"): ATLAS_09B's breakdown with nine fans instead of ten, 11.785 kg. Fans 0.34 kg each; battery 3.225 kg
+    in the slide-in carrier (the only battery-sized part, in the nose); avionics 0.5 kg as a point mass at the
+    flight controller; the foils 2.6 kg (09B's four JET_FOIL parts) over V3's nozzles and curved foils, and 2.4 kg of
+    other structure over the tubes, clamps, hubs, ESCs and carrier shell, both split in proportion to volume
+    (tube 1.6, printed 1.0 g/cm3).
   * jet angle: the jet is taken to leave along the foil's exit (full Coanda attachment), i.e. thrust 14.6-17.3 deg
     forward of vertical. Real jets separate early, so the true turning is smaller; the design knobs change it.
   * fan thrust 36 N quadratic, spool 0.12 s, km 0.002 all the same way (the ATLAS_09B figures).
@@ -46,10 +49,15 @@ STEP = ROOT / "airframes" / "cad" / "SMALL_SCALE_V3.step"
 OUT = ROOT / "airframes" / "atlas_v3_small.json"
 BASE = ROOT / "airframes" / "atlas_09b.json"        # PX4 gains, fan model, vibration: starting points only
 
-BATTERY_KG = 2.0
+# ATLAS_09B's masses (airframes/atlas_09b.json CAD bodies): 10 fans 3.4, battery 3.225, avionics 0.5, foils 2.6,
+# other structure 2.4 = 12.125 kg; V3 has nine fans
+BATTERY_KG = 3.225
 FAN_KG = 0.34
-TUBE_DENSITY = 1600.0          # kg/m3
-PRINT_DENSITY = 1000.0         # kg/m3 of solid volume
+AVIONICS_KG = 0.5
+FOIL_KG = 2.6
+OTHER_STRUCTURE_KG = 2.4
+TUBE_DENSITY = 1600.0          # kg/m3, relative weights inside OTHER_STRUCTURE_KG
+PRINT_DENSITY = 1000.0         # kg/m3 of solid volume, likewise
 FAN_THRUST_N = 36.0
 PARK_PITCH_DEG = 4.0
 HOVER_PITCH_DEG = 10.0         # replaced by the trim scan below when it finds a better one
@@ -65,6 +73,8 @@ ESC_BIG, ESC_SMALL = (36, 56, 60), (37, 57, 61)
 FEET = {"L": 32, "R": 35}
 LEG_HUB = 17
 CARRIER = 31
+FOIL_BODIES = (5, 6, 7, 8, 45, 46, 47, 48)          # nozzles (5-7, 45-47) and curved Coanda foils (8, 48)
+PIXHAWK_CAD = [0.0, 0.47, -0.2]
 
 
 def frd(p) -> np.ndarray:
@@ -80,7 +90,7 @@ def body_mass(k: int, b: dict) -> float:
     if k in ESC_SMALL:
         return 0.02
     if k == CARRIER:
-        return BATTERY_KG + 0.2
+        return BATTERY_KG
     if "carbon_tube" in name:
         return vol * TUBE_DENSITY
     if vol < 5e-6 and "XFLY" in name:
@@ -100,9 +110,19 @@ def main() -> None:
     af.cad = cadmod.model_from_import(imported, str(STEP.relative_to(ROOT)).replace("\\", "/"))
     af.cad.rotation_deg = cadmod.euler_deg(R_CAD)
     af.cad.origin = [round(float(v), 6) for v in ORIGIN]
+    raw = {b.id: body_mass(int(b.id.split(":")[0]), by_k[int(b.id.split(":")[0])]) for b in af.cad.bodies}
+    kidx = lambda bid: int(bid.split(":")[0])
+    fixed = set(FOIL_DUCTS.values()) | set(NOSE_FANS.values()) | {CARRIER}
+    foil = [i for i in raw if kidx(i) in FOIL_BODIES]
+    other = [i for i in raw if kidx(i) not in FOIL_BODIES and kidx(i) not in fixed]
+    for group, total in ((foil, FOIL_KG), (other, OTHER_STRUCTURE_KG)):
+        s = sum(raw[i] for i in group)
+        for i in group:
+            raw[i] = raw[i] * total / s
     for b in af.cad.bodies:
-        b.mass = round(body_mass(int(b.id.split(":")[0]), by_k[int(b.id.split(":")[0])]), 4)
-    af.mass.items = []
+        b.mass = round(raw[b.id], 5)
+    from airframe_designer.geometry.mass import MassItem
+    af.mass.items = [MassItem(name="avionics (ATLAS_09B)", mass=AVIONICS_KG, pos=[round(float(v), 4) for v in frd(PIXHAWK_CAD)])]
     af.mass.from_items = True
     af.mass.manual = None
 
@@ -149,7 +169,6 @@ def main() -> None:
 
     af.landed_pitch_deg = PARK_PITCH_DEG
     af.px4_overrides = {k: v for k, v in base.px4_overrides.items() if not k.startswith("CA_ROTOR")}
-    af.px4_overrides["MPC_THR_HOVER"] = 0.26        # thrust setpoint of the first SITL hover (v3_stab_nolift, 26 Sep)
     af.design = copy.deepcopy(base.design)
     af.design.pop("groups", None)
     af.design.pop("knobs", None)
@@ -157,7 +176,7 @@ def main() -> None:
     for key in ("nose_lift", "nose_lower"):
         if key in af.design:
             af.design[key]["motors"] = [6, 7, 8]
-    af.design["pixhawk_position"] = [round(float(v), 4) for v in frd([0.0, 0.47, -0.2])]
+    af.design["pixhawk_position"] = [round(float(v), 4) for v in frd(PIXHAWK_CAD)]
     if "vibration" in af.design:
         af.design["vibration"]["imu_pos"] = af.design["pixhawk_position"]
 
@@ -169,13 +188,14 @@ def main() -> None:
         u = [x for x in hc.get("hover_utilisation") or [] if x is not None]
         scan.append((float(p), hc["ok"], max(u) if u else float("nan")))
     feasible = [s for s in scan if s[1]]
-    af.hover_pitch_deg = min(feasible, key=lambda s: s[2])[0] if feasible else HOVER_PITCH_DEG
+    af.hover_pitch_deg = af.trim_hover_pitch() or HOVER_PITCH_DEG       # most headroom on every fan
     for nl in ("nose_lift",):
         if nl in af.design:
             af.design[nl]["target_pitch_deg"] = af.hover_pitch_deg
     if "nose_lower" in af.design:
         af.design["nose_lower"]["target_pitch_deg"] = PARK_PITCH_DEG
 
+    af.px4_overrides["MPC_THR_HOVER"] = af.hover_thrust_fraction()   # mid stick hovers (0.26 measured on the 7.8 kg draft)
     knobs.setup_defaults(af)
     knobs.set_ballast(af, [b.id for b in af.cad.bodies if b.id.startswith(f"{CARRIER}:")])
     af.resolve_mass()

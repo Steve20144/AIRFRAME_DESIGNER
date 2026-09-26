@@ -61,9 +61,9 @@ current task needs.
 - [2026-09-23 Mitigating fan vibration (Tuning tab)](experiments/2026-09-23-vibration-tuning-rounds.md): vibration
   doubles motor jitter and, indoors, attitude error and drift; soft mount or balance fixes it, gyro filters fix jitter
 - [2026-09-25 Nose hold flights, ULog findings](experiments/2026-09-25-nose-hold-flights.md): no liftoff on 25 Sep; first liftoff 00:21 on the front-fix build (0.8 m, nose held 26-30); M9 clips at full while M10 sits at half (split wastes pitch authority); forward push uncertain
-- [2026-09-26 V3 jetfoil x front tilt sweep](experiments/2026-09-26-v3-jetfoil-front-sweep.md): best outer 10 /
-  middle 25 / inner 10 deg lean, nose fans upright; heading drift 0 vs 17-21 on the draft; mixed station angles win,
-  nose tilt barely matters; asks for 80 deg jet turning (foil gives 73-75)
+- [2026-09-26 V3 jetfoil x front tilt sweep](experiments/2026-09-26-v3-jetfoil-front-sweep.md): at ATLAS_09B's masses
+  (11.785 kg) best outer 17.5 / middle 25 / inner 25 deg lean, nose fans 30 as built; the draft fails; mixed station
+  angles win, nose tilt barely matters; mass.resolve() ignored CAD bodies (fixed)
 
 ## Research
 

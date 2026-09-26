@@ -213,21 +213,25 @@ class Airframe:
 
     # -------------------------------------------------------- parked / hover attitude
     def trim_hover_pitch(self, lo: float = -10.0, hi: float = 40.0, step: float = 0.05) -> float | None:
-        """The nose-up hover pitch where PX4's pseudo-inverse hover mix balances force and roll/pitch torque and its
-        weakest motor keeps the largest share (most margin before a motor clips at zero). A geometry change (a
-        jetfoil angle, the CG) moves this, so a geometry sweep flies each candidate at its own trim (scenario attitude
-        ``"hover_pitch_deg": "trim"``). The pitch is returned even when that best share is negative (the mix clips a
-        motor): the flight then shows what that costs. None only when no pitch balances at all."""
+        """The nose-up hover pitch where PX4's pseudo-inverse hover mix balances force and roll/pitch torque with the
+        most headroom: every motor as far as possible from both zero and full thrust (max of min(util, 1 - util)).
+        A geometry change (a jetfoil angle, the CG) moves this, so a geometry sweep flies each candidate at its own
+        trim (scenario attitude ``"hover_pitch_deg": "trim"``). The pitch is returned even when the best headroom is
+        negative (a motor clips): the flight then shows what that costs. None only when no pitch balances at all."""
         probe = self.copy()
         sp = np.array([0, 0, 0, 0, 0, -1.0])
+        weight = self.mass.mass * G
+        tmax = np.array([r.effective_max_thrust() for r in self.active_rotors()], float)
         best = None
         for p in np.arange(lo, hi + 1e-9, step):
             probe.hover_pitch_deg = float(p)
             E = probe.effectiveness()
             u = np.linalg.pinv(E) @ sp
-            if np.abs((E @ u - sp)[[0, 1, 3, 4]]).max() > 1e-3 or u.max() <= 1e-9:
+            up = float(-(E[5] @ u))
+            if np.abs((E @ u - sp)[[0, 1, 3, 4]]).max() > 1e-3 or up <= 1e-9 or (tmax <= 0).any():
                 continue
-            margin = float(u.min() / u.max())
+            util = u * (weight / up) / tmax
+            margin = float(min(util.min(), 1.0 - util.max()))
             if best is None or margin > best[1] + 1e-9:
                 best = (round(float(p), 3), margin)
         return best[0] if best else None

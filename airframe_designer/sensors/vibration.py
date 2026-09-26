@@ -83,7 +83,7 @@ class VibrationModel:
         self.cfg = cfg if isinstance(cfg, VibrationConfig) else VibrationConfig.from_dict(
             cfg if cfg is not None else (getattr(airframe, "design", None) or {}).get("vibration"))
         c = self.cfg
-        airframe.mass.resolve()
+        airframe.resolve_mass()
         rotors = airframe.active_rotors()
         n = self.n = len(rotors)
         m = float(airframe.mass.mass)

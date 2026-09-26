@@ -105,7 +105,7 @@ def generate_world(af: Airframe, name: str, out_dir: Path) -> Path:
     acts exactly where the force models computed it. Nothing in the file is hand-edited; it is a pure function of
     the airframe, so regenerating it is always safe.
     """
-    af.mass.resolve()
+    af.resolve_mass()
     cg = np.asarray(af.cg, float)
     I = _inertia_flu(af.mass.tensor())
     feet = [(np.asarray(l.foot(), float) - cg, max(l.foot_radius, 0.02), l.friction) for l in af.active_legs()]
@@ -193,7 +193,7 @@ class GazeboBody:
     # ------------------------------------------------------------------ configuration
     def set_airframe(self, airframe: Airframe) -> None:
         self.af = airframe
-        airframe.mass.resolve()
+        airframe.resolve_mass()
         self.mass = float(airframe.mass.mass)
         self.I = airframe.mass.tensor()
         cg = airframe.cg
