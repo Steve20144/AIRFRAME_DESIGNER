@@ -252,7 +252,9 @@ class ConnectionManager:
         threading.Thread(target=self._watch, name="link-watch", daemon=True).start()
 
     # ------------------------------------------------------------ connect
-    def connect_sitl(self, launch: bool | None = None) -> dict:
+    def connect_sitl(self, launch: bool | None = None, seed_params: dict | None = None) -> dict:
+        """Open the SITL links and, when we launch PX4, start it. ``seed_params``: boot PX4 from a clean working
+        directory with these parameters written in before boot, exactly as a headless run does (see fresh_px4)."""
         with self._lock:
             self.busy = True
             try:
@@ -278,8 +280,14 @@ class ConnectionManager:
                 self.px4_instance = instance
                 if launch and (self.px4_process is None or self.px4_process.poll() is not None):
                     try:
+                        kw = {}
+                        if seed_params:
+                            from ..batch.worker import px4_param_types
+                            kw = {"params": dict(seed_params), "param_types": px4_param_types(self.args.px4_dir), "fresh": True}
+                        # a PX4 booting at a large lockstep time loses attitude accuracy (Simulator.restart_clock)
+                        self.sim.restart_clock()
                         self.px4_process = launch_px4(self.args.px4_dir, self.args.px4_model, self.log,
-                                                      instance=instance, rootfs=self.args.px4_rootfs)
+                                                      instance=instance, rootfs=self.args.px4_rootfs, **kw)
                     except RuntimeError as e:
                         self.error = str(e)
                         self.log(f"[px4] {e}")
@@ -606,13 +614,20 @@ class ConnectionManager:
 
     _flight_owns_mode_until = 0.0
 
-    def fresh_px4(self, timeout: float = 75.0, sitl_attempt_s: float = 25.0, sitl_attempts: int = 3) -> dict:
+    def fresh_px4(self, timeout: float = 75.0, sitl_attempt_s: float = 25.0, sitl_attempts: int = 3,
+                  seed_params: dict | None = None) -> dict:
         """A fresh PX4 for the next live flight: the vehicle must already sit where the flight starts. A running
         estimator sees the sim's reset (back to the origin, another parked pitch) as a sensor fault ("Attitude
         failure", "High Accelerometer Bias") and refuses to arm; only a fresh boot aligns on the new rest. SITL:
         our PX4 is relaunched (again if its startup hangs: now and then rcS stops after the GCS MAVLink instance and
         the onboard link on 14540+i never opens); HITL: the board reboots. Blocks until the link is back with its
-        parameters."""
+        parameters.
+
+        SITL with ``seed_params``: the relaunch boots from a clean working directory with the parameters written in
+        before boot, like a headless run. Booting the reused instance instead (its stock rcS start plus whatever an
+        earlier session saved, the airframe pushed only after boot) left EKF2 starting late ("ekf2 missing data" for
+        up to 30 s), settling 0.85-2.4 deg off the truth on the legs and losing ~5 % of the nose-lift rotation:
+        a steady 0.3-0.4 deg tilt in hover and 12-45 m of drift a minute in Stabilized (headless: ~0.1 deg, 3-6 m)."""
         link = self.link
         sitl_ours = self.mode == "sitl" and self.args.launch_px4 and self.px4_running()
         if link is None or not (link.ctl_connected or sitl_ours):
@@ -667,8 +682,9 @@ class ConnectionManager:
             self._reset_busy_until = time.time() + sitl_attempt_s
             self.stop_px4()
             time.sleep(0.5)
-            self.connect_sitl()
-            steps.append("PX4 SITL relaunched" if attempt == 1 else f"relaunched again (attempt {attempt})")
+            self.connect_sitl(seed_params=seed_params)
+            steps.append(("PX4 SITL relaunched" + (" from a clean, seeded working directory" if seed_params else ""))
+                         if attempt == 1 else f"relaunched again (attempt {attempt})")
             self.log(f"[px4] fresh start for the flight: {steps[-1]}")
             s = back(session0, sitl_attempt_s)
             if s is not None:

@@ -46,3 +46,17 @@ Run `results/v3_30/foil_headroom/20261001_165843/` (gitignored), script `scripts
 - Position mode on H-FLOW, scenario `2026-10-01_1851_v3_30_park-10_jets_57.5_85_85_poshold_hflow` (live
   live905874558): held within 0.39 m for 60 s at 1.7 m, roll err 0.06, touchdown 0.35 m/s. Flow nulls the bias.
 - H-FLOW mount fixed 20.4 deg looks ~12 deg off vertical at the 8.5 deg hover: re-angle to the hover pitch in CAD.
+
+## Board prepared for HITL of the park -10 design (2026-10-01 19:16-19:25)
+
+Backup before: `results/board_params/params_20261001_191629.json` (old V3 v34 -16 set, SENS_BOARD_Y_OFF 23.85,
+EKF2_MAG_DECL 5.04 saved, EKF2_MULTI_IMU 3). Pushed the HITL export of `atlas_v3_30_jets_57.5_85_85_park-10.json`
+with flow enabled (geometry, SENS_BOARD_Y_OFF 8.5, MPC_THR_HOVER 0.592, MC_PITCHRATE_P/I 0.9/0.05, NL_* geometry,
+H-FLOW EKF2 offsets, EKF2_RNG_PITCH -0.2077 = mount 20.4 vs hover 8.5) plus EKF2_DECL_TYPE 0, EKF2_MAG_DECL 0,
+EKF2_MULTI_IMU 0, SENS_IMU_MODE 1 (NL_EN 0, COM_RC_IN_MODE 1, SENS_IMU_AUTOCAL 0, UAVCAN_SUB_FLOW/RNG 0, MC_AIRMODE 0
+already). 190/190 verified after reboot; checklist all green. NL_HOV_PITCH / NL_TGT needed a second set (the first
+push's values did not survive the rotation-change reboot). Before real flight restore: SYS_HITL 0, NL_EN 1,
+COM_RC_IN_MODE 0, SENS_IMU_AUTOCAL 1, EKF2_MULTI_IMU 3 / SENS_IMU_MODE 0 (6X redundancy), EKF2_DECL_TYPE 3.
+HITL flight (live907599734, 19:20, COM_RC_IN_MODE 1 for the flight): Position hold max 0.42 m (SITL live 0.39),
+alt 1.68-1.70, roll err 0.12 (0.06), est-truth pitch +0.45 (+0.41), rates 0.82 deg/s (0.75), touchdown 0.39
+(0.35), fans max 69 %, no failures. HITL now matches live SITL; both share the ~0.4 deg live estimate offset.

@@ -468,3 +468,11 @@ def test_wait_ready_waits_for_the_attitude_estimate_to_settle():
     for _ in range(10):
         link.board_att["t"] = time.time(); advance(simr, runner, 0.1, physics=False)
     assert runner.index >= 1
+
+
+def test_restart_clock_starts_sim_time_again():
+    # a new SITL PX4 must boot at a small lockstep time: a PX4 booted at 100+ s loses attitude accuracy
+    simr = make_sim()
+    simr.time_usec = 400_000_000
+    simr.restart_clock()
+    assert simr.time_usec == 0 and simr._sim_start == 0 and simr.t == 0.0

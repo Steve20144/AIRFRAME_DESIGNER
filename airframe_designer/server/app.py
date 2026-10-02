@@ -27,6 +27,11 @@ from ..geometry import cad as cadmod
 from ..geometry import knobs as knobmod
 from . import tuning
 
+# Seeded into a live SITL relaunch next to the airframe export and the scenario's parameters, as a headless run
+# seeds them (batch.worker.BATCH_PX4_DEFAULTS, less the GCS-link rate so QGC still sees the app's PX4)
+SITL_LIVE_SEED: dict[str, float | int] = {"SDLOG_MODE": 3, "SDLOG_PROFILE": 0, "NAV_DLL_ACT": 0, "COM_OBL_RC_ACT": 5,
+                                          "COM_RC_IN_MODE": 1}
+
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 UI_DIR = PROJECT_DIR / "ui"
 AIRFRAME_DIR = PROJECT_DIR / "airframes"
@@ -1138,9 +1143,13 @@ def build_app(state: AppState) -> FastAPI:
                 # sensor fault and refuse to arm, so PX4 starts afresh on it (SITL relaunch / HITL board reboot)
                 state.log(f"[scenario] {sc.name}: fresh PX4 start on the parked vehicle (estimator aligns on the new rest)")
                 tries = int(body.get("estimator_tries", 3))
+                # SITL: boot from a clean working directory with the flight's parameters seeded, as headless runs do
+                seed = None
+                if state.conn.mode == "sitl" and body.get("seed_px4", True):
+                    seed = dict(SITL_LIVE_SEED); seed.update(export_params()); seed.update(params)
                 for attempt in range(1, tries + 1):
                     t_start = time.time()
-                    fr = await run_in_threadpool(state.conn.fresh_px4)
+                    fr = await run_in_threadpool(lambda: state.conn.fresh_px4(seed_params=seed))
                     if not fr.get("ok"):
                         return JSONResponse({"ok": False, "error": f"fresh PX4 start: {fr.get('error')}"}, status_code=503)
                     state.log(f"[scenario] {', '.join(fr.get('steps', []))} in {fr.get('s', '?')} s")

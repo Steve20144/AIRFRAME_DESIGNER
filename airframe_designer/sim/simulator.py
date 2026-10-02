@@ -110,6 +110,17 @@ class Simulator:
             if self.link is not None:
                 self.link.clear_actuators()
 
+    def restart_clock(self, time_usec: int = 0) -> None:
+        """Start the simulation clock again (before a new SITL PX4 boots). In lockstep PX4 takes its clock from the
+        first HIL_SENSOR, and a PX4 that boots at a large time loses attitude accuracy: with the clock at 100 s its
+        estimate ends 0.45 deg off the truth after the nose lift (drift 22 m a minute in Stabilized), at 400 s
+        1.7 deg (77 m), at 0 s 0.1 deg (6 m). The live app's clock otherwise keeps running across flights."""
+        with self.lock:
+            self.time_usec = int(time_usec)
+            self._wall_start = time.perf_counter()
+            self._sim_start = self.time_usec
+            self._rtf_t0, self._rtf_sim0 = time.perf_counter(), self.time_usec
+
     def set_airframe(self, airframe: Airframe, keep_state: bool = True) -> None:
         with self.lock:
             self.airframe = airframe

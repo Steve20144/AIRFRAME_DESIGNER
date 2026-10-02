@@ -1,0 +1,124 @@
+{
+  "name": "2026-10-01_1926_v3_30_park-10_jets_57.5_85_85_altitude_position_altitude",
+  "description": "ATLAS V3_30 current configuration (airframes/atlas_v3_30_jets_57.5_85_85_park-10.json: foil jets 57.5 / 85 / 85 deg, parked at -10 deg, hover 8.5 deg), H-FLOW as built, GPS off. Altitude mode from the start: nose fans rotate it to the hover pitch, arm in Altitude, climb on the throttle stick (0.75 = climb, 0.5 = hold height), settle 5 s in Altitude, switch to Position for 60 s hands-off, back to Altitude for 10 s, then land in Altitude (stick 0.3 = slow descent), cut and lower the nose.",
+  "max_time": 260,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1,
+    "MC_AIRMODE": 0
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "attitude": {
+    "hover_pitch_deg": "trim",
+    "hover_thrust": "trim"
+  },
+  "design": {
+    "nose_lift": {
+      "executor": "sim"
+    },
+    "flow_sensor": {
+      "enabled": true
+    }
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "nose_lift",
+      "name": "rotate_up",
+      "motors": [
+        6,
+        7,
+        8
+      ],
+      "rate_deg_s": 3,
+      "timeout": 45,
+      "timeout_s": 45
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "altitude",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "until": {
+        "armed": true
+      },
+      "timeout": 40
+    },
+    {
+      "type": "stick",
+      "name": "climb",
+      "mode": "altitude",
+      "throttle_from": 0.5,
+      "throttle": 0.75,
+      "ramp_s": 0.5,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "alt_hold",
+      "mode": "altitude",
+      "throttle": 0.5,
+      "ramp_s": 0.5,
+      "duration": 5
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "position",
+      "throttle": 0.5,
+      "duration": 60
+    },
+    {
+      "type": "stick",
+      "name": "alt_again",
+      "mode": "altitude",
+      "throttle": 0.5,
+      "duration": 10
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "altitude",
+      "throttle": 0.3,
+      "ramp_s": 1.0,
+      "duration": 40,
+      "until_ground": true,
+      "settle": 0.5
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "altitude",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "name": "rotate_down",
+      "motors": [
+        6,
+        7,
+        8
+      ],
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ]
+}

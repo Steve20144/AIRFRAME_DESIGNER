@@ -69,3 +69,17 @@ arming summaries after each fresh start; `_scenario_start` relaunches up to 3 ti
 a clear 503 if it never starts. The Batch and Tuning tabs now reload the scenario list each time they open (a
 scenario saved after the page loaded used to be missing until a page reload). Verified: Fly live from the Batch tab
 on the 1851 poshold scenario, ok.
+
+## Root cause of the live drift: PX4 booted at a large lockstep time (2026-10-01 20:00)
+
+Symptom: live SITL flights drifted backwards in Stabilized / Altitude (12-45 m a minute vs 3-6 m headless): PX4's
+estimate lost ~5 % of the on-ground nose-lift rotation (a ~1 deg step ~5 s into rotate_up) and then held a steady
+0.3-0.4 deg nose-down est-vs-truth offset. Ruled out: pacing, 1000 Hz physics, multi-EKF / logging / gyro params,
+pre-flight settling, fan vibration, home, the reused instance's saved params (a clean seeded boot alone did not fix
+it). Cause: the app's simulator clock keeps running across flights, and in lockstep a freshly booted PX4 takes its
+clock from the first HIL_SENSOR. Reproduced headless by starting the clock late: 0 s -> 0.11 deg / 6 m, 100 s ->
+0.45 deg / 22 m, 400 s -> 1.66 deg / 77 m. Fix: `Simulator.restart_clock()` before every SITL PX4 launch
+(connect_sitl). Verified live, two Altitude > Position > Altitude flights back to back: rotate tracked 100.3 / 100.1 %,
+est-truth 0.00 deg, Altitude drift 0.3-0.7 m (was 1.1-3.2), Position 0.02-0.07 m (was 0.36-0.40), touchdown 0.24.
+Kept: live relaunch boots a clean, seeded working dir (`seed_params`, like run_once). HITL is NOT affected by the
+clock (the board timestamps on receipt); its est offset (board log "Found 0 compass", 2.4 deg off at rest) is open.
