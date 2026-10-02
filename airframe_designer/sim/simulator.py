@@ -262,6 +262,13 @@ class Simulator:
                     self.log(f"[sim] hook {getattr(h, '__name__', type(h).__name__)} failed: {e}")
             sensor = self.sensors.hil_sensor(self.sim, t_us)
             gps = self.sensors.hil_gps(self.sim, t_us) if self.step_count % self.gps_every == 0 else None
+            flow = None
+            fs = self.sensors.flow
+            if fs is not None:     # optical flow + range (design.flow_sensor): integrate every step, send at its rate
+                fs.step(self.sim, 1.0 / self.sensor_rate)
+                every = max(1, int(round(self.sensor_rate / fs.rate)))
+                if self.step_count % every == 0:
+                    flow = fs.messages(self.sim, t_us, every / self.sensor_rate)
             send_state = link.mode == "sitl" and self.step_count % self.state_every == 0
             state = self.sensors.hil_state_quaternion(self.sim, t_us) if send_state else None
         self.step_count += 1
@@ -269,6 +276,9 @@ class Simulator:
         try:
             if gps is not None:
                 link.send_hil_gps(gps)
+            if flow is not None:     # HITL too: PX4's MAVLink receiver takes both (the board's EKF2 then needs the
+                link.send_hil_optical_flow(flow[0])   # matching offsets/delays: flow.ekf2_params via px4_params)
+                link.send_distance_sensor(flow[1])
             if state is not None:
                 link.send_hil_state_quaternion(state)
             link.send_hil_sensor(sensor)

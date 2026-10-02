@@ -3,7 +3,9 @@ PY := .venv/bin/python
 .PHONY: setup ui test test-fast run-hover study clean
 
 setup:
-	python3 -m venv .venv && .venv/bin/pip install -q -e ".[dev]"
+	# uv brings Python 3.12 where the system python3 is older (macOS ships 3.9)
+	if command -v uv >/dev/null; then uv venv --python 3.12 .venv && uv pip install -q --python .venv/bin/python -e ".[dev]"; \
+	else python3 -m venv .venv && .venv/bin/pip install -q -e ".[dev]"; fi
 
 ui:
 	$(PY) -m airframe_designer ui

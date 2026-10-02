@@ -376,3 +376,13 @@ def test_estimate_inertia_positive(quad, plane):
         I = af.estimate_inertia()
         assert len(I) == 3 and all(v > 0 for v in I)
         assert I[2] > I[0] and I[2] > I[1]                  # a flat vehicle: yaw inertia is the largest
+
+
+def test_sitl_export_pins_zero_declination():
+    """The simulated magnetic field has zero declination; PX4 must not apply (or keep a saved) WMM declination."""
+    from airframe_designer.geometry.airframe import Airframe
+    from pathlib import Path
+    af = Airframe.load(Path(__file__).resolve().parents[1] / "airframes" / "atlas_v3_30_tuned.json")
+    p = af.px4_params_sitl()
+    assert p["EKF2_DECL_TYPE"] == 0 and p["EKF2_MAG_DECL"] == 0.0
+    assert "EKF2_DECL_TYPE" not in af.px4_params(hitl=True)

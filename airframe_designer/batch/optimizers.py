@@ -2,6 +2,7 @@
 
   random        uniform samples (with an optional Latin-hypercube layout)
   grid          full factorial (levels per variable)
+  points        an explicit list of candidates (e.g. a constrained family a grid cannot express)
   cmaes         a compact CMA-ES (Hansen); population evaluated in parallel each generation
   nelder_mead   sequential simplex (one candidate at a time), best for cheap objectives or refinement
 """
@@ -80,6 +81,17 @@ class GridSearch(Optimizer):
         xs = self.points[self.i:self.i + self.batch]
         self.i += len(xs)
         return xs
+
+
+class PointList(GridSearch):
+    """Evaluate exactly the given points (each clipped to the box), in order."""
+
+    def __init__(self, lo, hi, budget, seed=1, points=(), batch: int = 8, **kw):
+        Optimizer.__init__(self, lo, hi, budget, seed)
+        self.points = [self.clip(p) for p in points]
+        self.budget = min(self.budget, len(self.points))
+        self.batch = max(1, int(batch))
+        self.i = 0
 
 
 class CMAES(Optimizer):
@@ -221,8 +233,8 @@ class NelderMead(Optimizer):
 
 def make_optimizer(name: str, lo, hi, budget: int, seed: int = 1, **kw) -> Optimizer:
     name = (name or "random").lower().replace("-", "_")
-    cls = {"random": RandomSearch, "lhs": RandomSearch, "grid": GridSearch, "cmaes": CMAES, "cma_es": CMAES, "cma": CMAES,
+    cls = {"random": RandomSearch, "lhs": RandomSearch, "grid": GridSearch, "points": PointList, "cmaes": CMAES, "cma_es": CMAES, "cma": CMAES,
            "nelder_mead": NelderMead, "simplex": NelderMead}.get(name)
     if cls is None:
-        raise ValueError(f"unknown optimiser '{name}' (random, grid, cmaes, nelder_mead)")
+        raise ValueError(f"unknown optimiser '{name}' (random, grid, points, cmaes, nelder_mead)")
     return cls(lo, hi, budget, seed=seed, **kw)

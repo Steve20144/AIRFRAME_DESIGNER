@@ -2,6 +2,24 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "app-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "airframe_designer",
+        "ui",
+        "--mode",
+        "sitl",
+        "--launch-px4",
+        "--px4-instance",
+        "0",
+        "--airframe",
+        "airframes/atlas_v3_30_jets_57.5_85_85_park-10.json",
+        "--no-browser"
+      ],
+      "port": 8080
+    },
+    {
       "name": "reports",
       "runtimeExecutable": "python",
       "runtimeArgs": [

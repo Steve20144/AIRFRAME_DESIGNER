@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .flow import flow_from_airframe
 from .vibration import VibrationMetrics, vibration_from_airframe
 
 R_EARTH = 6371000.0
@@ -50,9 +51,10 @@ class SensorNoise:
 def magnetic_field_ned(lat_deg: float, lon_deg: float) -> np.ndarray:
     """Cheap dipole approximation of the Earth field, gauss, NED.
 
-    Inclination = atan(2 tan(lat)), intensity ~0.5 G, declination assumed small.
-    PX4's EKF fetches its own declination from its WMM table using GPS, and the
-    heading it derives from this field is self-consistent with the simulation.
+    Inclination = atan(2 tan(lat)), intensity ~0.5 G, declination ZERO. PX4 would otherwise apply its own WMM
+    declination (about 5 deg at the default Copenhagen home), so the SITL export pins EKF2_DECL_TYPE 0 and
+    EKF2_MAG_DECL 0 (Airframe.px4_params_sitl). A HITL board keeps its own setting: set the same two there for
+    HITL flights, or the heading is off by the local declination.
     """
     lat = math.radians(lat_deg)
     incl = math.atan(2.0 * math.tan(lat))
@@ -71,10 +73,12 @@ class SensorSuite:
         self.seed = seed
         self.vibration = None                 # sensors.vibration.VibrationModel (design.vibration), set_airframe
         self.vib_metrics = VibrationMetrics()   # PX4's vibration metrics and clip counts on what we send
+        self.flow = None                      # sensors.flow.FlowSensor (design.flow_sensor), set_airframe
 
     def set_airframe(self, airframe) -> None:
         """(Re)build the fan vibration model from ``airframe.design.vibration`` (None when it is off)."""
         self.vibration = vibration_from_airframe(airframe, seed=self.seed)
+        self.flow = flow_from_airframe(airframe, np.random.default_rng(self.seed + 7))
 
     def vibration_status(self) -> dict:
         v = self.vibration

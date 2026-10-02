@@ -212,7 +212,7 @@ class Airframe:
         return problems
 
     # -------------------------------------------------------- parked / hover attitude
-    def trim_hover_pitch(self, lo: float = -10.0, hi: float = 40.0, step: float = 0.05) -> float | None:
+    def trim_hover_pitch(self, lo: float = -10.0, hi: float = 80.0, step: float = 0.05) -> float | None:
         """The nose-up hover pitch where PX4's pseudo-inverse hover mix balances force and roll/pitch torque with the
         most headroom: every motor as far as possible from both zero and full thrust (max of min(util, 1 - util)).
         A geometry change (a jetfoil angle, the CG) moves this, so a geometry sweep flies each candidate at its own
@@ -311,6 +311,13 @@ class Airframe:
             # the nose lift runs on the flight controller: its geometry and settings (px4_overrides still win)
             for k, v in firmware_params(self).items():
                 p.setdefault(k, v)
+        from ..sensors.flow import ekf2_params
+        fcfg = (self.design or {}).get("flow_sensor") if isinstance(self.design, dict) else None
+        if fcfg and fcfg.get("enabled", True):
+            # flow + range navigation matched to the simulated H-FLOW (offsets, range tilt, no delays, IMU at the
+            # CG as the simulator measures it); px4_overrides still win
+            for k, v in ekf2_params(self, fcfg).items():
+                p.setdefault(k, v)
         if hitl:
             p["SYS_HITL"] = 1
         return p
@@ -320,6 +327,15 @@ class Airframe:
         p = self.px4_params(hitl=False)
         for n in range(1, 17):
             p[f"PWM_MAIN_FUNC{n}"] = p.pop(f"HIL_ACT_FUNC{n}")
+        # The simulation has no battery model; PX4's battery_simulator status goes stale in long live sessions and
+        # "Battery unhealthy" then blocks arming. Bypass the supply checks in SITL only (never in the HITL/board export).
+        p["CBRK_SUPPLY_CHK"] = 894281
+        # The simulated magnetic field has zero declination (sensors/models.py). PX4 otherwise takes the declination
+        # from its WMM table once GPS has a fix and SAVES it (EKF2_DECL_TYPE 3): a reused SITL instance then carries
+        # ~5 deg (Copenhagen) into later GPS-less flights, every compass reading is 5 deg off, and on flow-only
+        # navigation that heading error turned into a 1 deg roll estimate error and a 34 m slide (1 Oct live run).
+        p["EKF2_DECL_TYPE"] = 0
+        p["EKF2_MAG_DECL"] = 0.0
         return p
 
     def px4_params_file(self, hitl: bool = True) -> str:

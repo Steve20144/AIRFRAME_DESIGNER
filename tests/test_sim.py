@@ -446,3 +446,25 @@ def test_simulator_without_link_idles():
     assert simr.sim.wind_ned.tolist() == [1.0, 2.0, 0.0]
     simr.set_rotor_health([0.0])
     assert simr.snapshot()["rotor_health"] == [0.0, 1.0, 1.0, 1.0]
+
+
+def test_wait_ready_waits_for_the_attitude_estimate_to_settle():
+    # a freshly booted PX4 reports ready before its tilt estimate has converged: flying then leaves an EKF2 bias
+    import math, time
+    simr = make_sim()
+    link = FakeLink(ready=True)
+    r, p, y = simr.sim.hover_frame_euler()
+    link.board_att = {"roll": r, "pitch": p + math.radians(5.0), "yaw": y, "t": time.time()}
+    sc = Scenario(name="t", phases=[{"type": "wait_ready", "timeout": 20}, {"type": "wait", "duration": 0.5}], max_time=60)
+    runner = ScenarioRunner(sc, link)
+    simr.hooks.append(runner)
+    for _ in range(30):
+        link.board_att["t"] = time.time(); advance(simr, runner, 0.1, physics=False)
+    assert runner.index == 0                                        # 5 deg off: still waiting
+    link.board_att["pitch"] = p + math.radians(0.05)
+    for _ in range(15):
+        link.board_att["t"] = time.time(); advance(simr, runner, 0.1, physics=False)
+    assert runner.index == 0                                        # settled for 1.5 s of the 2 s needed
+    for _ in range(10):
+        link.board_att["t"] = time.time(); advance(simr, runner, 0.1, physics=False)
+    assert runner.index >= 1

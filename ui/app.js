@@ -1722,7 +1722,7 @@ const mnum = (v, d = 2) => (v == null || !isFinite(v)) ? '—' : (+v).toFixed(d)
 async function refreshBatch() {
   clearTimeout(batchTimer); clearTimeout(studyTimer);
   if (!$('#tab-batch').classList.contains('active')) return;
-  if (!scenariosCache) await loadScenarios();
+  await loadScenarios();     // every time the tab opens: scenarios saved since the page loaded show up
   if (!studiesCache) await loadStudies();
   pollJobs(); pollStudy();
 }
@@ -1913,6 +1913,11 @@ function renderStudy(j) {
 // parameters over a grid, and chart every flight (height, attitude against PX4's own setpoint, yaw, rates,
 // position, motors) with the scenario phases shaded. Flights are kept under results/tuning/ and results/<sweep>/.
 let tuneParams = [], sweepVars = [], tuneDefaults = null, tuneRuns = null, tuneSweeps = null, tuneTimer = null;
+// Typed numbers in the Tuning tab: accept "0.55" and "0,55" alike; anything unreadable is NaN (the caller keeps the old
+// value), never 0. A browser number field in a comma locale reports "" for "0.55", and +"" was 0: a zero gain went to PX4.
+const tuneNum = (v) => { const t = String(v ?? '').trim().replace(',', '.'); return t === '' ? NaN : Number(t); };
+// PX4 parameter names are upper case; a path (knobs.foil_2_deg, px4.X) is kept as typed
+const tuneName = (v) => { const t = String(v ?? '').trim(); return /[.\[]/.test(t) ? t : t.toUpperCase(); };
 let tuneSel = [], tuneLastSig = '';   // selected flight keys (newest last, at most two); last rendered list signature
 const tuneLoaded = {};            // key -> {name, timeseries, brief, ...}
 const sweepOpen = new Set();
@@ -1922,7 +1927,7 @@ const TUNE_GAINS = ['MC_ROLLRATE_P', 'MC_PITCHRATE_P', 'MC_ROLLRATE_D', 'MC_PITC
 async function refreshTuning() {
   clearTimeout(tuneTimer);
   if (!$('#tab-tuning').classList.contains('active')) return;
-  if (!scenariosCache) await loadScenarios();
+  await loadScenarios();     // pick up scenarios saved since the page loaded
   for (const id of ['#tune-scenario', '#sweep-scenario']) {
     const sel = $(id); const cur = sel.value;
     sel.innerHTML = (scenariosCache || []).map(s => `<option value="${esc(s.name)}" title="${esc(s.description || '')}">${esc(s.name)}</option>`).join('');
@@ -1966,11 +1971,11 @@ function tuneLoadGains() {
 function renderTuneParams() {
   const tb = $('#tune-params tbody');
   tb.innerHTML = tuneParams.map((p, i) => { const cur = tuneCurrent(p.name); return `<tr><td><input type="text" class="p-name" data-i="${i}" value="${esc(p.name)}" spellcheck="false"></td>
-    <td><input type="number" step="any" class="p-val" data-i="${i}" value="${esc(p.value)}"></td>
+    <td><input type="text" inputmode="decimal" class="p-val" data-i="${i}" value="${esc(p.value)}"></td>
     <td class="hint num">${cur == null ? '—' : esc(cur)}${cur != null && +cur !== +p.value ? ' <span class="warn">→</span>' : ''}</td>
     <td><button class="x" data-i="${i}" title="remove">×</button></td></tr>`; }).join('');
-  $$('#tune-params .p-name').forEach(el => el.addEventListener('change', () => { tuneParams[+el.dataset.i].name = el.value.trim().toUpperCase(); renderTuneParams(); }));
-  $$('#tune-params .p-val').forEach(el => el.addEventListener('change', () => { tuneParams[+el.dataset.i].value = +el.value; renderTuneParams(); }));
+  $$('#tune-params .p-name').forEach(el => el.addEventListener('change', () => { tuneParams[+el.dataset.i].name = tuneName(el.value); renderTuneParams(); }));
+  $$('#tune-params .p-val').forEach(el => el.addEventListener('change', () => { const v = tuneNum(el.value); if (isFinite(v)) tuneParams[+el.dataset.i].value = v; renderTuneParams(); }));
   $$('#tune-params .x').forEach(el => el.addEventListener('click', () => { tuneParams.splice(+el.dataset.i, 1); renderTuneParams(); }));
 }
 function tuneAttitude() {
@@ -1989,7 +1994,7 @@ function tuneScenarioAttitude() {
 $('#tune-scenario').addEventListener('change', tuneScenarioAttitude);
 function tuneParamObject() {
   const o = {};
-  for (const p of tuneParams) if (p.name && isFinite(+p.value)) o[p.name] = +p.value;
+  for (const p of tuneParams) if (p.name && isFinite(tuneNum(p.value))) o[p.name] = tuneNum(p.value);
   return o;
 }
 $('#tune-add').addEventListener('click', () => { tuneParams.push({ name: '', value: 0 }); renderTuneParams(); const last = $$('#tune-params .p-name').slice(-1)[0]; if (last) last.focus(); });
@@ -2046,10 +2051,10 @@ $('#tune-apply').addEventListener('click', async () => {
 function renderSweepVars() {
   const tb = $('#sweep-vars tbody');
   tb.innerHTML = sweepVars.map((v, i) => `<tr><td><input type="text" class="s-name" data-i="${i}" value="${esc(v.param)}" spellcheck="false"></td>
-    <td><input type="number" step="any" class="s-min" data-i="${i}" value="${esc(v.min)}"></td><td><input type="number" step="any" class="s-max" data-i="${i}" value="${esc(v.max)}"></td>
+    <td><input type="text" inputmode="decimal" class="s-min" data-i="${i}" value="${esc(v.min)}"></td><td><input type="text" inputmode="decimal" class="s-max" data-i="${i}" value="${esc(v.max)}"></td>
     <td><input type="number" step="1" min="1" max="12" class="s-lv" data-i="${i}" value="${esc(v.levels)}" style="width:52px"></td><td><button class="x" data-i="${i}">×</button></td></tr>`).join('');
-  const upd = (cls, key, f) => $$('#sweep-vars .' + cls).forEach(el => el.addEventListener('change', () => { sweepVars[+el.dataset.i][key] = f(el.value); renderSweepVars(); }));
-  upd('s-name', 'param', v => v.trim().toUpperCase()); upd('s-min', 'min', Number); upd('s-max', 'max', Number); upd('s-lv', 'levels', v => Math.max(1, Math.round(+v)));
+  const upd = (cls, key, f) => $$('#sweep-vars .' + cls).forEach(el => el.addEventListener('change', () => { const v = f(el.value); if (typeof v === 'string' || isFinite(v)) sweepVars[+el.dataset.i][key] = v; renderSweepVars(); }));
+  upd('s-name', 'param', tuneName); upd('s-min', 'min', tuneNum); upd('s-max', 'max', tuneNum); upd('s-lv', 'levels', v => { const n = tuneNum(v); return isFinite(n) ? Math.max(1, Math.round(n)) : NaN; });
   $$('#sweep-vars .x').forEach(el => el.addEventListener('click', () => { sweepVars.splice(+el.dataset.i, 1); renderSweepVars(); }));
   const n = sweepVars.reduce((a, v) => a * Math.max(1, v.levels || 1), 1);
   const w = +$('#sweep-workers').value || 4;

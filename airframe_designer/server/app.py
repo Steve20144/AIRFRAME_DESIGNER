@@ -98,6 +98,7 @@ class AppState:
         self.batch_jobs: dict[str, dict] = {}
         self.study_job: dict = {"running": False}
         self.scenario_job: dict = {"runner": None}
+        self.scenario_starting = False         # a live scenario is restarting PX4 before its flight
         # the airframe as it was before a live scenario applied its attitude block, with a fingerprint of what the
         # scenario put on the live simulator: (base Airframe, attitude'd airframe as dict). See base_airframe().
         self.attitude_base: tuple | None = None
@@ -1058,15 +1059,28 @@ def build_app(state: AppState) -> FastAPI:
     async def scenario_start(body: dict | None = None):
         """Fly a scenario on the live simulator, i.e. on whatever PX4 the app is connected to (the HITL board
         included). The scenario's params are pushed to PX4 first; the vehicle is put back on its legs unless
-        reset is false. Progress and the final result come from GET /api/scenario/status."""
-        from ..sim.scenario import load_scenario, ScenarioRunner
-        from ..sim.metrics import MetricsRecorder
+        reset is false, and PX4 then starts afresh on it (fresh_px4, default true: a SITL relaunch or a board
+        reboot, so the estimator aligns on the new rest). Progress and the final result come from
+        GET /api/scenario/status."""
         body = body or {}
-        if not link.ctl_connected:
+        # a SITL PX4 we launched may be hung in its startup (no onboard link): the fresh start relaunches it
+        relaunchable = state.conn.mode == "sitl" and state.conn.args.launch_px4 and state.conn.px4_running()
+        if not link.ctl_connected and not (relaunchable and body.get("reset", True) and body.get("fresh_px4", True)):
             return JSONResponse({"ok": False, "error": "PX4 not connected"}, status_code=409)
         job = state.scenario_job
         if job.get("runner") is not None and not job["runner"].done:
             return JSONResponse({"ok": False, "error": "a scenario is already running"}, status_code=409)
+        if state.scenario_starting:
+            return JSONResponse({"ok": False, "error": "a scenario is starting (PX4 restarting for it)"}, status_code=409)
+        state.scenario_starting = True
+        try:
+            return await _scenario_start(body)
+        finally:
+            state.scenario_starting = False
+
+    async def _scenario_start(body: dict):
+        from ..sim.scenario import load_scenario, ScenarioRunner
+        from ..sim.metrics import MetricsRecorder
         spec = body.get("scenario", "hover")
         sc = load_scenario(spec if isinstance(spec, dict) else str(spec))
         if body.get("attitude"):
@@ -1082,8 +1096,11 @@ def build_app(state: AppState) -> FastAPI:
             except Exception as e:
                 return JSONResponse({"ok": False, "error": f"attitude: {e}"}, status_code=400)
         params = dict(sc.params or {}); params.update(body.get("params") or {})
-        pushed = []
-        if body.get("push_params", True) and link.params:
+
+        async def push_all() -> list:
+            pushed = []
+            if not (body.get("push_params", True) and link.params):
+                return pushed
             # the airframe's own PX4 parameters first (geometry, rotation, output functions): a headless run seeds
             # them at boot, the live PX4 may still carry another airframe's
             exp = export_params()
@@ -1095,14 +1112,18 @@ def build_app(state: AppState) -> FastAPI:
                 state.log(f"[scenario] airframe export: {len(stale) - len(bad)}/{len(stale)} changed parameters pushed"
                           + (f"; FAILED: {[r['name'] for r in bad]}" if bad else ""))
                 pushed += bad
-        if params and body.get("push_params", True):
-            present = {k: v for k, v in params.items() if k in link.params}
-            skipped = [k for k in params if k not in link.params]
-            res = await run_in_threadpool(link.set_params, present)
-            pushed = [r for r in res if not r.get("ok")]
-            state.log(f"[scenario] {len(present) - len(pushed)}/{len(present)} parameters pushed for {sc.name}"
-                      + (f"; unknown to this firmware: {skipped}" if skipped else "")
-                      + (f"; FAILED: {[r['name'] for r in pushed]}" if pushed else ""))
+            if params:
+                present = {k: v for k, v in params.items() if k in link.params}
+                skipped = [k for k in params if k not in link.params]
+                res = await run_in_threadpool(link.set_params, present)
+                pushed = [r for r in res if not r.get("ok")]
+                state.log(f"[scenario] {len(present) - len(pushed)}/{len(present)} parameters pushed for {sc.name}"
+                          + (f"; unknown to this firmware: {skipped}" if skipped else "")
+                          + (f"; FAILED: {[r['name'] for r in pushed]}" if pushed else ""))
+            return pushed
+
+        # pushed before the fresh start too: PX4 saves them, so reboot-only ones (gyro filters) take effect on it
+        pushed = await push_all()
         if body.get("reset", True):
             if getattr(link, "armed", False):
                 # a previous flight (or crash) left PX4 armed: it must be disarmed before the vehicle is put back
@@ -1112,6 +1133,29 @@ def build_app(state: AppState) -> FastAPI:
                         break
                     await asyncio.sleep(0.1)
             sim.reset(yaw=float(body.get("yaw", 0.0)))
+            if body.get("fresh_px4", True):
+                # the vehicle now rests where the flight starts: a running estimator would take that jump for a
+                # sensor fault and refuse to arm, so PX4 starts afresh on it (SITL relaunch / HITL board reboot)
+                state.log(f"[scenario] {sc.name}: fresh PX4 start on the parked vehicle (estimator aligns on the new rest)")
+                tries = int(body.get("estimator_tries", 3))
+                for attempt in range(1, tries + 1):
+                    t_start = time.time()
+                    fr = await run_in_threadpool(state.conn.fresh_px4)
+                    if not fr.get("ok"):
+                        return JSONResponse({"ok": False, "error": f"fresh PX4 start: {fr.get('error')}"}, status_code=503)
+                    state.log(f"[scenario] {', '.join(fr.get('steps', []))} in {fr.get('s', '?')} s")
+                    pushed = await push_all()     # normally nothing left to change; covers a board that lost some
+                    # a relaunch now and then leaves EKF2 starved (only Manual / Acro armable): start again rather
+                    # than let wait_ready time out
+                    up = await run_in_threadpool(state.conn.estimator_up, t_start, float(body.get("estimator_wait", 20.0)))
+                    if up is not False:
+                        break
+                    can = state.conn.link.can_arm_modes() if state.conn.link is not None else ""
+                    if attempt == tries:
+                        state.log(f"[scenario] PX4's estimator did not start after {tries} fresh starts (can arm: {can or '?'})")
+                        return JSONResponse({"ok": False, "error": f"PX4's estimator did not start after {tries} fresh starts "
+                                                                   f"(can arm only: {can or '?'}); try Fly live again"}, status_code=503)
+                    state.log(f"[scenario] PX4's estimator did not start (can arm only: {can or '?'}): fresh start {attempt + 1}/{tries}")
         runner = ScenarioRunner(sc, link, log=state.log, metrics=MetricsRecorder())
         state.scenario_job = {"runner": runner, "name": sc.name, "started": time.time(), "result": None, "failed_params": pushed}
         sim.hooks.append(runner)
@@ -1443,7 +1487,9 @@ def build_app(state: AppState) -> FastAPI:
                 if new_logs:
                     msg["log"] = new_logs
                     last_log = new_logs[-1][0]
-                await websocket.send_text(json.dumps(msg))
+                # a non-finite number (a crashed state, a poisoned filter) must not stop the whole stream: the
+                # browser's JSON.parse rejects NaN, and every later message would be dropped with it
+                await websocket.send_text(json.dumps(json_safe(msg)))
                 await asyncio.sleep(1 / 30)
         except WebSocketDisconnect:
             pass

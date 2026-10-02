@@ -205,6 +205,8 @@ class VibrationMetrics:
         self._a = None; self._g = None
 
     def update(self, accel: np.ndarray, gyro: np.ndarray) -> None:
+        if not (np.all(np.isfinite(accel)) and np.all(np.isfinite(gyro))):
+            return                                  # one NaN would stay in the 0.99 filter for good
         if self._a is not None:
             da = accel - self._a; dg = gyro - self._g
             self.accel = 0.99 * self.accel + 0.01 * math.sqrt(float(da @ da))

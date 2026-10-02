@@ -176,6 +176,14 @@ class PX4Link:
         with self._write_lock:
             self.conn.mav.hil_gps_send(**g)
 
+    def send_hil_optical_flow(self, f: dict) -> None:
+        with self._write_lock:
+            self.conn.mav.hil_optical_flow_send(**f)
+
+    def send_distance_sensor(self, d: dict) -> None:
+        with self._write_lock:
+            self.conn.mav.distance_sensor_send(**d)
+
     def send_hil_state_quaternion(self, st: dict) -> None:
         with self._write_lock:
             self.conn.mav.hil_state_quaternion_send(**st)

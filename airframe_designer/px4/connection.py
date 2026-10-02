@@ -397,6 +397,14 @@ class ConnectionManager:
     def firmware_file(self, target: str | None) -> str | None:
         if not target:
             return None
+        # the checklist's "Flash firmware" must not swap the nose-lift build (which also has the HIL driver) for the
+        # stock HITL image: prefer the Flash tab's nose-lift image when it is built
+        from . import firmware_images
+        nl = firmware_images.get("nose_lift")
+        if nl:
+            f = firmware_images.image_file(nl, target)
+            if f.is_file():
+                return str(f)
         v = self.firmware_variant(target)
         f = Path(self.args.px4_dir) / "build" / f"{target}_{v}" / f"{target}_{v}.px4"
         return str(f) if f.is_file() else None
@@ -596,6 +604,96 @@ class ConnectionManager:
                     steps.append("estimator restarting")
         return {"ok": True, "steps": steps}
 
+    _flight_owns_mode_until = 0.0
+
+    def fresh_px4(self, timeout: float = 75.0, sitl_attempt_s: float = 25.0, sitl_attempts: int = 3) -> dict:
+        """A fresh PX4 for the next live flight: the vehicle must already sit where the flight starts. A running
+        estimator sees the sim's reset (back to the origin, another parked pitch) as a sensor fault ("Attitude
+        failure", "High Accelerometer Bias") and refuses to arm; only a fresh boot aligns on the new rest. SITL:
+        our PX4 is relaunched (again if its startup hangs: now and then rcS stops after the GCS MAVLink instance and
+        the onboard link on 14540+i never opens); HITL: the board reboots. Blocks until the link is back with its
+        parameters."""
+        link = self.link
+        sitl_ours = self.mode == "sitl" and self.args.launch_px4 and self.px4_running()
+        if link is None or not (link.ctl_connected or sitl_ours):
+            return {"ok": False, "steps": [], "error": "PX4 not connected"}
+        self._flight_owns_mode_until = time.time() + timeout + 30
+
+        def back(session0: int, wait: float) -> float | None:
+            t0 = time.time()
+            while time.time() - t0 < wait:
+                time.sleep(0.5)
+                lk = self.link
+                if (lk is not None and self._params_session > session0 and lk.ctl_connected
+                        and time.time() - lk.ctl_rx_time < 2.0 and lk.param_count
+                        # the count can move by a parameter or two across a reboot (1139 vs 1145 seen on the 6X once flow data arrives)
+                        and len(lk.params) >= 0.97 * lk.param_count
+                        and (lk.connected if self.mode == "sitl" else lk.hil_enabled)):
+                    return round(time.time() - t0, 1)
+            return None
+
+        if self.mode == "hitl":
+            session0 = self._params_session
+            self._reset_busy_until = time.time() + 30
+            link.reboot()
+            self._after_reboot(link)
+            self.log("[px4] fresh start for the flight: board rebooted")
+            # the USB link often reopens before the watcher sees it drop, so do not wait on its session counter:
+            # wait for the board to go quiet, then for HIL actuator outputs to flow again
+            t0 = time.time(); s = None
+            while time.time() - t0 < 20 and time.time() - link.ctl_rx_time < 1.0:
+                time.sleep(0.2)
+            while time.time() - t0 < timeout:
+                lk = self.link
+                if lk is not None and lk.ctl_connected and time.time() - lk.ctl_rx_time < 1.0 and lk.hil_enabled:
+                    seq = lk.actuator_seq
+                    time.sleep(2.0)
+                    if lk.actuator_seq - seq > 100 and lk.param_count and len(lk.params) >= 0.97 * lk.param_count:
+                        s = round(time.time() - t0, 1); break
+                time.sleep(0.5)
+            if s is None:
+                lk = self.link
+                why = (f"session {self._params_session - session0:+d}, ctl {lk.ctl_connected}, params {len(lk.params)}/"
+                       f"{lk.param_count}, HIL {lk.hil_enabled}") if lk else "no link"
+                return {"ok": False, "steps": ["board rebooted"], "error": f"the board did not come back within {timeout:.0f} s ({why})"}
+            return {"ok": True, "steps": ["board rebooted"], "s": s}
+        if not sitl_ours:
+            # a PX4 the app did not launch cannot be restarted from here: restart its estimator instead
+            link.restart_estimator()
+            return {"ok": True, "steps": ["estimator restarted (PX4 not launched by the app)"]}
+        steps = []
+        for attempt in range(1, sitl_attempts + 1):
+            session0 = self._params_session
+            self._reset_busy_until = time.time() + sitl_attempt_s
+            self.stop_px4()
+            time.sleep(0.5)
+            self.connect_sitl()
+            steps.append("PX4 SITL relaunched" if attempt == 1 else f"relaunched again (attempt {attempt})")
+            self.log(f"[px4] fresh start for the flight: {steps[-1]}")
+            s = back(session0, sitl_attempt_s)
+            if s is not None:
+                return {"ok": True, "steps": steps, "s": s}
+            self.log(f"[px4] PX4 did not answer on its onboard link within {sitl_attempt_s:.0f} s (startup hang)")
+        return {"ok": False, "steps": steps, "error": f"PX4 did not come back after {sitl_attempts} launches"}
+
+    def estimator_up(self, since: float, wait: float = 20.0) -> bool | None:
+        """After a fresh start: does PX4's estimator run? Now and then a relaunched SITL PX4 comes up with EKF2
+        starved ("ekf2 missing data", "No valid attitude estimate") and only Manual / Acro can arm, for good: the
+        flight then sat 45 s in wait_ready and aborted. True once an arming-check summary issued after ``since``
+        allows an attitude mode (Stabilized and up); False if none did within ``wait`` s although summaries came;
+        None if PX4 sent no summary at all (a HITL board without event metadata: nothing to judge by)."""
+        t0 = time.time()
+        seen = False
+        while time.time() - t0 < wait:
+            lk = self.link
+            can = lk.can_arm_modes(since=since) if lk is not None else ""
+            if can:
+                seen = True
+                if any(m in can.split("|") for m in ("stab", "altctl", "posctl", "loiter", "takeoff", "mission")):
+                    return True
+            time.sleep(0.5)
+        return False if seen else None
+
     def _settle_after_reset(self, link) -> None:
         """Let the fresh sensor data flow for a moment, then restart EKF2 so it re-aligns on the reset vehicle."""
         time.sleep(2.0)
@@ -612,6 +710,8 @@ class ConnectionManager:
         from .link import mavlink
         t0 = time.time()
         while time.time() - t0 < timeout and self.link is link and link.ctl_connected:
+            if time.time() < self._flight_owns_mode_until:
+                return                 # a live scenario restarted PX4 for its flight: it chooses the mode itself
             summary = None
             for x in reversed(list(link.recent_events)):
                 if x.get("name") == "commander_arming_check_summary":
@@ -652,6 +752,29 @@ class ConnectionManager:
         self.log("[hitl] SYS_HITL=1 saved, rebooting the flight controller; waiting for it to come back…")
         return {"ok": True}
 
+    def _hil_driver_probe(self, link) -> bool:
+        """Is pwm_out_sim built into the firmware even though its HIL_ACT_FUNC parameters are not listed? PX4 lists a
+        module's parameters only once the module has run, and pwm_out_sim starts only with SYS_HITL = 1, so on a
+        HITL-capable image that is not yet in HIL mode the parameters are missing and the checklist could never reach
+        the SYS_HITL step. Ask the shell once per connection, in the background: a build without the module answers
+        "command not found"."""
+        key = (link.address, link.target_system, link.param_count)
+        probe = getattr(self, "_hil_probe", None)
+        if probe and probe["key"] == key:
+            return probe["result"] is True
+        self._hil_probe = probe = {"key": key, "result": None}
+
+        def run():
+            try:
+                out = link.shell("pwm_out_sim status", timeout=3.0)
+                probe["result"] = ("pwm_out_sim" in out) and ("not found" not in out) and ("Invalid command" not in out)
+                self.log(f"[hitl] firmware {'has' if probe['result'] else 'lacks'} the HIL output driver (pwm_out_sim, by the shell)")
+            except Exception as e:
+                probe["result"] = False
+                self.log(f"[hitl] could not ask the shell for pwm_out_sim: {e}")
+        threading.Thread(target=run, name="hil-driver-probe", daemon=True).start()
+        return False
+
     def checklist(self, export_params: dict | None = None) -> list[dict]:
         link = self.link
         steps = []
@@ -668,7 +791,7 @@ class ConnectionManager:
         params_ok = hitl and link.param_count > 0 and len(link.params) >= link.param_count
         steps.append({"id": "params", "label": "Parameters downloaded", "ok": params_ok,
                       "detail": f"{len(link.params)}/{link.param_count}" if hitl else ""})
-        has_hil_driver = hitl and params_ok and any(k.startswith("HIL_ACT_FUNC") for k in link.params)
+        has_hil_driver = hitl and params_ok and (any(k.startswith("HIL_ACT_FUNC") for k in link.params) or self._hil_driver_probe(link))
         fw = link.firmware if hitl else {}
         board = self.detected_board()
         built = self.firmware_file(board["target"])

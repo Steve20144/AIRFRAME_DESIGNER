@@ -53,27 +53,34 @@ class Scenario:
     attitude: dict = field(default_factory=dict)     # {"park_pitch_deg": -10, "hover_pitch_deg": 25} ("trim" / "hover" allowed; "hover_thrust": "trim"): the flight starts
                                                      # parked at the first, PX4 levels at the second (legs re-solved)
     design: dict = field(default_factory=dict)       # merged into airframe.design, e.g. {"nose_lift": {"executor": "firmware"}}
+    variables: dict = field(default_factory=dict)    # parameter paths applied to the airframe first, e.g. {"knobs.foil_2_deg": 25}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Scenario":
         return cls(name=d.get("name", "scenario"), phases=list(d.get("phases", [])), max_time=float(d.get("max_time", 120.0)),
                    params=dict(d.get("params", {}) or {}), wind=list(d.get("wind", [0, 0, 0]) or [0, 0, 0]),
                    abort=dict(d.get("abort", {}) or {}), description=str(d.get("description", "")),
-                   attitude=dict(d.get("attitude", {}) or {}), design=dict(d.get("design", {}) or {}))
+                   attitude=dict(d.get("attitude", {}) or {}), design=dict(d.get("design", {}) or {}),
+                   variables=dict(d.get("variables", {}) or {}))
 
     def to_dict(self) -> dict:
         return {"name": self.name, "description": self.description, "max_time": self.max_time, "params": self.params,
                 "wind": self.wind, "abort": self.abort, "phases": self.phases, "attitude": self.attitude,
-                "design": self.design}
+                "design": self.design, "variables": self.variables}
 
     def apply_attitude(self, airframe):
-        """The airframe as this scenario wants it parked and hovering (unchanged when the scenario says nothing)."""
+        """The airframe as this scenario wants it parked and hovering (unchanged when the scenario says nothing).
+        ``variables`` (design knobs, any parameter path) go on first, so a "trim" hover pitch is the new geometry's."""
+        if self.variables:
+            from ..geometry.paths import apply_variables
+            airframe = apply_variables(airframe, dict(self.variables))
+            airframe.resolve_mass()
         a = dict(self.attitude or {})
         # "trim": the airframe's own static hover trim (geometry sweeps); park "hover": parked at that hover pitch
         if a.get("hover_pitch_deg") == "trim":
             a["hover_pitch_deg"] = airframe.trim_hover_pitch()
             if a["hover_pitch_deg"] is None:
-                raise ValueError("no hover pitch between -10 and 40 deg balances the hover mix for this geometry")
+                raise ValueError("no hover pitch between -10 and 80 deg balances the hover mix for this geometry")
         if a.get("hover_pitch_offset_deg") and a.get("hover_pitch_deg") is not None:   # fly off trim on purpose
             a["hover_pitch_deg"] = float(a["hover_pitch_deg"]) + float(a["hover_pitch_offset_deg"])
         if a.get("park_pitch_deg") == "hover":
@@ -211,6 +218,13 @@ class ScenarioRunner:
         if self._rc is not None and self._rc_on and link is not None:
             if simr.step_count % max(1, int(round(simr.sensor_rate / 50.0))) == 0:
                 link.send_rc_override(self._rc)
+        elif (link is not None and self._rc is None and self.phase.get("type") not in ("stick", "manual", "rc")
+              and set(self._arming_modes(0)) & {"stab", "altctl", "manual", "acro"}):
+            # a flight that arms in a stick mode needs a stick signal before it arms: with MAVLink sticks only
+            # (COM_RC_IN_MODE 1) PX4 will not list Stabilized as armable until manual control arrives, so stream
+            # neutral sticks at zero throttle through the waiting / nose-lift phases
+            if simr.step_count % max(1, int(round(simr.sensor_rate / 50.0))) == 0:
+                link.send_manual_control(0.0, 0.0, 0.0, 0.0)
         handler = getattr(self, "_p_" + self.phase.get("type", ""), None)
         if handler is None:
             self.fail(simr, f"unknown phase type '{self.phase.get('type')}'"); return
@@ -221,6 +235,17 @@ class ScenarioRunner:
         if self._elapsed(simr) >= float(self.phase.get("duration", 1.0)):
             self._next(simr)
 
+    def _arming_modes(self, start: int | None = None) -> list[str]:
+        """The mode the scenario arms in (its first arming phase), in the arming summary's names: a flight that arms
+        in Stabilized is ready when PX4 can arm in stab, even without a position (HITL with GPS fusion off)."""
+        names = {"stabilized": "stab", "altitude": "altctl", "position": "posctl", "hold": "loiter",
+                 "manual": "manual", "acro": "acro", "takeoff": "takeoff"}
+        for ph in self.sc.phases[(self.index + 1) if start is None else start:]:
+            if ph.get("arm"):
+                m = names.get(str(ph.get("mode", "")).lower())
+                return [m] if m else []
+        return []
+
     def _p_wait_ready(self, simr) -> None:
         link = self.link
         st = self._state
@@ -230,18 +255,47 @@ class ScenarioRunner:
         can = link.can_arm_modes(since=st["wall_t0"]) if link is not None else ""
         if self._elapsed(simr) < float(self.phase.get("min_wait", 0.0)):
             return
-        want = [str(m) for m in (self.phase.get("modes") or ["takeoff", "loiter", "posctl"])]
+        want = [str(m) for m in (self.phase.get("modes") or self._arming_modes() or ["takeoff", "loiter", "posctl"])]
         ready = link is not None and link.ctl_connected and any(m in can for m in want)
         if not can and link is not None and link.ctl_connected and self._elapsed(simr) > float(self.phase.get("summary_wait", 12.0)):
             # a HITL board whose event metadata is not loaded never yields a decoded arming summary: go on and let
             # the arm/takeoff phase report what PX4 says
             self.log(f"[scenario] no arming-check summary from PX4 after {self._elapsed(simr):.0f}s (event metadata missing?), proceeding")
             self._next(simr)
+        elif ready and not self._estimator_settled(simr):
+            return
         elif ready:
             self.log(f"[scenario] PX4 ready after {simr.t:.1f}s sim time (can arm: {can.replace('|', ', ')})")
             self._next(simr)
         elif self._elapsed(simr) > float(self.phase.get("timeout", 60.0)):
             self.fail(simr, f"PX4 never became ready to arm (last summary: '{can}')", fatal=True)
+
+    def _estimator_settled(self, simr) -> bool:
+        """PX4 can report ready to arm a second after boot, while its roll / pitch estimate is still converging (a
+        freshly relaunched live PX4 showed 9.8 deg off the truth then). Rotating and arming on that leaves a
+        lasting accel-bias error in EKF2 (0.2-0.4 deg of tilt, 12-45 m of hover drift live vs 3 m headless). So wait
+        until the estimate stays within ``settle_deg`` (default 0.15) of the truth for ``settle_s`` (default 2 s);
+        after ``settle_timeout`` (default 30 s) go on with a warning. A link that never reports an estimate (no
+        ``board_att``) counts as settled."""
+        st = self._state
+        if self.link is None or not hasattr(self.link, "board_att"):
+            return True
+        est = self.link.board_att
+        if not est or time.time() - float(est.get("t", 0.0)) > 0.5:
+            return self._elapsed(simr) > float(self.phase.get("settle_timeout", 30.0))
+        r, p, _ = simr.sim.hover_frame_euler()
+        err = math.degrees(max(abs(est["roll"] - r), abs(est["pitch"] - p)))
+        tol, need = float(self.phase.get("settle_deg", 0.15)), float(self.phase.get("settle_s", 2.0))
+        if err > tol:
+            st["settle_since"] = None
+        elif st.get("settle_since") is None:
+            st["settle_since"] = simr.t
+        if st.get("settle_since") is not None and simr.t - st["settle_since"] >= need:
+            return True
+        if self._elapsed(simr) > float(self.phase.get("settle_timeout", 30.0)):
+            self.log(f"[scenario] PX4 attitude estimate still {err:.2f} deg off the truth after {self._elapsed(simr):.0f}s, proceeding")
+            return True
+        return False
 
     def _p_takeoff(self, simr) -> None:
         st, link = self._state, self.link

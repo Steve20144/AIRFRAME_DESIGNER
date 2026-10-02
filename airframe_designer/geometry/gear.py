@@ -81,9 +81,10 @@ def legs_for_park_pitch(legs: list[Leg], park_pitch_deg: float, min_length: floa
     mean_len = float(np.mean([l.length for l in active]))
     # feet on the plane n.f = c, lengths L_i = (c - n.a_i) / (n.d_i), mean(L) = mean_len
     c = (mean_len + float(np.mean(na / nd))) / float(np.mean(1.0 / nd))
+    # a steep park would shorten the low leg(s) below min_length: lower the ground plane instead, so the shortest
+    # leg sits at min_length and the others grow (the stand gets taller rather than impossible)
+    c = max(c, float(np.max(min_length * nd + na)))
     lengths = (c - na) / nd
-    if np.any(lengths < min_length):
-        raise ValueError(f"parked pitch {park_pitch_deg:g} deg needs a leg shorter than {min_length} m")
     feet = a + lengths[:, None] * d
     if cg is not None:
         cg = np.asarray(cg, float)
