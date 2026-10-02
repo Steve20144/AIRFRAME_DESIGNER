@@ -1,6 +1,24 @@
 # How to run
 
-## Environment
+## macOS (Apple Silicon, since 2026-09-26)
+
+The repo also runs natively on macOS (arm64, macOS 26), no Homebrew or sudo needed:
+
+- repo: `~/Documents/UtopiaLabs/AIRFRAME_DESIGNER`; interpreter `.venv/bin/python` (Python 3.12 from `uv`, installed
+  to `~/.local/bin/uv`): `uv venv --python 3.12 .venv && uv pip install -e ".[dev]" cadquery-ocp matplotlib resvg-py`
+- PX4 SITL: `~/PX4-Autopilot` at v1.17.0 (clean clone, `--recurse-submodules`), build tools in `~/.venvs/px4-build`
+  (PX4's `Tools/setup/requirements.txt` + pip `cmake ninja`). Build:
+  `PATH=~/.venvs/px4-build/bin:$PATH CMAKE_POLICY_VERSION_MINIMUM=3.5 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk make px4_sitl_default`
+- `SDKROOT` matters: the Command Line Tools default to the MacOSX27.0 SDK, whose `.tbd` stubs (arm64e.x1) the
+  installed ld-1267 cannot read, so every link fails ("tapi error: malformed file"). CMake 4 needs the policy floor.
+- Commands are the same as below with `.venv/bin/python`; no `wsl.exe` wrapper. One V3 flight takes ~5 s wall
+  (rtf ~10), a 286-design x 3-pitch study ~19 min on 8 workers. All 248 fast tests and the `px4` test pass.
+- `airframes/cad/*.bodies.json` (CAD meshes, gitignored) is rebuilt by `geometry.cad.import_step(path)` (needs
+  cadquery-ocp). `scripts/v3_foil_views.py` writes the PNGs through resvg off Windows (it inlines the CSS vars).
+- Not ported: the HITL/board tooling (`usbip.py`, COM ports, firmware flashing); on macOS the board is a `/dev/cu.*`
+  device and needs no usbipd.
+
+## Environment (Windows + WSL)
 
 The repo sits on the Windows filesystem but runs only inside WSL `Ubuntu-24.04`:
 
@@ -55,3 +73,13 @@ from the app reserve instances from 9 downward and skip the sweep's.
 - Before a flash, ask the board what it runs (`ver all` over the radio, parameters present or not); a commit message
   is not evidence of what was flashed.
 
+
+## Theory notebooks (2026-10-01)
+
+`notebooks/00_index.ipynb` .. `07_jsbsim_and_chrono.ipynb`: frames, quaternions, equations of motion, ground contact,
+sensors (H-FLOW), fans/jetfoils/Coanda, JSBSim/Chrono. Theory and plain-language notes above runnable cells that call
+the real package on `airframes/atlas_v3_v34_foils_50_65_50_tuned.json`. Kernel "AIRFRAME_DESIGNER (.venv)"
+(registered with `.venv/bin/python -m ipykernel install --user --name airframe-designer`; nbformat, nbclient and
+ipykernel installed with `uv pip install --python .venv/bin/python`, the venv has no pip). Source of truth is
+`notebooks/_build_notebooks.py`; rebuild with it rather than hand-editing the .ipynb files. Long-form version:
+`docs/ATLAS_Simulator_Physics.pdf`.

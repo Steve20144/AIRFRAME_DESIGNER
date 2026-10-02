@@ -1,0 +1,132 @@
+{
+  "name": "2026-09-30_1918_v3_foils_out50_mid65_in50deg_park-16_rotate_hover",
+  "description": "ATLAS V3, foils 50 / 65 / 50 deg (exit angle outer / middle / inner), tuned gains (airframes/atlas_v3_v34_foils_50_65_50_tuned_park_m16.json, the parameters on the board). Parked nose-down at -16 deg (legs solved for -14.15; they settle ~1.85 deg under the weight). The nose fans M7-M9 rotate it up to the trim hover pitch (23.85 deg) at 3 deg/s, arm in Stabilized and start the climb the moment PX4 is armed (no idle wait on the legs), lift off to 2.5 m and hover 60 s hands-off. Then a gentle landing (0.4 m/s to 0.7 m, 0.15 m/s flare), cut, and the nose lowered back to -16 at 3 deg/s with a 4 s fade, so the flight ends on the ground. For SITL or HITL (Fly live). MC_AIRMODE 0: with airmode on, PX4 keeps full pitch authority and an unreset rate integrator at idle on the legs, and the armed aircraft rocked on its spring legs (up to 54 deg/s before lift-off, 2 of 3 seeds). H-FLOW on (as built: below the Pixhawk, tilted 20.4 deg): the estimator's speed and height reference.",
+  "max_time": 260,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1,
+    "MC_AIRMODE": 0
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "attitude": {
+    "park_pitch_deg": -14.15,
+    "hover_pitch_deg": "trim",
+    "hover_thrust": "trim"
+  },
+  "design": {
+    "nose_lift": {
+      "executor": "sim"
+    },
+    "flow_sensor": {
+      "enabled": true
+    }
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "nose_lift",
+      "name": "rotate_up",
+      "motors": [
+        6,
+        7,
+        8
+      ],
+      "rate_deg_s": 3,
+      "timeout": 45,
+      "timeout_s": 45
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "until": {
+        "armed": true
+      },
+      "timeout": 40
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 3,
+      "duration": 8,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 60,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "descent",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 5.5,
+      "alt_hold": {
+        "target": 0.7,
+        "rate": 0.4,
+        "min": 0.2
+      }
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 30,
+      "alt_hold": {
+        "target": -0.5,
+        "rate": 0.15,
+        "min": 0.2
+      },
+      "until_ground": true,
+      "settle": 0.3
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "stabilized",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "name": "rotate_down",
+      "motors": [
+        6,
+        7,
+        8
+      ],
+      "target_pitch_deg": -14.15,
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ]
+}

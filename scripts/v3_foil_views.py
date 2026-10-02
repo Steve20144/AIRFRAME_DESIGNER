@@ -1,10 +1,12 @@
 """Side, front and top view of ATLAS V3 small (CAD render as the base) with switchable layers: the CAD foil's jet angles,
 the best configuration's angles, nose fans, CG and batteries.
 
-Writes one self-contained HTML page (each view has a Save PNG button; Save all PNGs saves the three) and, when
-Microsoft Edge is available (Windows, called from WSL), the three views as PNGs beside it in the light theme.
+Writes one self-contained HTML page (each view has a Save PNG button; Save all PNGs saves the three) and the three
+views as PNGs beside it in the light theme: through headless Edge on Windows (called from WSL), else through resvg
+(pip install resvg-py; macOS and Linux).
 
-  python scripts/v3_foil_views.py [out.html] [best_airframe.json]     (default docs/v3_views/v3_foil_angles.html)
+  python scripts/v3_foil_views.py [out.html] [airframe.json] [label]
+      defaults docs/v3_views/v3_foil_angles.html, airframes/atlas_v3_small_best.json, "Best config"
 """
 import base64, io, json, math, os, shutil, subprocess, sys
 import numpy as np
@@ -20,6 +22,7 @@ frd = lambda p: R_CAD @ np.asarray(p, float) + ORIGIN
 
 cad = json.load(open("airframes/cad/SMALL_SCALE_V3.step.bodies.json"))
 best = Airframe.load(sys.argv[2] if len(sys.argv) > 2 else "airframes/atlas_v3_small_best.json")
+NAME_LABEL = sys.argv[3] if len(sys.argv) > 3 else "Best config"
 BEST_LABEL = " / ".join(f"{round(r.tilt_deg, 1):g}" for r in best.rotors[0:6:2]) + f", nose {round(abs(best.rotors[6].cant_deg), 1):g}°"
 FOIL = {"M1": 75.4, "M2": 75.4, "M3": 74.6, "M4": 74.6, "M5": 72.7, "M6": 72.7}     # CAD foil exit, deg below the duct line
 TE = {0.364: frd([0.364, 0.056, 0.466]), 0.282: frd([0.282, 0.117, 0.452]), 0.2: frd([0.2, 0.178, 0.44])}   # foil trailing edges (right side)
@@ -195,7 +198,7 @@ text.legend { font-size:12px; font-weight:500; fill:var(--muted); stroke:none; }
 MARKERS = "".join(f'<marker id="arr-{c.replace(" ", "-")}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">'
                   f'<path d="M0,0 L10,5 L0,10 z" class="marker-{v}"/></marker>'
                   for c, v in (("asbuilt", "asbuilt"), ("asbuilt jet", "asbuilt"), ("best", "best"), ("best jet", "best"), ("nose", "nose"), ("axis", "axis")))
-LEGEND = f"Blue: best config ({BEST_LABEL}) · dashed orange: CAD foil as built · purple: nose fans · green: batteries"
+LEGEND = f"Blue: {NAME_LABEL.lower()} ({BEST_LABEL}) · dashed orange: CAD foil as built · purple: nose fans · green: batteries"
 PAD_TOP, PAD_BOT = 44, 12
 
 
@@ -298,7 +301,7 @@ html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
 <div class="controls">
   <label><input type="checkbox" data-toggle="cad" checked> CAD</label>
   <label><input type="checkbox" data-toggle="asbuilt" checked><span class="sw" style="background:var(--asbuilt)"></span> CAD foil (as built)</label>
-  <label><input type="checkbox" data-toggle="best" checked><span class="sw" style="background:var(--best)"></span> Best config ({BEST_LABEL})</label>
+  <label><input type="checkbox" data-toggle="best" checked><span class="sw" style="background:var(--best)"></span> {NAME_LABEL} ({BEST_LABEL})</label>
   <label><input type="checkbox" data-toggle="nose" checked><span class="sw" style="background:var(--nose)"></span> Nose fans</label>
   <label><input type="checkbox" data-toggle="mass" checked><span class="sw" style="background:var(--batt)"></span> CG + batteries</label>
   <label><input type="checkbox" data-toggle="horizon"><span class="sw" style="background:var(--horizon)"></span> Hover horizon</label>
@@ -309,8 +312,8 @@ html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
 {view_html("side")}
 {view_html("front")}
 {view_html("top")}
-<div class="wrap"><table><thead><tr><th>Station</th><th>Fans</th><th>CAD θ</th><th>CAD δ</th><th>Best θ</th><th>Best δ</th></tr></thead><tbody>{rows}</tbody></table></div>
-<p class="note">Long arrows at the fans: thrust direction. Short arrows at the foil trailing edges: jet leaving the foil. Solid blue = best configuration, dashed orange = the CAD foil as drawn (jet fully attached). In the front view the foil thrust has no sideways part, so both layers point straight up there and differ only in length (the vertical share of the thrust); the nose fans' 30° inward cant shows only in that view. In the top view the foil arrows are drawn twice as long: their forward share is small. Side view shows the right-hand fans (the left ones sit behind them). Battery sizes and spacing are assumed; masses 12.8 kg, CG as listed.</p>
+<div class="wrap"><table><thead><tr><th>Station</th><th>Fans</th><th>CAD θ</th><th>CAD δ</th><th>{NAME_LABEL.split()[0]} θ</th><th>{NAME_LABEL.split()[0]} δ</th></tr></thead><tbody>{rows}</tbody></table></div>
+<p class="note">Long arrows at the fans: thrust direction. Short arrows at the foil trailing edges: jet leaving the foil. Solid blue = {NAME_LABEL.lower()}, dashed orange = the CAD foil as drawn (jet fully attached). In the front view the foil thrust has no sideways part, so both layers point straight up there and differ only in length (the vertical share of the thrust); the nose fans' 30° inward cant shows only in that view. In the top view the foil arrows are drawn twice as long: their forward share is small. Side view shows the right-hand fans (the left ones sit behind them). Battery sizes and spacing are assumed; masses 12.8 kg, CG as listed.</p>
 </main>
 <svg id="markers" width="0" height="0" style="position:absolute"><defs>{MARKERS}</defs></svg>
 <script>{SCRIPT}</script>
@@ -328,6 +331,13 @@ def win(path):
     return subprocess.check_output(["wslpath", "-w", os.path.abspath(path)], text=True).strip()
 
 
+def inline_vars(svg, theme):
+    """resvg does not resolve CSS custom properties: write the theme's colours into the rules."""
+    for k, v in theme.items():
+        svg = svg.replace(f"var(--{k})", v)
+    return svg.replace("system-ui, \"Segoe UI\", sans-serif", "\"Helvetica Neue\", Helvetica, Arial, sans-serif")
+
+
 if os.path.exists(EDGE) and shutil.which("wslpath"):
     for view in ("side", "front", "top"):
         _, w, h, _, _ = parts(view)
@@ -343,4 +353,13 @@ if os.path.exists(EDGE) and shutil.which("wslpath"):
         size = os.path.getsize(png_path) // 1024 if os.path.exists(png_path) else None
         print("wrote", png_path, f"{size} kB" if size is not None else "MISSING")
 else:
-    print("Edge not found: PNGs not written (use the page's Save PNG buttons)")
+    try:
+        import resvg_py
+    except ImportError:
+        resvg_py = None
+        print("neither Edge nor resvg found: PNGs not written (pip install resvg-py, or use the page's Save PNG buttons)")
+    for view in (("side", "front", "top") if resvg_py else ()):
+        png_path = os.path.join(out_dir, f"v3_{view}.png")
+        data = resvg_py.svg_to_bytes(svg_string=inline_vars(standalone_svg(view), LIGHT), zoom=2.0)
+        open(png_path, "wb").write(bytes(data))
+        print("wrote", png_path, f"{os.path.getsize(png_path) // 1024} kB")

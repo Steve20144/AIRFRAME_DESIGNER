@@ -1,0 +1,98 @@
+{
+  "name": "2026-09-30_1247_v3_foils_out50_mid65_in50deg",
+  "description": "Created 2026-09-30 12:47. ATLAS V3 v34 with jetfoil exit angles 50 deg outer, 65 deg middle, 50 deg inner (below the duct line; thrust lean 40 / 25 / 40 deg), set by the scenario itself so it applies to whichever airframe is loaded (use the recommended layout, airframes/atlas_v3_v34_recommended.json). Parked and hovering at the new geometry's trim (about 23.9 deg), MPC_THR_HOVER matched; arm in Stabilized, lift off to 2.5 m, 12 s hands-off hover, land.",
+  "max_time": 200,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 3,
+      "duration": 8,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 12,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 30,
+      "alt_hold": {
+        "target": -0.5,
+        "rate": 0.4,
+        "min": 0.2
+      },
+      "until_ground": true,
+      "settle": 0.3
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "stabilized",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ],
+  "attitude": {
+    "park_pitch_deg": "hover",
+    "hover_pitch_deg": "trim",
+    "hover_thrust": "trim"
+  },
+  "variables": {
+    "knobs.foil_1_deg": 40.0,
+    "knobs.foil_2_deg": 25.0,
+    "knobs.foil_3_deg": 40.0
+  }
+}

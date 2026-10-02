@@ -1,0 +1,125 @@
+{
+  "name": "20_deg_v3_rotate_fly",
+  "description": "ATLAS V3 v34, recommended battery layout (airframes/atlas_v3_v34_recommended.json): parked nose-down at -8 deg (legs solved for -6.2; they settle 1.8 deg under the 11.8 kg), the three nose fans (M7-M9) rotate the aircraft about its rear feet up to the take-off angle (the trim hover pitch, 20.4 deg on this airframe, as in the successful v3_stab_nolift runs), arm in Stabilized, lift off to 2.5 m, hover 12 s hands-off, descend at 0.4 m/s to 0.7 m, flare at 0.15 m/s to touchdown, cut and rotate the nose back down to the same -8 deg rest at 3 deg/s with a 4 s fade.",
+  "max_time": 220,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "attitude": {
+    "park_pitch_deg": -6.2,
+    "hover_pitch_deg": "trim",
+    "hover_thrust": "trim"
+  },
+  "design": {
+    "nose_lift": {
+      "executor": "sim"
+    }
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "nose_lift",
+      "name": "rotate_up",
+      "motors": [
+        6,
+        7,
+        8
+      ],
+      "rate_deg_s": 3,
+      "timeout": 45,
+      "timeout_s": 45
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 3,
+      "duration": 8,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 12,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "descent",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 5.5,
+      "alt_hold": {
+        "target": 0.7,
+        "rate": 0.4,
+        "min": 0.2
+      }
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 30,
+      "alt_hold": {
+        "target": -0.5,
+        "rate": 0.15,
+        "min": 0.2
+      },
+      "until_ground": true,
+      "settle": 0.3
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "stabilized",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "name": "rotate_down",
+      "motors": [
+        6,
+        7,
+        8
+      ],
+      "target_pitch_deg": -6.2,
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ]
+}

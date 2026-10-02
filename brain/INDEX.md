@@ -16,7 +16,7 @@ current task needs.
 ## Architecture
 
 - [System Overview](architecture/overview.md): segments, frames, data flow, PX4 coupling.
-- [How to run](architecture/how-to-run.md): WSL environment, commands, ports, tests, conventions.
+- [How to run](architecture/how-to-run.md): macOS (native arm64 PX4 build, SDKROOT gotcha) and WSL environments, commands, ports, tests, conventions.
 - [Scenario runner and ground sequences](architecture/scenarios-and-ground-sequences.md): phases, the scripted pilot,
   the attitude block, nose lift and nose lower.
 - [Tuning tab](architecture/tuning-tab.md): attempts, sweeps, flight library, charts, API.
@@ -26,6 +26,9 @@ current task needs.
   rotors and linked CAD parts; Geometry tab card, `knobs.*` paths for sweeps (branch atlas-v5-design).
 - [ATLAS V3 small draft](architecture/atlas-v3-small.md): SMALL_SCALE_V3.step as an airframe; what is CAD, what is
   assumed; flies Stabilized at 10.5 deg in SITL but the heading turns 52 deg in 12 s.
+- [ATLAS V3 from the live Fusion design](architecture/atlas-v3-fusion.md): Fusion's local MCP server
+  (127.0.0.1:27182/mcp, `scripts/fusion_mcp.py`), labelled masses only, foil exit angles ray-traced on the B-rep,
+  `scripts/atlas_v3_from_fusion.py` -> `airframes/atlas_v3_v34*.json`; optical flow sensor model `sensors/flow.py`.
 - [Fan vibration model](architecture/vibration-model.md): `design.vibration` (imbalance, blade pass, mount, frame
   modes) at the IMU, PX4's vibration metrics, the `vibration` bench command, first numbers.
 
@@ -65,6 +68,14 @@ current task needs.
   (11.785 kg) best outer 17.5 / middle 25 / inner 25 deg lean, nose fans 30 as built; the draft fails; mixed station
   angles win, nose tilt barely matters; mass.resolve() ignored CAD bodies (fixed). CG sweep: no optimum, flights
   swing 0.5-6 m drift with 0.5 deg of hover pitch (cause: yaw authority, see lessons)
+- [2026-10-01 V3_30 STEP import + tune](experiments/2026-10-01-v3-30-step-import-and-tune.md) — top-level-label masses (14.4 kg), CAD legs, pitch-rate P 0.9 / I 0.05
+- [2026-10-01 V3_30 foil headroom sweep](experiments/2026-10-01-v3-30-foil-headroom-sweep.md): foils redistribute, do not add thrust; pick 35/75/70 doubles roll spare; 20 deg hover+rotation needs a 60 deg jet and a level park; park -10 needs jets 57.5/85/85
+- [2026-09-29 V3 v34 from Fusion: CG, authority, H-FLOW](experiments/2026-09-29-v3-v34-fusion-cg-hflow.md): 11.83 kg
+  labelled; rear battery block +195 mm aft -> drift 1.86 -> 0.53 m; yaw ~6x weaker than roll; H-FLOW must be tilted to
+  the hover frame (20.4 deg), belly or nose equal in SITL; CAD change notice published
+- [2026-09-26 V3 graded jetfoils](experiments/2026-09-26-v3-graded-jetfoils.md): jet steepest at the body, gentlest
+  at the foil end; best 40 / 30 / 15 lean (turned 50 / 60 / 75), trim 26.9, 9/9 flights, drift worst 0.51 m (previous
+  best 1.55); `airframes/atlas_v3_small_graded.json`, views in `docs/v3_views/graded/`; first sweep on macOS
 
 ## Research
 
@@ -88,6 +99,8 @@ current task needs.
 - [V3's hover-pitch sensitivity is the yaw authority limit](lessons/v3-hover-pitch-sensitivity-is-yaw-authority.md):
   same-spin reaction torque keeps yaw at its limit, it leaks into pitch, hands-off Stabilized turns that into drift;
   km 0 removes it; judge V3 sweeps over a km bracket or with counter-rotating fans
+- [A live app flight needs a fresh PX4, parked at the scenario's pitch](lessons/live-app-needs-fresh-px4-per-flight.md):
+  reboot-only IMU filter params, re-parking under a running EKF and a second flight's roll bias gave 17-21 m drift
 - [The default ULog cannot identify the nose lift](lessons/ulog-default-profile-misses-nose-lift.md): outputs at
   10 Hz, `nose_lift_output` not logged, no fan speed anywhere
 
@@ -135,7 +148,7 @@ to disarm ([telemetry dashboard](architecture/telemetry-dashboard.md)). State at
 
 ## Important Constraints
 
-- The repo runs only from WSL Ubuntu-24.04; port 8080 / PX4 instance 0 is the interactive app, never kill a session
+- The repo runs from WSL Ubuntu-24.04 on Windows or natively on macOS ([how to run](architecture/how-to-run.md)); port 8080 / PX4 instance 0 is the interactive app, never kill a session
   you did not start. Batch and tuning use instances 1 to 9.
 - Structural frame FRD, CG in `mass.cg`; PX4's level is the hover frame (`hover_pitch_deg`, SENS_BOARD_Y_OFF).
 - The simulation loop must never block on MAVLink in lockstep; scenario phases are non-blocking state machines.

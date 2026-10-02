@@ -40,3 +40,13 @@ lift's `start_pitch_deg` when a sweep behaves unlike the model's history.
 - A copied shell script can lose its execute bit on the way through /mnt/c; `scripts/x.sh` then fails with
   "Permission denied" and a pipeline that greps its output looks like a silent success. Call it with `bash`.
 
+
+## Tuning tab number fields in a comma-decimal locale (fixed 2026-09-30)
+
+The Attempt and Sweep tables used `<input type="number">`; in a comma locale the browser reports "" for "0.55" and
+`+""` is 0, so a typed gain silently became 0 (MC_PITCHRATE_P 0 -> the V3 tipped over at lift-off, "crashed: tilt 100
+deg"). The fields are now text with `inputmode="decimal"`, read by `tuneNum` in ui/app.js ("0.55" and "0,55" both
+work; unreadable keeps the old value). Sweep names keep paths as typed (only bare PX4 names are upper-cased).
+The crash also left NaN in `VibrationMetrics` (a 0.99 filter), and every websocket state message then failed
+JSON.parse in the browser: the filter now skips non-finite samples and the websocket sends `json_safe(msg)`.
+PX4 saves parameter changes to its instance directory: after a bad gain, re-seed it or the next boot has it again.

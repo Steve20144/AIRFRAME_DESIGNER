@@ -1,0 +1,219 @@
+{
+  "name": "v3_authority",
+  "description": "ATLAS V3 authority in Stabilized, parked and hovering at trim like v3_stab_nolift: after a 6 s hover, half roll stick right then left (6 deg commanded at MPC_MAN_TILT_MAX 12), half pitch stick forward then back, then full yaw right and left (MPC_MAN_Y_MAX commanded), each followed by a recovery; then land. Phase metrics: roll/pitch reached, yaw turned, fan headroom.",
+  "max_time": 200,
+  "params": {
+    "COM_RC_IN_MODE": 3,
+    "COM_DISARM_LAND": 3,
+    "COM_DISARM_PRFLT": -1
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "phases": [
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "stick",
+      "name": "arm",
+      "mode": "stabilized",
+      "arm": true,
+      "arm_tries": 25,
+      "throttle": 0.0,
+      "duration": 4
+    },
+    {
+      "type": "stick",
+      "name": "liftoff",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "ramp_s": 3,
+      "duration": 8,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "hover",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 6,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "roll_right",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 2,
+      "alt_hold": {
+        "target": 2.5
+      },
+      "roll": 0.5
+    },
+    {
+      "type": "stick",
+      "name": "recover_r1",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 3,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "roll_left",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 2,
+      "alt_hold": {
+        "target": 2.5
+      },
+      "roll": -0.5
+    },
+    {
+      "type": "stick",
+      "name": "recover_r2",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 3,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "pitch_fwd",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 2,
+      "alt_hold": {
+        "target": 2.5
+      },
+      "pitch": 0.5
+    },
+    {
+      "type": "stick",
+      "name": "recover_p1",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 3,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "pitch_back",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 2,
+      "alt_hold": {
+        "target": 2.5
+      },
+      "pitch": -0.5
+    },
+    {
+      "type": "stick",
+      "name": "recover_p2",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 3,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "yaw_right",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 5,
+      "alt_hold": {
+        "target": 2.5
+      },
+      "yaw": 1.0
+    },
+    {
+      "type": "stick",
+      "name": "recover_y1",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 3,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "yaw_left",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 5,
+      "alt_hold": {
+        "target": 2.5
+      },
+      "yaw": -1.0
+    },
+    {
+      "type": "stick",
+      "name": "recover_y2",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 3,
+      "alt_hold": {
+        "target": 2.5
+      }
+    },
+    {
+      "type": "stick",
+      "name": "landing",
+      "mode": "stabilized",
+      "throttle": 0.5,
+      "duration": 30,
+      "alt_hold": {
+        "target": -0.5,
+        "rate": 0.4,
+        "min": 0.2
+      },
+      "until_ground": true,
+      "settle": 0.3
+    },
+    {
+      "type": "stick",
+      "name": "cut",
+      "mode": "stabilized",
+      "throttle": 0.0,
+      "ramp_s": 0.5,
+      "duration": 1.5
+    },
+    {
+      "type": "nose_lower",
+      "motors": [
+        8,
+        9
+      ],
+      "rate_deg_s": 3,
+      "timeout": 60,
+      "fade_s": 4,
+      "px4_land": false
+    },
+    {
+      "type": "wait",
+      "duration": 2
+    }
+  ],
+  "attitude": {
+    "park_pitch_deg": "hover",
+    "hover_pitch_deg": "trim",
+    "hover_thrust": "trim"
+  }
+}

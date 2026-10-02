@@ -1,0 +1,112 @@
+{
+  "name": "v3_jetfoil_graded_s2",
+  "description": "ATLAS V3 small, nose-pair battery layout (12.8 kg): graded jetfoils, the jet turned steepest at the inner station (next to the body) and least at the outer (foil end): lean inner < middle < outer, 5..35 deg in 2.5 steps, every strictly graded triple (286), then the outer station extended to 37.5-45 (42 more: middle 25-40 in 5s, inner 10/15/20) because the leaders sat at outer 35. Nose fans 30 deg as built. Each flown at trim and trim +-0.5 deg; score = mean of the three.",
+  "airframe": "airframes/atlas_v3_small.json",
+  "variables": [
+    {
+      "path": "knobs.foil_1_deg",
+      "range": [
+        5,
+        45
+      ]
+    },
+    {
+      "path": "knobs.foil_2_deg",
+      "range": [
+        5,
+        45
+      ]
+    },
+    {
+      "path": "knobs.foil_3_deg",
+      "range": [
+        5,
+        45
+      ]
+    }
+  ],
+  "objective": "((scenarios.v3_stab_nolift.metrics.phases.hover.pitch_err_rms_deg + scenarios.v3_stab_nolift.metrics.phases.hover.roll_err_rms_deg + 0.05 * abs(scenarios.v3_stab_nolift.metrics.phases.hover.yaw_drift_deg) + 0.5 * scenarios.v3_stab_nolift.metrics.phases.hover.pos_drift + 0.2 * (scenarios.v3_stab_nolift.metrics.phases.liftoff.pitch_max_deg + scenarios.v3_stab_nolift.metrics.phases.liftoff.roll_max_deg) + 0.2 * (scenarios.v3_stab_nolift.metrics.phases.landing.pitch_max_deg + scenarios.v3_stab_nolift.metrics.phases.landing.roll_max_deg) + 2 * scenarios.v3_stab_nolift.metrics.touchdown_speed + 5 * scenarios.v3_stab_nolift.metrics.saturation_fraction) + (scenarios.v3_stab_nolift_m05.metrics.phases.hover.pitch_err_rms_deg + scenarios.v3_stab_nolift_m05.metrics.phases.hover.roll_err_rms_deg + 0.05 * abs(scenarios.v3_stab_nolift_m05.metrics.phases.hover.yaw_drift_deg) + 0.5 * scenarios.v3_stab_nolift_m05.metrics.phases.hover.pos_drift + 0.2 * (scenarios.v3_stab_nolift_m05.metrics.phases.liftoff.pitch_max_deg + scenarios.v3_stab_nolift_m05.metrics.phases.liftoff.roll_max_deg) + 0.2 * (scenarios.v3_stab_nolift_m05.metrics.phases.landing.pitch_max_deg + scenarios.v3_stab_nolift_m05.metrics.phases.landing.roll_max_deg) + 2 * scenarios.v3_stab_nolift_m05.metrics.touchdown_speed + 5 * scenarios.v3_stab_nolift_m05.metrics.saturation_fraction) + (scenarios.v3_stab_nolift_p05.metrics.phases.hover.pitch_err_rms_deg + scenarios.v3_stab_nolift_p05.metrics.phases.hover.roll_err_rms_deg + 0.05 * abs(scenarios.v3_stab_nolift_p05.metrics.phases.hover.yaw_drift_deg) + 0.5 * scenarios.v3_stab_nolift_p05.metrics.phases.hover.pos_drift + 0.2 * (scenarios.v3_stab_nolift_p05.metrics.phases.liftoff.pitch_max_deg + scenarios.v3_stab_nolift_p05.metrics.phases.liftoff.roll_max_deg) + 0.2 * (scenarios.v3_stab_nolift_p05.metrics.phases.landing.pitch_max_deg + scenarios.v3_stab_nolift_p05.metrics.phases.landing.roll_max_deg) + 2 * scenarios.v3_stab_nolift_p05.metrics.touchdown_speed + 5 * scenarios.v3_stab_nolift_p05.metrics.saturation_fraction)) / 3",
+  "maximize": false,
+  "constraints": [
+    "ok",
+    "not metrics.crashed",
+    "not scenarios.v3_stab_nolift.metrics.crashed",
+    "not scenarios.v3_stab_nolift_m05.metrics.crashed",
+    "not scenarios.v3_stab_nolift_p05.metrics.crashed"
+  ],
+  "penalty": 100,
+  "algorithm": {
+    "name": "points",
+    "points": [
+      [
+        45.0,
+        40.0,
+        20.0
+      ],
+      [
+        45.0,
+        40.0,
+        10.0
+      ],
+      [
+        45.0,
+        40.0,
+        15.0
+      ],
+      [
+        35.0,
+        32.5,
+        15.0
+      ],
+      [
+        35.0,
+        32.5,
+        5.0
+      ],
+      [
+        37.5,
+        25.0,
+        20.0
+      ],
+      [
+        40.0,
+        30.0,
+        15.0
+      ],
+      [
+        35.0,
+        30.0,
+        15.0
+      ],
+      [
+        37.5,
+        30.0,
+        10.0
+      ],
+      [
+        35.0,
+        32.5,
+        7.5
+      ]
+    ],
+    "budget": 10,
+    "batch": 8
+  },
+  "workers": 8,
+  "timeseries": true,
+  "sim": {
+    "rate": 250,
+    "substeps": 2,
+    "noise": true,
+    "speed": 0,
+    "seed": 2
+  },
+  "scenarios": [
+    "scenarios/v3_stab_nolift.json",
+    "scenarios/v3_stab_nolift_m05.json",
+    "scenarios/v3_stab_nolift_p05.json"
+  ],
+  "base_variables": {
+    "knobs.front_cant_deg": 30
+  }
+}
