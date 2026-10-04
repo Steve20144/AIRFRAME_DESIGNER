@@ -50,7 +50,7 @@ state = {
     "pwm": [0] * 16, "pwm_t": [0.0] * 16, "funcs": [0] * 16, "lift": [],
     "nl": None, "nl_t": 0.0, "volt": None, "rssi": None, "remrssi": None, "texts": [], "rate": 0.0, "ack": None,
     "att": None, "att_t": 0.0, "boot_ms": None, "boot_t": 0.0,
-    "params": {}, "hover": {"deg": None, "busy": False, "msg": "", "ok": None, "t": 0.0},
+    "params": {}, "hover": {"deg": None, "busy": False, "msg": "", "ok": None, "t": 0.0, "readback": None},
 }
 INT_TYPES = {mavutil.mavlink.MAV_PARAM_TYPE_INT32, mavutil.mavlink.MAV_PARAM_TYPE_UINT32, mavutil.mavlink.MAV_PARAM_TYPE_INT16,
              mavutil.mavlink.MAV_PARAM_TYPE_UINT16, mavutil.mavlink.MAV_PARAM_TYPE_INT8, mavutil.mavlink.MAV_PARAM_TYPE_UINT8}
@@ -122,6 +122,25 @@ def write_param(m, name, value, ptype, tries=6):
     return False
 
 
+def readback(m, want=None):
+    """Read the hover pitch and the nose-lift target back from the board (plus every value in ``want``, compared) and
+    put the result on the page: what the board itself reports now, not what was sent."""
+    keys = ["SENS_BOARD_Y_OFF", "NL_TGT", "NL_HOV_PITCH"]
+    names = sorted(set(keys) | set(want or {}))
+    got = read_params(m, names)
+    bad = {k: (got[k][0], v) for k, (v, _) in (want or {}).items()
+           if abs(float(got[k][0]) - float(v)) > 1e-3 * max(1.0, abs(float(v)))}
+    hov, tgt, hp = (float(got[k][0]) for k in keys)
+    consistent = abs(hov - tgt) < 0.01 and abs(hov - hp) < 0.01
+    rb = {"t": time.time(), "hover": round(hov, 3), "nl_tgt": round(tgt, 3), "nl_hov": round(hp, 3),
+          "checked": len(want or {}), "bad": {k: [round(a, 4), round(b, 4)] for k, (a, b) in bad.items()},
+          "ok": consistent and not bad}
+    with lock:
+        state["hover"]["readback"] = rb
+        state["hover"]["deg"] = round(hov, 2)
+    return rb
+
+
 def set_hover(deg):
     """Make ``deg`` the hover pitch: rotate PX4's frame-dependent parameters by the change, save, reboot."""
     try:
@@ -160,11 +179,37 @@ def set_hover(deg):
         time.sleep(1.5)
         with lock:
             still_disarmed = not state["armed"]
-        if still_disarmed:
-            m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 0, 1, 0, 0, 0, 0, 0, 0)
         if rec is not None:
             rec.event(time.time(), "hover pitch", f"{old:g} -> {deg:g} deg ({len(new)} params)")
-        hover_msg(f"hover pitch {deg:g}° saved ({len(new)} parameters); board rebooting to re-align the estimator", True, False)
+        if not still_disarmed:
+            readback(m, new)
+            hover_msg(f"hover pitch {deg:g}° saved; armed meanwhile, so not rebooted: reboot before flying", True, False)
+            return
+        hover_msg(f"hover pitch {deg:g}° saved ({len(new)} parameters); board rebooting, then reading it back…")
+        t_reboot = time.time()
+        m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 0, 1, 0, 0, 0, 0, 0, 0)
+        # wait for the board to go quiet and come back (the reader reopens the port by itself)
+        time.sleep(6)
+        rb = None
+        while time.time() - t_reboot < 90:
+            m = link.get("m")
+            with lock:
+                alive = m is not None and state["link"] and time.time() - state["last_hb"] < 2
+            if alive:
+                try:
+                    rb = readback(m, new)
+                    break
+                except Exception:
+                    pass
+            time.sleep(2)
+        if rb is None:
+            hover_msg(f"hover pitch {deg:g}° saved, but the board did not answer after the reboot: press Read back", False, False)
+        elif rb["ok"]:
+            hover_msg(f"verified after reboot: hover pitch {rb['hover']:g}°, nose-lift target {rb['nl_tgt']:g}°, "
+                      f"{rb['checked']}/{rb['checked']} parameters match", True, False)
+        else:
+            hover_msg(f"read back after reboot: {len(rb['bad'])} parameter(s) differ ({', '.join(list(rb['bad'])[:4])}): set it again",
+                      False, False)
     except Exception as e:
         hover_msg(f"hover pitch not changed: {e}", False, False)
 
@@ -543,7 +588,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 .big{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}.big.front{grid-template-columns:repeat(3,minmax(0,1fr))}
 .modes{display:inline-flex;gap:6px;flex-wrap:wrap}
 .hov{display:inline-flex;align-items:center;gap:6px}.hov input{width:64px;background:var(--bg);color:var(--fg);border:1px solid var(--track);border-radius:6px;padding:4px 6px;font:inherit}
-.hovbtn{background:var(--card);border-radius:6px;padding:4px 10px}.hovbtn:disabled{opacity:.4;cursor:not-allowed}
+.hovbtn{background:var(--card);border-radius:6px;padding:4px 10px}.rbline{margin:-6px 0 12px;font-size:13px;color:var(--dim)}.rbline b{color:var(--fg)}.hovbtn:disabled{opacity:.4;cursor:not-allowed}
 .card{background:var(--card);border-radius:10px;padding:12px}.lbl{color:var(--dim);font-size:12px}
 .vbar{height:220px;background:var(--track);border-radius:8px;position:relative;overflow:hidden;margin:8px 0}
 .vfill{position:absolute;bottom:0;left:0;right:0;background:var(--bar)}
@@ -570,7 +615,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 <nav class="tabs"><button class="tab on" data-tab="live">Live</button><button class="tab" data-tab="logs">Logs<span class="rec" id="recdot"></span></button></nav>
 <section id="tab-live">
 <div class="top"><div class="top" id="top" style="margin:0"></div>
-<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover()">Set hover pitch</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
+<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover()">Set hover pitch</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
 <h3 class="lbl" style="margin:20px 0 8px;font-size:13px">Runs</h3><div id="runs" class="runs"></div>
 </section>
 <section id="tab-logs" hidden>
@@ -596,7 +641,13 @@ function render(s){
   if(s.hover){document.getElementById('hovnow').textContent=s.hover.deg??'-';
     const hb=document.querySelector('.hovbtn');hb.disabled=!!(s.armed||s.hover.busy);
     const hm=document.getElementById('hovmsg');if(s.hover.msg&&(s.hover.busy||now-s.hover.t<20)){hm.style.display='';hm.innerHTML=`<b class="${s.hover.ok===false?'bad':s.hover.ok?'ok':''}">${s.hover.msg}</b>`}else hm.style.display='none';
-    const inp=document.getElementById('hovdeg');if(inp.value===''&&s.hover.deg!=null)inp.value=s.hover.deg}
+    const inp=document.getElementById('hovdeg');if(inp.value===''&&s.hover.deg!=null)inp.value=s.hover.deg;
+    const rb=s.hover.readback, rl=document.getElementById('rbline');
+    rl.innerHTML=rb?`<span class="${rb.ok?'ok':'bad'}">${rb.ok?'✓':'✗'}</span> read back from the board at ${new Date(rb.t*1000).toLocaleTimeString()}: `+
+      `hover pitch (SENS_BOARD_Y_OFF) <b>${rb.hover}°</b> · nose-lift target (NL_TGT) <b>${rb.nl_tgt}°</b> · NL_HOV_PITCH <b>${rb.nl_hov}°</b>`+
+      (rb.checked?` · ${rb.checked-Object.keys(rb.bad).length}/${rb.checked} written parameters match`:'')+
+      (Object.keys(rb.bad).length?` · <span class="bad">differ: ${Object.keys(rb.bad).join(', ')}</span>`:''):'';
+    document.querySelector('.hovbtn.rb').disabled=!!s.hover.busy}
   const ack=document.getElementById('ack');
   if(s.ack&&now-s.ack.t<8){ack.style.display='';ack.innerHTML=`<b class="${s.ack.ok===false?'bad':s.ack.ok?'ok':''}">${s.ack.text}</b>`}else ack.style.display='none';
   let big='',rear='',grid='';const front={};
@@ -716,6 +767,19 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        if self.path == "/readback":
+            m = link.get("m")
+            if m is None:
+                self.send_response(400); self.end_headers(); return
+            def go():
+                try:
+                    rb = readback(m)
+                    hover_msg(f"board reports hover pitch {rb['hover']:g}°, nose-lift target {rb['nl_tgt']:g}°"
+                              + ("" if rb["ok"] else " (they differ: set the hover pitch again)"), rb["ok"], False)
+                except Exception as e:
+                    hover_msg(f"read back failed: {e}", False, False)
+            threading.Thread(target=go, daemon=True).start()
+            self.send_response(204); self.end_headers(); return
         if self.path.startswith("/hover?"):
             try:
                 deg = float(self.path.partition("deg=")[2])
