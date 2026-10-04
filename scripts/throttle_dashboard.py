@@ -7,7 +7,7 @@ then open http://127.0.0.1:8095. Needs pymavlink and pyserial.
 - Every PWM output (1-16) as a bar, labelled with its motor from PWM_MAIN/AUX_FUNC; the nose-lift (front) fans large,
   every other motor (the rear foil fans) as a row of tall bars below them.
 - The nose-lift module's own command, state, abort reason and pitch (DEBUG_VECT "NLIFT").
-- Armed, battery, radio RSSI, the last status texts; an Altitude mode button.
+- Armed, battery, radio RSSI, the last status texts; flight mode buttons (Stabilized, Altitude, Position, Hold, Land).
 - Every run (arm to disarm) saved to results/telemetry_runs/run_<time>.json with its messages, nose-lift states,
   mode changes and peak outputs, and listed under Runs on the page.
 - Every flight's live log, arm to disarm: the live values 10 times a second (mode, link, battery, RSSI, attitude,
@@ -51,7 +51,8 @@ link = {}  # the aircraft connection, for commands sent from the page
 # PX4 custom modes: main mode in bits 16-23, auto sub-mode in bits 24-31
 MAIN_MODES = {1: "Manual", 2: "Altitude", 3: "Position", 4: "Auto", 5: "Acro", 6: "Offboard", 7: "Stabilized"}
 AUTO_MODES = {1: "Ready", 2: "Takeoff", 3: "Hold", 4: "Mission", 5: "RTL", 6: "Land", 8: "Follow", 9: "Precland"}
-SET_MODES = {"altitude": 2}
+# buttons on the page: name -> (main mode, auto sub-mode)
+SET_MODES = {"stabilized": (7, 0), "altitude": (2, 0), "position": (3, 0), "hold": (4, 3), "land": (4, 6)}
 RESULTS = ["accepted", "temporarily rejected", "denied", "unsupported", "failed", "in progress", "cancelled"]
 
 
@@ -63,12 +64,12 @@ def mode_name(custom):
 
 
 def set_mode(name):
-    main = SET_MODES[name]
+    main, sub = SET_MODES[name]
     m = link["m"]
     m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_DO_SET_MODE, 0,
-                            mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, 0, 0, 0, 0, 0)
+                            mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, sub, 0, 0, 0, 0)
     with lock:
-        state["ack"] = {"text": f"{MAIN_MODES[main]} requested…", "ok": None, "t": time.time()}
+        state["ack"] = {"text": f"{mode_name(main << 16 | sub << 24)} requested…", "ok": None, "t": time.time()}
 
 
 FN_NAMES = {**{101 + i: f"M{i + 1}" for i in range(12)}, **{201 + i: f"S{i + 1}" for i in range(8)}}
@@ -437,7 +438,8 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 .top{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}.pill{background:var(--card);padding:8px 12px;border-radius:8px}
 .pill b{font-variant-numeric:tabular-nums}.btn{border:1px solid var(--bar);color:var(--fg);font:inherit;cursor:pointer}
 .btn:hover{background:var(--bar);color:#fff}.btn.on{background:var(--bar);color:#fff;cursor:default}.armed{background:var(--hot);color:#fff}.ok{color:var(--ok)}.bad{color:var(--hot)}
-.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}
+.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}.big.front{grid-template-columns:repeat(3,minmax(0,1fr))}
+.modes{display:inline-flex;gap:6px;flex-wrap:wrap}
 .card{background:var(--card);border-radius:10px;padding:12px}.lbl{color:var(--dim);font-size:12px}
 .vbar{height:220px;background:var(--track);border-radius:8px;position:relative;overflow:hidden;margin:8px 0}
 .vfill{position:absolute;bottom:0;left:0;right:0;background:var(--bar)}
@@ -464,7 +466,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 <nav class="tabs"><button class="tab on" data-tab="live">Live</button><button class="tab" data-tab="logs">Logs<span class="rec" id="recdot"></span></button></nav>
 <section id="tab-live">
 <div class="top"><div class="top" id="top" style="margin:0"></div>
-<button class="pill btn" onclick="setMode('altitude')">Altitude</button><div class="pill" id="ack" style="display:none"></div></div><h3 class="lbl row">Front · nose lift</h3><div class="big" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
+<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><div class="pill" id="ack" style="display:none"></div></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
 <h3 class="lbl" style="margin:20px 0 8px;font-size:13px">Runs</h3><div id="runs" class="runs"></div>
 </section>
 <section id="tab-logs" hidden>
@@ -472,6 +474,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 <div id="logs" class="runs logs"></div>
 </section>
 <script>
+const SIDE={107:'left',109:'centre',108:'right'}, ORDER={107:0,109:1,108:2};  // V3 nose fans, seen from behind
 const FN=f=>f>=101&&f<=112?'M'+(f-100):f>=201&&f<=208?'S'+(f-200):f?('f'+f):'-';
 const pct=u=>u<=0?0:Math.max(0,Math.min(100,(u-1000)/10));
 const col=p=>p>=95?'var(--hot)':p>=80?'var(--warn)':'var(--bar)';
@@ -485,19 +488,21 @@ function render(s){
   if(s.nl){const st=now-s.nl_t>1.5;top+=`<div class="pill ${st?'stale':''}">nose lift <b>${s.nl.state}</b>${s.nl.abort!='none'?' <span class="bad">('+s.nl.abort+')</span>':''} · pitch <b>${s.nl.pitch.toFixed(1)}°</b> · cmd <b>${(s.nl.cmd*100).toFixed(0)}%</b></div>`}
   top=`<div class="pill">mode <b>${s.mode_name}</b></div>`+top;
   document.getElementById('top').innerHTML=top;
-  document.querySelector('.btn').classList.toggle('on',s.mode_name=='Altitude');
+  document.querySelectorAll('.btn[data-mode]').forEach(b=>b.classList.toggle('on',s.mode_name==b.dataset.mode));
   const ack=document.getElementById('ack');
   if(s.ack&&now-s.ack.t<8){ack.style.display='';ack.innerHTML=`<b class="${s.ack.ok===false?'bad':s.ack.ok?'ok':''}">${s.ack.text}</b>`}else ack.style.display='none';
-  let big='',rear='',grid='';
+  let big='',rear='',grid='';const front={};
   const vcard=(name,u,p,st)=>`<div class="card ${st?'stale':''}"><div class="lbl">${name}</div><div class="vbar"><div class="vfill" style="height:${p}%;background:${col(p)}"></div></div><div class="pct">${p.toFixed(0)}%</div><div class="us">${u||'-'} µs${st?' · no data':''}</div></div>`;
   for(let i=0;i<16;i++){
     const u=s.pwm[i],p=pct(u),st=age(i)>1.5,f=s.funcs[i],name=`out ${i+1} · ${FN(f)}`;
     if(!f && s.funcs.some(x=>x)) continue;  // unassigned output (once the functions are known)
-    if(lift.has(f)) big+=vcard(name,u,p,st);
+    if(lift.has(f)) front[f]=vcard(name+(SIDE[f]?' · '+SIDE[f]:''),u,p,st);
     else if(f>=101&&f<=112&&s.lift.length) rear+=vcard(name,u,p,st);  // every other motor: the rear foil fans
     else grid+=`<div class="card ${st?'stale':''}"><div class="lbl">${name}</div><b>${p.toFixed(0)}%</b> <span class="us">${u||'-'}</span><div class="hbar"><div class="hfill" style="width:${p}%;background:${col(p)}"></div></div></div>`;
   }
-  document.getElementById('big').innerHTML=big||'<div class="card lbl">waiting for the nose-lift motor list…</div>';
+  big=[...lift].sort((a,b)=>(ORDER[a]??a)-(ORDER[b]??b)).map(f=>front[f]||'').join('');
+  const bg=document.getElementById('big');bg.style.gridTemplateColumns=`repeat(${Math.max(lift.size,1)},minmax(0,1fr))`;
+  bg.innerHTML=big||'<div class="card lbl">waiting for the nose-lift motor list…</div>';
   document.getElementById('rear').innerHTML=rear||'<div class="card lbl">waiting for the motor list…</div>';
   document.getElementById('grid').innerHTML=grid;
   document.getElementById('texts').textContent=s.texts.join('\n');
