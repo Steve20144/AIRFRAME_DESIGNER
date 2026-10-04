@@ -8,6 +8,10 @@ then open http://127.0.0.1:8095. Needs pymavlink and pyserial.
   every other motor (the rear foil fans) as a row of tall bars below them.
 - The nose-lift module's own command, state, abort reason and pitch (DEBUG_VECT "NLIFT").
 - Armed, battery, radio RSSI, the last status texts; flight mode buttons (Stabilized, Altitude, Position, Hold, Land).
+- Set hover pitch: the angle PX4 treats as level (disarmed only). Moves everything that depends on it together and
+  consistently: SENS_BOARD_Y_OFF, the nose-lift target (NL_TGT, NL_HOV_PITCH), every rotor's position and thrust axis
+  in PX4's frame (CA_ROTOR*_PX/PZ/AX/AZ, rotated by the change), the H-FLOW's range tilt and lever arms
+  (EKF2_RNG_PITCH, EKF2_OF_POS / EKF2_RNG_POS); then saves and reboots the board so the estimator re-aligns.
 - Every run (arm to disarm) saved to results/telemetry_runs/run_<time>.json with its messages, nose-lift states,
   mode changes and peak outputs, and listed under Runs on the page.
 - Every flight's live log, arm to disarm: the live values 10 times a second (mode, link, battery, RSSI, attitude,
@@ -23,6 +27,7 @@ then open http://127.0.0.1:8095. Needs pymavlink and pyserial.
 import argparse
 import csv
 import json
+import math
 import os
 import struct
 import threading
@@ -45,7 +50,10 @@ state = {
     "pwm": [0] * 16, "pwm_t": [0.0] * 16, "funcs": [0] * 16, "lift": [],
     "nl": None, "nl_t": 0.0, "volt": None, "rssi": None, "remrssi": None, "texts": [], "rate": 0.0, "ack": None,
     "att": None, "att_t": 0.0, "boot_ms": None, "boot_t": 0.0,
+    "params": {}, "hover": {"deg": None, "busy": False, "msg": "", "ok": None, "t": 0.0},
 }
+INT_TYPES = {mavutil.mavlink.MAV_PARAM_TYPE_INT32, mavutil.mavlink.MAV_PARAM_TYPE_UINT32, mavutil.mavlink.MAV_PARAM_TYPE_INT16,
+             mavutil.mavlink.MAV_PARAM_TYPE_UINT16, mavutil.mavlink.MAV_PARAM_TYPE_INT8, mavutil.mavlink.MAV_PARAM_TYPE_UINT8}
 link = {}  # the aircraft connection, for commands sent from the page
 
 # PX4 custom modes: main mode in bits 16-23, auto sub-mode in bits 24-31
@@ -70,6 +78,95 @@ def set_mode(name):
                             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, sub, 0, 0, 0, 0)
     with lock:
         state["ack"] = {"text": f"{mode_name(main << 16 | sub << 24)} requested…", "ok": None, "t": time.time()}
+
+
+def hover_msg(text, ok=None, busy=True):
+    with lock:
+        state["hover"].update(msg=text, ok=ok, busy=busy, t=time.time())
+    print("[hover]", text)
+
+
+def read_params(m, names, timeout=20.0):
+    """Ask the board for ``names`` and wait for every answer (resending the missing ones); {name: (value, type)}."""
+    t_ask = time.time()
+    for n in names:
+        m.mav.param_request_read_send(1, 1, n.encode(), -1); time.sleep(0.02)
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        with lock:
+            got = {n: state["params"][n] for n in names if n in state["params"] and state["params"][n][2] >= t_ask}
+        if len(got) == len(names):
+            return {n: (v, t) for n, (v, t, _) in got.items()}
+        if time.time() - t_ask > 1.5:
+            t_ask = time.time()
+            for n in names:
+                if n not in got:
+                    m.mav.param_request_read_send(1, 1, n.encode(), -1); time.sleep(0.02)
+        time.sleep(0.1)
+    missing = [n for n in names if n not in got]
+    raise RuntimeError(f"no answer for {', '.join(missing[:6])}{'…' if len(missing) > 6 else ''}")
+
+
+def write_param(m, name, value, ptype, tries=6):
+    want = float(value)
+    raw = struct.unpack("<f", struct.pack("<i", int(round(want))))[0] if ptype in INT_TYPES else want
+    for _ in range(tries):
+        t_ask = time.time()
+        m.mav.param_set_send(1, 1, name.encode(), raw, ptype)
+        while time.time() - t_ask < 1.5:
+            with lock:
+                e = state["params"].get(name)
+            if e and e[2] >= t_ask and abs(float(e[0]) - want) <= 1e-4 * max(1.0, abs(want)):
+                return True
+            time.sleep(0.05)
+    return False
+
+
+def set_hover(deg):
+    """Make ``deg`` the hover pitch: rotate PX4's frame-dependent parameters by the change, save, reboot."""
+    try:
+        m = link.get("m")
+        if m is None:
+            raise RuntimeError("no link to the aircraft")
+        with lock:
+            armed, nl = state["armed"], state["nl"]
+        if armed:
+            raise RuntimeError("disarm first")
+        hover_msg("reading the current geometry from the board…")
+        base = read_params(m, ["SENS_BOARD_Y_OFF", "CA_ROTOR_COUNT", "FD_FAIL_P", "NL_TGT", "NL_HOV_PITCH"])
+        old, n = float(base["SENS_BOARD_Y_OFF"][0]), int(base["CA_ROTOR_COUNT"][0])
+        if nl is not None and deg - float(nl["pitch"]) > float(base["FD_FAIL_P"][0]) - 2:
+            raise RuntimeError(f"parked at {nl['pitch']:.1f}° the board would be {deg - nl['pitch']:.0f}° off its new level, "
+                               f"past FD_FAIL_P {base['FD_FAIL_P'][0]:.0f}°: it would refuse to arm")
+        names = [f"CA_ROTOR{i}_{a}" for i in range(n) for a in ("PX", "PZ", "AX", "AZ")]
+        names += ["EKF2_RNG_PITCH", "EKF2_OF_POS_X", "EKF2_OF_POS_Z", "EKF2_RNG_POS_X", "EKF2_RNG_POS_Z"]
+        cur = read_params(m, names)
+        d = math.radians(deg - old)
+        c, s_ = math.cos(d), math.sin(d)
+        new = {"SENS_BOARD_Y_OFF": (round(deg, 3), base["SENS_BOARD_Y_OFF"][1]),
+               "NL_TGT": (round(deg, 3), base["NL_TGT"][1]), "NL_HOV_PITCH": (round(deg, 3), base["NL_HOV_PITCH"][1]),
+               "EKF2_RNG_PITCH": (round(cur["EKF2_RNG_PITCH"][0] + d, 4), cur["EKF2_RNG_PITCH"][1])}
+        # a vector fixed to the airframe, seen in a frame pitched d further nose-up: x' = c x + s z, z' = -s x + c z
+        for xk, zk in [(f"CA_ROTOR{i}_PX", f"CA_ROTOR{i}_PZ") for i in range(n)] + [(f"CA_ROTOR{i}_AX", f"CA_ROTOR{i}_AZ") for i in range(n)] \
+                + [("EKF2_OF_POS_X", "EKF2_OF_POS_Z"), ("EKF2_RNG_POS_X", "EKF2_RNG_POS_Z")]:
+            x, z = cur[xk][0], cur[zk][0]
+            new[xk] = (round(c * x + s_ * z, 4), cur[xk][1])
+            new[zk] = (round(-s_ * x + c * z, 4), cur[zk][1])
+        hover_msg(f"writing {len(new)} parameters: hover {old:g}° → {deg:g}°…")
+        bad = [k for k, (v, t) in new.items() if not write_param(m, k, v, t)]
+        if bad:
+            raise RuntimeError(f"not confirmed: {', '.join(bad[:6])} (nothing rebooted; check and retry)")
+        m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_STORAGE, 0, 1, 0, 0, 0, 0, 0, 0)
+        time.sleep(1.5)
+        with lock:
+            still_disarmed = not state["armed"]
+        if still_disarmed:
+            m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 0, 1, 0, 0, 0, 0, 0, 0)
+        if rec is not None:
+            rec.event(time.time(), "hover pitch", f"{old:g} -> {deg:g} deg ({len(new)} params)")
+        hover_msg(f"hover pitch {deg:g}° saved ({len(new)} parameters); board rebooting to re-align the estimator", True, False)
+    except Exception as e:
+        hover_msg(f"hover pitch not changed: {e}", False, False)
 
 
 FN_NAMES = {**{101 + i: f"M{i + 1}" for i in range(12)}, **{201 + i: f"S{i + 1}" for i in range(8)}}
@@ -295,6 +392,7 @@ def configure(m, dev):
         m.mav.param_request_read_send(1, 1, n.encode(), -1)
         time.sleep(0.05)
     m.mav.param_request_read_send(1, 1, b"NL_MOT_MSK", -1)
+    m.mav.param_request_read_send(1, 1, b"SENS_BOARD_Y_OFF", -1)
 
 
 def reader(args):
@@ -423,6 +521,10 @@ def read_link(args):
                 state["texts"] = ([time.strftime("%H:%M:%S ") + text] + state["texts"])[:8]
                 rec.event(now, "message", text)
             elif ty == "PARAM_VALUE":
+                v = as_int(msg.param_value) if msg.param_type in INT_TYPES else float(msg.param_value)
+                state["params"][msg.param_id] = (v, msg.param_type, now)
+                if msg.param_id == "SENS_BOARD_Y_OFF":
+                    state["hover"]["deg"] = round(v, 2)
                 if msg.param_id in FUNC_PARAMS:
                     state["funcs"][FUNC_PARAMS.index(msg.param_id)] = as_int(msg.param_value)
                 elif msg.param_id == "NL_MOT_MSK":
@@ -440,6 +542,8 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 .btn:hover{background:var(--bar);color:#fff}.btn.on{background:var(--bar);color:#fff;cursor:default}.armed{background:var(--hot);color:#fff}.ok{color:var(--ok)}.bad{color:var(--hot)}
 .big{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}.big.front{grid-template-columns:repeat(3,minmax(0,1fr))}
 .modes{display:inline-flex;gap:6px;flex-wrap:wrap}
+.hov{display:inline-flex;align-items:center;gap:6px}.hov input{width:64px;background:var(--bg);color:var(--fg);border:1px solid var(--track);border-radius:6px;padding:4px 6px;font:inherit}
+.hovbtn{background:var(--card);border-radius:6px;padding:4px 10px}.hovbtn:disabled{opacity:.4;cursor:not-allowed}
 .card{background:var(--card);border-radius:10px;padding:12px}.lbl{color:var(--dim);font-size:12px}
 .vbar{height:220px;background:var(--track);border-radius:8px;position:relative;overflow:hidden;margin:8px 0}
 .vfill{position:absolute;bottom:0;left:0;right:0;background:var(--bar)}
@@ -466,7 +570,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 <nav class="tabs"><button class="tab on" data-tab="live">Live</button><button class="tab" data-tab="logs">Logs<span class="rec" id="recdot"></span></button></nav>
 <section id="tab-live">
 <div class="top"><div class="top" id="top" style="margin:0"></div>
-<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><div class="pill" id="ack" style="display:none"></div></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
+<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover()">Set hover pitch</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
 <h3 class="lbl" style="margin:20px 0 8px;font-size:13px">Runs</h3><div id="runs" class="runs"></div>
 </section>
 <section id="tab-logs" hidden>
@@ -489,6 +593,10 @@ function render(s){
   top=`<div class="pill">mode <b>${s.mode_name}</b></div>`+top;
   document.getElementById('top').innerHTML=top;
   document.querySelectorAll('.btn[data-mode]').forEach(b=>b.classList.toggle('on',s.mode_name==b.dataset.mode));
+  if(s.hover){document.getElementById('hovnow').textContent=s.hover.deg??'-';
+    const hb=document.querySelector('.hovbtn');hb.disabled=!!(s.armed||s.hover.busy);
+    const hm=document.getElementById('hovmsg');if(s.hover.msg&&(s.hover.busy||now-s.hover.t<20)){hm.style.display='';hm.innerHTML=`<b class="${s.hover.ok===false?'bad':s.hover.ok?'ok':''}">${s.hover.msg}</b>`}else hm.style.display='none';
+    const inp=document.getElementById('hovdeg');if(inp.value===''&&s.hover.deg!=null)inp.value=s.hover.deg}
   const ack=document.getElementById('ack');
   if(s.ack&&now-s.ack.t<8){ack.style.display='';ack.innerHTML=`<b class="${s.ack.ok===false?'bad':s.ack.ok?'ok':''}">${s.ack.text}</b>`}else ack.style.display='none';
   let big='',rear='',grid='';const front={};
@@ -508,6 +616,10 @@ function render(s){
   document.getElementById('texts').textContent=s.texts.join('\n');
 }
 function setMode(n){fetch('/mode?name='+n,{method:'POST'})}
+function setHover(){const v=parseFloat(document.getElementById('hovdeg').value);const cur=document.getElementById('hovnow').textContent;
+  if(!isFinite(v)||v<-10||v>60){alert('Enter a hover pitch between -10 and 60 deg');return}
+  if(!confirm(`Set the hover pitch from ${cur}° to ${v}°?\n\nWrites PX4's level (SENS_BOARD_Y_OFF), the nose-lift target and every rotor's geometry, saves them and reboots the board. Disarmed only.`))return;
+  fetch('/hover?deg='+v,{method:'POST'}).then(r=>{if(!r.ok)alert('Not started: disarm first, and wait for the link and any change in progress.')})}
 const es=new EventSource('/events');es.onmessage=e=>render(JSON.parse(e.data));
 const esc=t=>String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const hm=t=>new Date(t*1000).toLocaleTimeString();
@@ -604,6 +716,20 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        if self.path.startswith("/hover?"):
+            try:
+                deg = float(self.path.partition("deg=")[2])
+            except ValueError:
+                deg = None
+            with lock:
+                busy = state["hover"]["busy"]
+            ok = deg is not None and -10.0 <= deg <= 60.0 and not busy and "m" in link
+            if ok:
+                hover_msg("starting…")
+                threading.Thread(target=set_hover, args=(deg,), daemon=True).start()
+            self.send_response(204 if ok else 400)
+            self.end_headers()
+            return
         name = self.path.partition("name=")[2]
         ok = self.path.startswith("/mode?") and name in SET_MODES and "m" in link
         if ok:
