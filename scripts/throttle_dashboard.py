@@ -652,7 +652,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 .big{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}.big.front{grid-template-columns:repeat(3,minmax(0,1fr))}
 .modes{display:inline-flex;gap:6px;flex-wrap:wrap}
 .hov{display:inline-flex;align-items:center;gap:6px}.hov input{width:64px;background:var(--bg);color:var(--fg);border:1px solid var(--track);border-radius:6px;padding:4px 6px;font:inherit}
-.hovbtn{background:var(--card);border-radius:6px;padding:4px 10px}.rbline{margin:-6px 0 12px;font-size:13px;color:var(--dim)}.rbline b{color:var(--fg)}.hovbtn:disabled{opacity:.4;cursor:not-allowed}
+.hovbtn{background:var(--card);border-radius:6px;padding:4px 10px}.rbline{margin:-6px 0 12px;font-size:13px;color:var(--dim)}.rbline b{color:var(--fg)}.hovbtn:disabled{opacity:.4;cursor:not-allowed}.hovbtn.arming{background:var(--warn);color:#111;border-color:var(--warn)}
 .card{background:var(--card);border-radius:10px;padding:12px}.lbl{color:var(--dim);font-size:12px}
 .vbar{height:220px;background:var(--track);border-radius:8px;position:relative;overflow:hidden;margin:8px 0}
 .vfill{position:absolute;bottom:0;left:0;right:0;background:var(--bar)}
@@ -679,7 +679,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 <nav class="tabs"><button class="tab on" data-tab="live">Live</button><button class="tab" data-tab="logs">Logs<span class="rec" id="recdot"></span></button></nav>
 <section id="tab-live">
 <div class="top"><div class="top" id="top" style="margin:0"></div>
-<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover()">Set hover pitch</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button><button class="btn hovbtn rbt" onclick="rebootBoard()">Reboot board</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
+<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover(this)">Set hover pitch</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button><button class="btn hovbtn rbt" onclick="rebootBoard(this)">Reboot board</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
 <h3 class="lbl" style="margin:20px 0 8px;font-size:13px">Runs</h3><div id="runs" class="runs"></div>
 </section>
 <section id="tab-logs" hidden>
@@ -732,13 +732,20 @@ function render(s){
   document.getElementById('texts').textContent=s.texts.join('\n');
 }
 function setMode(n){fetch('/mode?name='+n,{method:'POST'})}
-function rebootBoard(){
-  if(!confirm('Reboot the flight controller now?\n\nSaves the parameters and restarts the board so a new hover pitch takes effect. Disarmed only; the link drops for about 10 s.'))return;
-  fetch('/reboot',{method:'POST'}).then(r=>{if(!r.ok)alert('Not rebooted: disarm first, and wait for the link and any change in progress.')})}
-function setHover(){const v=parseFloat(document.getElementById('hovdeg').value);const cur=document.getElementById('hovnow').textContent;
-  if(!isFinite(v)||v<-10||v>60){alert('Enter a hover pitch between -10 and 60 deg');return}
-  if(!confirm(`Set the hover pitch from ${cur}° to ${v}°?\n\nWrites PX4's level (SENS_BOARD_Y_OFF), the nose-lift target and every rotor's geometry, saves them and reboots the board. Disarmed only.`))return;
-  fetch('/hover?deg='+v,{method:'POST'}).then(r=>{if(!r.ok)alert('Not started: disarm first, and wait for the link and any change in progress.')})}
+// confirmations on the page itself: the first click arms the button for 5 s, the second does it (browser pop-ups
+// such as confirm() and alert() are blocked in some embedded browsers, which made these buttons do nothing)
+const armedBtn={};
+function twoStep(btn,key,label,go){
+  if(armedBtn[key]&&Date.now()-armedBtn[key]<5000){armedBtn[key]=0;btn.textContent=label;btn.classList.remove('arming');go();return}
+  armedBtn[key]=Date.now();btn.dataset.label=label;btn.textContent='Click again to confirm';btn.classList.add('arming');
+  setTimeout(()=>{if(armedBtn[key]&&Date.now()-armedBtn[key]>=4900){armedBtn[key]=0;btn.textContent=label;btn.classList.remove('arming')}},5000)}
+function note(text,bad){const el=document.getElementById('hovmsg');el.style.display='';el.innerHTML=`<b class="${bad?'bad':''}">${text}</b>`}
+function rebootBoard(btn){twoStep(btn,'reboot','Reboot board',()=>
+  fetch('/reboot',{method:'POST'}).then(r=>{if(!r.ok)note('Not rebooted: disarm first, and wait for the link and any change in progress.',true)}))}
+function setHover(btn){const v=parseFloat(document.getElementById('hovdeg').value);
+  if(!isFinite(v)||v<-10||v>60){note('Enter a hover pitch between -10 and 60 deg',true);return}
+  twoStep(btn,'hover','Set hover pitch',()=>
+    fetch('/hover?deg='+v,{method:'POST'}).then(r=>{if(!r.ok)note('Not started: disarm first, and wait for the link and any change in progress.',true)}))}
 const es=new EventSource('/events');es.onmessage=e=>render(JSON.parse(e.data));
 const esc=t=>String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const hm=t=>new Date(t*1000).toLocaleTimeString();
