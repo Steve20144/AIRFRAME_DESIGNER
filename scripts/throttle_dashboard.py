@@ -50,7 +50,7 @@ state = {
     "pwm": [0] * 16, "pwm_t": [0.0] * 16, "funcs": [0] * 16, "lift": [],
     "nl": None, "nl_t": 0.0, "volt": None, "rssi": None, "remrssi": None, "texts": [], "rate": 0.0, "ack": None,
     "att": None, "att_t": 0.0, "boot_ms": None, "boot_t": 0.0,
-    "params": {}, "hover": {"deg": None, "busy": False, "msg": "", "ok": None, "t": 0.0, "readback": None},
+    "port": "", "params": {}, "hover": {"deg": None, "busy": False, "msg": "", "ok": None, "t": 0.0, "readback": None},
 }
 INT_TYPES = {mavutil.mavlink.MAV_PARAM_TYPE_INT32, mavutil.mavlink.MAV_PARAM_TYPE_UINT32, mavutil.mavlink.MAV_PARAM_TYPE_INT16,
              mavutil.mavlink.MAV_PARAM_TYPE_UINT16, mavutil.mavlink.MAV_PARAM_TYPE_INT8, mavutil.mavlink.MAV_PARAM_TYPE_UINT8}
@@ -453,8 +453,28 @@ def reader(args):
             time.sleep(1)
 
 
+def pick_link(args):
+    """(port, baud, board-side device) to use now. --port auto: the ground telemetry radio if one is plugged in
+    (USB serial, 57600, the radio on TELEM3 = /dev/ttyS1), else the Pixhawk on USB (921600, /dev/ttyACM0); checked
+    again at every reconnect, so unplugging one and plugging in the other just works."""
+    if args.port != "auto":
+        return args.port, args.baud, args.dev
+    import glob
+    radio = sorted(glob.glob("/dev/cu.usbserial-*") + glob.glob("/dev/ttyUSB*"))
+    if radio:
+        return radio[0], 57600, "/dev/ttyS1"
+    usb = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/ttyACM*"))
+    if usb:
+        return usb[0], 921600, "/dev/ttyACM0"
+    raise OSError("no telemetry radio or Pixhawk USB port found")
+
+
 def read_link(args):
-    m = link["m"] = mavutil.mavlink_connection(args.port, baud=args.baud, source_system=253)
+    port, baud, dev = pick_link(args)
+    with lock:
+        state["port"] = f"{port.rsplit('/', 1)[-1]} @ {baud}"
+    print(f"connecting on {port} at {baud}")
+    m = link["m"] = mavutil.mavlink_connection(port, baud=baud, source_system=253)
     qgc = mavutil.mavlink_connection(f"udpout:127.0.0.1:{args.qgc_port}", source_system=253) if args.qgc_port else None
     count, t_rate, t_hb = 0, time.time(), 0.0
     t_conf, boot_ms = 0.0, 0
@@ -464,7 +484,7 @@ def read_link(args):
         if time.time() - t_conf > 10:
             t_conf = time.time()
             print("re-adding the streams:", why)
-            threading.Thread(target=configure, args=(m, args.dev), daemon=True).start()
+            threading.Thread(target=configure, args=(m, dev), daemon=True).start()
 
     while True:
         # a quick reboot can hide inside the heartbeat gap: outputs 1-8 arriving while 9-16 do not means the
@@ -631,7 +651,7 @@ function render(s){
   const now=s.now, age=i=>now-s.pwm_t[i];
   const lift=new Set(s.lift.map(m=>100+m));
   let top=`<div class="pill ${s.armed?'armed':''}">${s.armed?'ARMED':'disarmed'}</div>`+
-    `<div class="pill">link <b class="${s.link?'ok':'bad'}">${s.link?'OK':'LOST'}</b> ${s.rate.toFixed(0)} msg/s</div>`+
+    `<div class="pill">link <b class="${s.link?'ok':'bad'}">${s.link?'OK':'LOST'}</b> ${s.rate.toFixed(0)} msg/s${s.port?' · '+s.port:''}</div>`+
     `<div class="pill">battery <b>${s.volt==null?'-':s.volt.toFixed(2)+' V'}</b></div>`+
     `<div class="pill">RSSI <b>${s.rssi??'-'}/${s.remrssi??'-'}</b></div>`;
   if(s.nl){const st=now-s.nl_t>1.5;top+=`<div class="pill ${st?'stale':''}">nose lift <b>${s.nl.state}</b>${s.nl.abort!='none'?' <span class="bad">('+s.nl.abort+')</span>':''} · pitch <b>${s.nl.pitch.toFixed(1)}°</b> · cmd <b>${(s.nl.cmd*100).toFixed(0)}%</b></div>`}
@@ -864,7 +884,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--port", default="COM6", help="ground radio serial port")
+    p.add_argument("--port", default="auto", help="serial port, or auto: the telemetry radio if plugged in, else the Pixhawk on USB")
     p.add_argument("--baud", type=int, default=57600)
     p.add_argument("--dev", default="/dev/ttyS1", help="the radio's port on the Pixhawk (TELEM3 on the 6X)")
     p.add_argument("--http", type=int, default=8095)
