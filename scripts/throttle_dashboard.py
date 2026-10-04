@@ -141,6 +141,50 @@ def readback(m, want=None):
     return rb
 
 
+def wait_back_and_readback(t_reboot, want=None, timeout=90):
+    """After a reboot command: wait for the board to come back, then read the hover pitch (and ``want``) back."""
+    time.sleep(6)
+    while time.time() - t_reboot < timeout:
+        m = link.get("m")
+        with lock:
+            alive = m is not None and state["link"] and time.time() - state["last_hb"] < 2
+        if alive:
+            try:
+                return readback(m, want)
+            except Exception:
+                pass
+        time.sleep(2)
+    return None
+
+
+def reboot_board():
+    """Reboot the flight controller (disarmed only) so saved parameters such as the hover pitch take effect, then
+    read the hover pitch back from the rebooted board."""
+    try:
+        m = link.get("m")
+        if m is None:
+            raise RuntimeError("no link to the aircraft")
+        with lock:
+            if state["armed"]:
+                raise RuntimeError("disarm first")
+        hover_msg("saving parameters and rebooting the board…")
+        m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_STORAGE, 0, 1, 0, 0, 0, 0, 0, 0)
+        time.sleep(1.0)
+        t = time.time()
+        m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 0, 1, 0, 0, 0, 0, 0, 0)
+        if rec is not None:
+            rec.event(t, "reboot", "board reboot requested from the dashboard")
+        hover_msg("board rebooting, then reading the hover pitch back…")
+        rb = wait_back_and_readback(t)
+        if rb is None:
+            hover_msg("the board did not answer after the reboot (check the link), then press Read back", False, False)
+        else:
+            hover_msg(f"rebooted: board reports hover pitch {rb['hover']:g}°, nose-lift target {rb['nl_tgt']:g}°"
+                      + ("" if rb["ok"] else " (they differ: set the hover pitch again)"), rb["ok"], False)
+    except Exception as e:
+        hover_msg(f"not rebooted: {e}", False, False)
+
+
 def set_hover(deg):
     """Make ``deg`` the hover pitch: rotate PX4's frame-dependent parameters by the change, save, reboot."""
     try:
@@ -635,7 +679,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 <nav class="tabs"><button class="tab on" data-tab="live">Live</button><button class="tab" data-tab="logs">Logs<span class="rec" id="recdot"></span></button></nav>
 <section id="tab-live">
 <div class="top"><div class="top" id="top" style="margin:0"></div>
-<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover()">Set hover pitch</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
+<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover()">Set hover pitch</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button><button class="btn hovbtn rbt" onclick="rebootBoard()">Reboot board</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
 <h3 class="lbl" style="margin:20px 0 8px;font-size:13px">Runs</h3><div id="runs" class="runs"></div>
 </section>
 <section id="tab-logs" hidden>
@@ -667,7 +711,8 @@ function render(s){
       `hover pitch (SENS_BOARD_Y_OFF) <b>${rb.hover}°</b> · nose-lift target (NL_TGT) <b>${rb.nl_tgt}°</b> · NL_HOV_PITCH <b>${rb.nl_hov}°</b>`+
       (rb.checked?` · ${rb.checked-Object.keys(rb.bad).length}/${rb.checked} written parameters match`:'')+
       (Object.keys(rb.bad).length?` · <span class="bad">differ: ${Object.keys(rb.bad).join(', ')}</span>`:''):'';
-    document.querySelector('.hovbtn.rb').disabled=!!s.hover.busy}
+    document.querySelector('.hovbtn.rb').disabled=!!s.hover.busy;
+    document.querySelector('.hovbtn.rbt').disabled=!!(s.armed||s.hover.busy||!s.link)}
   const ack=document.getElementById('ack');
   if(s.ack&&now-s.ack.t<8){ack.style.display='';ack.innerHTML=`<b class="${s.ack.ok===false?'bad':s.ack.ok?'ok':''}">${s.ack.text}</b>`}else ack.style.display='none';
   let big='',rear='',grid='';const front={};
@@ -687,6 +732,9 @@ function render(s){
   document.getElementById('texts').textContent=s.texts.join('\n');
 }
 function setMode(n){fetch('/mode?name='+n,{method:'POST'})}
+function rebootBoard(){
+  if(!confirm('Reboot the flight controller now?\n\nSaves the parameters and restarts the board so a new hover pitch takes effect. Disarmed only; the link drops for about 10 s.'))return;
+  fetch('/reboot',{method:'POST'}).then(r=>{if(!r.ok)alert('Not rebooted: disarm first, and wait for the link and any change in progress.')})}
 function setHover(){const v=parseFloat(document.getElementById('hovdeg').value);const cur=document.getElementById('hovnow').textContent;
   if(!isFinite(v)||v<-10||v>60){alert('Enter a hover pitch between -10 and 60 deg');return}
   if(!confirm(`Set the hover pitch from ${cur}° to ${v}°?\n\nWrites PX4's level (SENS_BOARD_Y_OFF), the nose-lift target and every rotor's geometry, saves them and reboots the board. Disarmed only.`))return;
@@ -787,6 +835,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        if self.path == "/reboot":
+            with lock:
+                ok = "m" in link and not state["armed"] and not state["hover"]["busy"]
+            if ok:
+                hover_msg("starting reboot…")
+                threading.Thread(target=reboot_board, daemon=True).start()
+            self.send_response(204 if ok else 400); self.end_headers(); return
         if self.path == "/readback":
             m = link.get("m")
             if m is None:
