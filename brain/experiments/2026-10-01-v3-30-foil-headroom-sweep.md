@@ -60,3 +60,45 @@ COM_RC_IN_MODE 0, SENS_IMU_AUTOCAL 1, EKF2_MULTI_IMU 3 / SENS_IMU_MODE 0 (6X red
 HITL flight (live907599734, 19:20, COM_RC_IN_MODE 1 for the flight): Position hold max 0.42 m (SITL live 0.39),
 alt 1.68-1.70, roll err 0.12 (0.06), est-truth pitch +0.45 (+0.41), rates 0.82 deg/s (0.75), touchdown 0.39
 (0.35), fans max 69 %, no failures. HITL now matches live SITL; both share the ~0.4 deg live estimate offset.
+
+## Board set for real use with the nose-lift switch (2026-10-02)
+
+Written over USB (`results/board_params/write_nose_switch_20261002.py`, 20/20 verified after reboot; backup before:
+`params_20261001_211932_readonly_decoded.json`): SYS_HITL 0, COM_RC_IN_MODE 0 (RC arm ch 8 / kill ch 5 live), NL_EN 1,
+NL_FLY_HOLD 0, NL_HO_THR 0.15 (was -0.01: instant handover at zero throttle), NL_TGT / NL_HOV_PITCH 8.5, NL_RC_CH 7
+(on below 1300), COM_DISARM_PRFLT 120 (longer than NL_HOLD_TOUT 60 so it never disarms mid-hold), COM_DISARM_LAND 2,
+real H-FLOW on (UAVCAN_SUB_FLOW/RNG 1, EKF2_OF_GYR_SRC 1, EKF2_RNG_PITCH -0.2059 for the 20.3 deg mount), 6X IMU
+defaults back. Firmware facts (PX4-nl NoseLift.cpp): ONE switch; on = lift to NL_TGT and hold; off while lifting /
+holding = lower to the start pitch then disarm; after a flight the firmware lowers only in NL_FLY_HOLD mode
+(nose fans hold the pitch all flight; NL_F_TGT was 26 from v34, untested for this design). Kill: PX4 cuts outputs in
+every state, NL latches Aborted. RC was not connected during the write (input_rc lost): switches not yet verified live.
+H-FLOW live check (2026-10-02 00:20): DroneCAN node 125 OK on CAN1, flow ~63 Hz quality 99-104, range 0.27 m.
+Written and saved: EKF2_OF_DELAY 0 -> 20 ms, EKF2_RNG_DELAY 0 -> 5 ms (sim values were 0), SYS_HAS_NUM_OF / _DIST
+0 -> 1 (no arming without the H-FLOW). Open: EKF2_IMU_POS still 0 (Pixhawk offset from CG needed), SENS_FLOW_ROT 0
+unverified (push-forward sign test), mount 20.3 deg looks 11.8 deg off vertical at the 8.5 deg hover.
+
+## First real nose-lift tests, logs 303-312 (2026-10-02 00:54-01:08, pulled over USB to results/flight_logs/)
+
+Rotate switch works on ch 7 (1011 = on); lifts from -12..-19 to 8.5, holds 8.2-8.5 deg; switch-off lowering and
+kill both worked. Log 312 (takeoff attempt, Position mode): hold reached 14.45 s; stick crossed NL_HO_THR 15 % at
+14.46 -> handover; stick rose slowly to max 55 %, below Position mode's climb threshold (centre + deadzone ~60 %), so
+PX4 never spun anything up (own commands 0, thrust sp 0); NL_HO_TOUT 8 s expired at 22.46, the hold faded over
+NL_FADE_S 2 s and the nose fell 8.5 -> -12 deg (22.5-23.5 s). "Takeoff detected" at 23.0 was the drop, not a
+lift-off. Fix options: NL_HO_THR ~0.65 for Position/Altitude take-offs (handover only once PX4 climbs), longer
+NL_HO_TOUT, or take off in Stabilized (stick = thrust, hover ~59 %). Also seen: "Strong magnetic interference",
+"heading estimate not stable" preflight fails.
+Written 2026-10-02: NL_HO_THR 0.15 -> 0.65, NL_HO_TOUT 8 -> 15 s (saved, verified; results/board_params/write_nl_handover_20261002.json).
+
+## First real flight, log 313 (2026-10-03 17:29, results/flight_logs/log_313_*.ulg + dashboard run_20261003_172929)
+
+Lift -15.8 -> hold 10.2 (11.9 s); throttle > 65 % at 18.41 s -> handover, takeoff at 18.46, "PX4 took over" 20.50.
+Altitude mode: held hover-frame pitch ~0 but accelerated forward to 1.95 m/s (heading ~-170, vx -1.95) and yawed
+-6 then -13 deg/s while PX4 asked for +yaw up to MC_YAWRATE_MAX 60 deg/s (torque sp rising, allocator "achieved").
+Position at 20.007 s: commanded 1.2-1.5 m/s^2 deceleration = +13..15 deg nose-up (correct), slowed only to 0.7 m/s
+while holding +10..12 deg -> the real hover balance is ~20+ deg structural, not 8.5 (jets not 57.5/85/85). Rear fans
+split left 0-45 % / right 87-100 % (M2 pinned 100 % from 21.25 s, M1 ~0) fighting roll/yaw; sank 0.7 m/s, pitch
+request to +34 deg, allocation saturated at 22.5 s, roll 25 -> 38 deg, kill 23.18. Flow only fused from 20.8 s.
+Model gaps: board CA_ROTOR*_KM +0.002 = all CCW (user: fans spin CW); sim and export put km along the turned jet
+axis, but a jetfoil fan's reaction torque acts about its duct axis (x, roll). Output map changed again by the user:
+MAIN1..6 = M3 M2 M1 M6 M5 M4, MAIN8 = M9, AUX2 = M8, AUX4 = M7.
+Hover pitch set to 15 deg from the dashboard (2026-10-03 17:51): 44 params (SENS_BOARD_Y_OFF, NL_TGT, NL_HOV_PITCH, CA_ROTOR0-8 PX/PZ/AX/AZ, EKF2_RNG_PITCH, OF/RNG POS X/Z) written, saved, rebooted, 44/44 verified by read-back.

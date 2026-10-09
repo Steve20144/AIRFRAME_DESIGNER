@@ -1,0 +1,33 @@
+{
+  "agents": [
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "adapter": "claude",
+      "instruction_sources": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "brain/HANDOFF.md"
+      ]
+    },
+    {
+      "id": "dots",
+      "name": "ChatGPT Dots",
+      "adapter": "external_worker",
+      "instruction_sources": [
+        "AGENTS.md",
+        "brain/HANDOFF.md"
+      ]
+    }
+  ],
+  "limits": {
+    "max_parallel_agents": 1,
+    "max_retries": 2,
+    "max_transitions": 12,
+    "max_reviews": 3,
+    "max_identical_errors": 2,
+    "task_age_seconds": 86400,
+    "invocation_timeout": 900,
+    "context_chars": 18000
+  }
+}

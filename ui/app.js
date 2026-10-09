@@ -1,4 +1,5 @@
 import { createScene } from '/static/scene.js';
+import { createCfdView } from '/static/cfd_view.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -59,6 +60,7 @@ $$('.tabs button').forEach(b => b.addEventListener('click', () => {
   if (b.dataset.tab === 'connect') refreshConnection();
   if (b.dataset.tab === 'design') refreshDesign();
   if (b.dataset.tab === 'batch') refreshBatch();
+  if (b.dataset.tab === 'cfd') cfdEnter();
   if (b.dataset.tab === 'tuning') refreshTuning();
 }));
 function openTab(name) { $$('.tabs button').find(b => b.dataset.tab === name)?.click(); }
@@ -1287,6 +1289,7 @@ $('#btn-theme').addEventListener('click', () => {
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   try { localStorage.setItem('airframe-theme', dark ? 'dark' : 'light'); } catch { }
   scene.setTheme(dark ? 'dark' : 'light');
+  if (cfdState.view) cfdState.view.setTheme(dark ? 'dark' : 'light');
 });
 
 function connectWs() {
@@ -1295,7 +1298,7 @@ function connectWs() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'airframe') { setAirframe(m.airframe); }
-    if (m.type === 'state') { applyState(m.state); if (m.status) applyStatus(m.status); if (m.log) m.log.forEach(l => logLine(l[1])); }
+    if (m.type === 'state') { if (!cruiseReplay.active) applyState(m.state); if (m.status) applyStatus(m.status); if (m.log) m.log.forEach(l => logLine(l[1])); }
   };
   ws.onclose = () => { logLine('[ui] connection to simulator lost, retrying…'); setTimeout(connectWs, 1500); };
 }
@@ -2771,3 +2774,745 @@ $('#ctl-kt-start').addEventListener('click', async () => {
 });
 $('#ctl-kt-stop').addEventListener('click', async () => { await api('/api/killtest', { action: 'stop' }).catch(() => { }); ctlKtPoll(); });
 $$('.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'controller' && !ctlKtTimer) ctlKtPoll(); }));
+
+// ---- Cruise Test tab: alpha sweep, trim, static margin, free flight (analysis/cruise.py)
+function svgChart(title, xlab, ylab, series, opts = {}) {
+  // series: [{label, col, x:[], y:[], dots?:bool}]; opts: {hline, vline, w, h}
+  const W = opts.w || 440, H = opts.h || 220, ml = 46, mr = 10, mt = 22, mb = 30;
+  const xs = series.flatMap(s => s.x), ys = series.flatMap(s => s.y).filter(Number.isFinite);
+  if (!xs.length || !ys.length) return '';
+  let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  if (opts.hline != null) { y0 = Math.min(y0, opts.hline); y1 = Math.max(y1, opts.hline); }
+  if (y1 - y0 < 1e-9) { y0 -= 1; y1 += 1; } if (x1 - x0 < 1e-9) { x1 = x0 + 1; }
+  const pad = (y1 - y0) * 0.06; y0 -= pad; y1 += pad;
+  const X = v => ml + (v - x0) / (x1 - x0) * (W - ml - mr), Y = v => mt + (y1 - v) / (y1 - y0) * (H - mt - mb);
+  const ticks = (a, b, n) => { const st = Math.pow(10, Math.floor(Math.log10((b - a) / n))); const m = [1, 2, 5, 10].find(k => (b - a) / (st * k) <= n) || 10; const d = st * m; const out = []; for (let v = Math.ceil(a / d) * d; v <= b + 1e-9; v += d) out.push(+v.toFixed(6)); return out; };
+  let g = `<svg class="cr-chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%;font:11px sans-serif">`;
+  g += `<text x="${ml}" y="13" fill="currentColor" font-weight="600">${title}</text>`;
+  for (const v of ticks(y0, y1, 5)) g += `<line x1="${ml}" x2="${W - mr}" y1="${Y(v)}" y2="${Y(v)}" stroke="currentColor" stroke-opacity=".12"/><text x="${ml - 4}" y="${Y(v) + 3}" text-anchor="end" fill="currentColor" fill-opacity=".7">${v}</text>`;
+  for (const v of ticks(x0, x1, 7)) g += `<line y1="${mt}" y2="${H - mb}" x1="${X(v)}" x2="${X(v)}" stroke="currentColor" stroke-opacity=".08"/><text x="${X(v)}" y="${H - mb + 13}" text-anchor="middle" fill="currentColor" fill-opacity=".7">${v}</text>`;
+  if (opts.hline != null) g += `<line x1="${ml}" x2="${W - mr}" y1="${Y(opts.hline)}" y2="${Y(opts.hline)}" stroke="currentColor" stroke-opacity=".5" stroke-dasharray="4 3"/>`;
+  if (opts.vline != null && opts.vline >= x0 && opts.vline <= x1) g += `<line y1="${mt}" y2="${H - mb}" x1="${X(opts.vline)}" x2="${X(opts.vline)}" stroke="#e0a53a" stroke-dasharray="4 3"/>`;
+  series.forEach((s, i) => {
+    const pts = s.x.map((x, k) => [X(x), Y(s.y[k])]).filter(p => Number.isFinite(p[1]));
+    if (s.dots) for (const p of pts) g += `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="${s.col}"/>`;
+    else g += `<polyline fill="none" stroke="${s.col}" stroke-width="1.8" points="${pts.map(p => p.join(',')).join(' ')}"/>`;
+    g += `<text x="${W - mr}" y="${13 + 12 * i}" text-anchor="end" fill="${s.col}">${s.label}</text>`;
+  });
+  g += `<text x="${(ml + W - mr) / 2}" y="${H - 3}" text-anchor="middle" fill="currentColor" fill-opacity=".7">${xlab}</text>`;
+  g += `<text transform="translate(11,${(mt + H - mb) / 2}) rotate(-90)" text-anchor="middle" fill="currentColor" fill-opacity=".7">${ylab}</text></svg>`;
+  return g;
+}
+const CR_COLS = ['#4f8fdc', '#e0a53a', '#4caf7a', '#d9534f', '#9b6bd6', '#8d9aa8'];
+function renderCruise(r) {
+  const s = r.sweep, tr = s.trim, f = r.flight;
+  const fx = (v, d = 2) => (v == null || !Number.isFinite(v)) ? '–' : (+v).toFixed(d);
+  let sum = `<b>${r.speed_kmh} km/h</b>${r.cg_shift_m ? ' · CG shifted ' + fx(r.cg_shift_m) + ' m ' + (r.cg_shift_m > 0 ? 'forward' : 'aft') : ''} · ref area ${fx(s.S)} m² · span ${fx(s.span)} m · mean chord ${fx(s.c_ref)} m · weight ${fx(s.weight, 0)} N · CG x ${fx(s.cg[0], 3)} m<br>`;
+  if (tr) {
+    const stable = tr.statically_stable;
+    if (tr.natural) {
+      if (tr.elevon_deg != null) sum += `Elevons trimmed to <b>${tr.elevon_deg >= 0 ? '+' : ''}${fx(tr.elevon_deg, 1)}°</b> (TE ${tr.elevon_deg >= 0 ? 'down' : 'up'}${tr.elevon_at_limit ? ', <span class="warn">at the travel limit</span>' : ''}${tr.elevon_ok === false ? ', <span class="warn">trim not converged</span>' : ''}). `;
+      sum += `Trim (CM = 0) at <b>α ${fx(tr.alpha_deg, 1)}°</b>: lift ${fx(tr.L, 0)} N = <b>${fx(100 * tr.L_over_W, 0)} % of the weight</b>, L/D ${fx(tr.L_over_D, 1)}, drag ${fx(tr.D, 0)} N`;
+      sum += tr.speed_for_weight_ms ? ` · the weight would need <b>${fx(tr.speed_for_weight_ms * 3.6, 0)} km/h</b> at this trim<br>` : '<br>';
+    } else {
+      sum += `CM never crosses zero (CM ${fx(tr.CM_untrimmed, 3)} at the lift-equals-weight angle): <b>the body is ${tr.trim_moment_Nm > 0 ? 'nose-heavy' : 'tail-heavy'}</b>. `;
+      sum += `Lift = weight at <b>α ${fx(tr.alpha_deg, 1)}°</b> (L/D ${fx(tr.L_over_D, 1)}, drag ${fx(tr.D, 0)} N) needs a <b>${fx(Math.abs(tr.trim_moment_Nm), 0)} N·m ${tr.trim_moment_Nm > 0 ? 'nose-up' : 'nose-down'}</b> trim moment, `;
+      sum += `or the CG moved <b>${fx(Math.abs(tr.cg_shift_to_trim_m))} m ${tr.cg_shift_to_trim_m > 0 ? 'aft' : 'forward'}</b>` + (tr.static_margin_after_cg_shift != null ? ` (static margin would become ${fx(100 * tr.static_margin_after_cg_shift, 0)} %)` : '') + '.<br>';
+    }
+    sum += `<span class="${stable ? 'ok' : 'warn'}" style="font-weight:600">${stable ? 'Statically stable' : 'Statically UNSTABLE'}</span>: dCM/dα ${fx(tr.dCM_dalpha_per_deg, 4)} per deg, static margin <b>${fx(100 * tr.static_margin, 0)} %</b> of the mean chord, neutral point x ${fx(tr.neutral_point_x, 2)} m (${tr.neutral_point_x > s.cg[0] ? fx(tr.neutral_point_x - s.cg[0]) + ' m ahead of' : fx(s.cg[0] - tr.neutral_point_x) + ' m behind'} the CG)`;
+    if (!stable) sum += `<br><span class="hint">A stable aircraft needs the CG ahead of the neutral point: move the CG forward by at least ${fx(tr.neutral_point_x - s.cg[0] + 0.05 * s.c_ref)} m, or move lifting area aft.</span>`;
+    if (tr.stalled) sum += '<br><span class="warn">A panel is beyond its polar\'s valid range at the trim.</span>';
+  } else sum += '<span class="warn">No trim: CM never crosses zero in this alpha range.</span>';
+  if (f) sum += `<br>Free flight, pitch plane only (the foil): <b class="${f.verdict.stable ? 'ok' : 'warn'}">${f.verdict.label}</b>` + (f.verdict.ratio != null ? ` (pitch amplitude ratio second/first half ${fx(f.verdict.ratio)}, altitude ${fx(f.verdict.alt_change_m, 1)} m, speed ${fx(f.verdict.speed_change_ms, 1)} m/s over the run)` : '');
+  const f6 = r.flight6;
+  if (f6) sum += `<br>Free flight, all six axes, no roll control: <b class="${f6.verdict.stable ? 'ok' : 'warn'}">${f6.verdict.label}</b>`;
+  $('#cr-summary').innerHTML = sum; $('#cr-summary').classList.remove('hint');
+  const al = s.rows.map(x => x.alpha_deg);
+  const vl = tr ? tr.alpha_deg : null;
+  $('#cr-charts').innerHTML =
+    svgChart('Lift', 'alpha °', 'CL', [{label: 'CL', col: CR_COLS[0], x: al, y: s.rows.map(x => x.CL)}, {label: 'L / W', col: CR_COLS[2], x: al, y: s.rows.map(x => x.L_over_W)}], {hline: 1, vline: vl}) +
+    svgChart('Pitching moment about the CG', 'alpha °', 'CM', [{label: 'CM (nose-up +)', col: CR_COLS[1], x: al, y: s.rows.map(x => x.CM)}], {hline: 0, vline: vl}) +
+    svgChart('Drag', 'alpha °', 'CD', [{label: 'CD', col: CR_COLS[3], x: al, y: s.rows.map(x => x.CD)}], {vline: vl}) +
+    svgChart('Panel alpha', 'aircraft alpha °', 'panel alpha °', s.panels.map((p, i) => ({label: p.name, col: CR_COLS[i % CR_COLS.length], x: al, y: s.rows.map(x => x.panel_alpha_deg[i])})), {vline: vl});
+  $('#cr-flight').innerHTML = f ? ('<h3>Free flight ' + `<span class="hint">released level at the trim, ${r.speed_kmh} km/h, ideal thrust = trim drag, pitch kick, no controller</span></h3>` +
+    svgChart('Pitch and alpha', 't s', 'deg', [{label: 'pitch', col: CR_COLS[0], x: f.t, y: f.pitch_deg}, {label: 'alpha', col: CR_COLS[1], x: f.t, y: f.alpha_deg}]) +
+    svgChart('Altitude', 't s', 'm', [{label: 'alt', col: CR_COLS[2], x: f.t, y: f.alt}]) +
+    svgChart('Speed', 't s', 'm/s', [{label: 'speed', col: CR_COLS[3], x: f.t, y: f.speed}]) +
+    svgChart('Pitch rate', 't s', 'deg/s', [{label: 'q', col: CR_COLS[4], x: f.t, y: f.q_deg_s}]) +
+    (r.flight6 ? svgChart('Six axes: roll and pitch', 't s', 'deg', [{label: 'roll', col: CR_COLS[3], x: r.flight6.t, y: r.flight6.roll_deg}, {label: 'pitch', col: CR_COLS[0], x: r.flight6.t, y: r.flight6.pitch_deg}]) : '')) : '';
+  $('#cr-panels').innerHTML = '<table class="grid"><tr><th>panel</th><th>section</th><th>area m²</th><th>span m</th><th>chord root→tip m</th><th>sweep °</th><th>dihedral °</th><th>incidence °</th><th>root LE x, y, z</th></tr>' +
+    s.panels.map(p => `<tr><td>${p.name}</td><td>${p.airfoil}</td><td>${fx(p.area)}</td><td>${fx(p.span)}</td><td>${fx(p.root_chord)} → ${fx(p.tip_chord)}</td><td>${fx(p.sweep_deg, 0)}</td><td>${fx(p.dihedral_deg, 0)}</td><td>${fx(p.incidence_deg, 1)}</td><td>${p.pos.map(v => fx(v)).join(', ')}</td></tr>`).join('') + '</table>';
+  $('#cr-sections').innerHTML = (r.sections || []).map(sec => {
+    const curves = sec.curves.map((c, i) => ({label: `app Re ${(c.Re / 1e6).toFixed(2)}M`, col: CR_COLS[i], x: c.alpha, y: c.CL}));
+    const dots = {label: `XFOIL 6.99 (${sec.n_xfoil} pts)`, col: '#d9534f', dots: true, x: sec.xfoil_points.map(p => p.alpha), y: sec.xfoil_points.map(p => p.CL)};
+    const cmc = sec.curves.map((c, i) => ({label: `app Re ${(c.Re / 1e6).toFixed(2)}M`, col: CR_COLS[i], x: c.alpha, y: c.CM}));
+    const cmd = {label: 'XFOIL 6.99', col: '#d9534f', dots: true, x: sec.xfoil_points.map(p => p.alpha), y: sec.xfoil_points.map(p => p.CM)};
+    return `<div class="card"><b>${sec.airfoil}</b> · polar source: ${sec.source}${sec.note ? ' (' + sec.note + ')' : ''} · valid α at the table's Re list: ${(sec.valid_alpha_deg || []).map(v => v.map(x => x.toFixed(0)).join('..')).join(' / ')} · RMS ΔCL vs XFOIL ${fx(sec.rms_dCL_vs_xfoil, 3)}<br>` +
+      svgChart('CL', 'alpha °', 'CL', curves.concat([dots])) + svgChart('CM (quarter chord)', 'alpha °', 'CM', cmc.concat([cmd])) + '</div>';
+  }).join('');
+  $('#cr-notes').innerHTML = (r.notes || []).map(n => '• ' + n).join('<br>');
+}
+$('#cr-run').addEventListener('click', async () => {
+  const st = $('#cr-status'); st.textContent = 'running…'; $('#cr-run').disabled = true;
+  try {
+    const body = {speed_kmh: +$('#cr-speed').value || 60, alpha_min: +$('#cr-amin').value, alpha_max: +$('#cr-amax').value,
+                  duration_s: +$('#cr-dur').value || 30, perturb_q_deg_s: +$('#cr-kick').value || 0, cg_shift_m: +$('#cr-cg').value || 0};
+    const r = await (await fetch('/api/cruise/test', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)})).json();
+    if (!r.ok) throw new Error(r.error || 'failed');
+    cruiseLast = r; renderCruise(r); st.textContent = ''; $('#cr-play').disabled = !(r.flight && r.flight.pos && r.flight.pos.length);
+  } catch (e) { st.textContent = 'error: ' + e.message; }
+  $('#cr-run').disabled = false;
+});
+
+// ---- Cruise Test: replay of the free flight in the 3D view
+const cruiseReplay = { active: false, data: null, t0: 0, raf: 0 };
+let cruiseLast = null;
+function cruiseReplayFrame() {
+  if (!cruiseReplay.active) return;
+  const f = cruiseReplay.data, rate = +$('#cr-rate').value || 0.25;
+  const tEnd = f.t[f.t.length - 1];
+  const elapsed = (performance.now() - cruiseReplay.t0) / 1000;
+  if (elapsed > tEnd / rate + 1.5) { cruiseReplayStop(); return; }    // hold the last frame 1.5 s, then back to the live view
+  let tt = elapsed * rate;
+  tt = Math.min(tt, tEnd);
+  let i = 0; while (i < f.t.length - 2 && f.t[i + 1] <= tt) i++;
+  const a = (tt - f.t[i]) / Math.max(1e-9, f.t[i + 1] - f.t[i]), b = Math.min(1, Math.max(0, a));
+  const p0 = f.pos[i], p1 = f.pos[i + 1] || p0, q0 = f.q[i], q1 = f.q[i + 1] || q0;
+  const pos = [p0[0] + (p1[0] - p0[0]) * b, p0[1] + (p1[1] - p0[1]) * b, (p0[2] + (p1[2] - p0[2]) * b) - f.pos[0][2] - 4];   // released 4 m above the grid
+  const q = q0.map((v, k) => v + (q1[k] - v) * b); const n = Math.hypot(...q) || 1;
+  scene.updateState({ pos, q: q.map(v => v / n), rotors: [], forces: { wing_forces: f.wing_forces[i] || [] } });
+  if (cruiseReplay.onFrame) cruiseReplay.onFrame(i, f, tt);
+  $('#cr-status').textContent = `replay t ${tt.toFixed(2)} s · pitch ${f.pitch_deg[i].toFixed(1)}° · α ${f.alpha_deg[i].toFixed(1)}° · ${f.speed[i].toFixed(1)} m/s · alt ${(f.alt[i] - f.alt[0]).toFixed(1)} m from release`;
+  cruiseReplay.raf = requestAnimationFrame(cruiseReplayFrame);
+}
+function cruiseReplayStop() {
+  cruiseReplay.active = false; cancelAnimationFrame(cruiseReplay.raf);
+  $('#cr-play').disabled = !cruiseLast; $('#cr-stop').disabled = true;
+  if (camMode !== cruiseReplay.prevCam) { camMode = cruiseReplay.prevCam; $('#btn-follow').textContent = CAM_LABELS[camMode]; $('#btn-follow').classList.toggle('on', camMode !== 'static'); scene.setCameraMode(camMode); }
+  $('#cr-status').textContent = 'replay ended; live simulation view restored';
+}
+$('#cr-play').addEventListener('click', () => {
+  const which = $('#cr-which').value === '6' ? cruiseLast && cruiseLast.flight6 : cruiseLast && cruiseLast.flight;
+  if (!which || !which.pos || !which.pos.length) return;
+  cruiseReplay.data = which; cruiseReplay.active = true; cruiseReplay.t0 = performance.now();
+  cruiseReplay.prevCam = camMode;
+  if (camMode !== 'follow') { camMode = 'follow'; $('#btn-follow').textContent = CAM_LABELS[camMode]; $('#btn-follow').classList.add('on'); scene.setCameraMode('follow'); }
+  $('#cr-play').disabled = true; $('#cr-stop').disabled = false;
+  cruiseReplayFrame();
+});
+$('#cr-stop').addEventListener('click', cruiseReplayStop);
+
+// ============================================================================================ CFD tab (OpenFOAM)
+// A library of attitudes is computed in the background (airframe_designer/cfd); here the user turns the aircraft
+// and the view shows the interpolated pressure field and forces, plus the static-stability verdicts.
+const cfdState = { view: null, mesh: null, status: null, poll: 0, pending: false, lastQuery: 0, queryTimer: 0, surfaceName: null, stab: null };
+
+function cfdDecodeCp(b64) {
+  const bin = atob(b64), n = bin.length / 4, buf = new ArrayBuffer(bin.length), u8 = new Uint8Array(buf);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Float32Array(buf, 0, n);
+}
+function cfdMassCg() {
+  const m = $('#cfd-mass').value, cg = $('#cfd-cg').value.trim();
+  return { mass: m, cg };
+}
+function cfdFmt(v, d = 1) { return Number.isFinite(v) ? v.toFixed(d) : '–'; }
+
+// the sampled velocity / Cp grid for the air animation: fetched when an attitude is committed (not while dragging)
+let cfdFlowSeq = 0, cfdFlowKey = '';
+async function cfdFetchFlow() {
+  if (!cfdState.view || !cfdState.status || !cfdState.status.library) return;
+  const a = +$('#cfd-alpha-n').value || 0, b = +$('#cfd-beta-n').value || 0;
+  const key = `${a}|${b}|${cfdState.status.library.done}`;
+  if (key === cfdFlowKey && cfdState.view.hasFlow) return;
+  const seq = ++cfdFlowSeq;
+  $('#cfd-flow-status').textContent = 'loading the air…';
+  try {
+    const res = await fetch(`/api/cfd/flow?alpha=${a}&beta=${b}`);
+    if (!res.ok) { const j = await res.json().catch(() => ({})); $('#cfd-flow-status').textContent = j.error || 'no flow field yet'; cfdState.view.setFlow(null); return; }
+    const buf = await res.arrayBuffer();
+    if (seq !== cfdFlowSeq) return;
+    const u8 = new Uint8Array(buf); let nl = 0; while (nl < u8.length && u8[nl] !== 10) nl++;
+    const hdr = JSON.parse(new TextDecoder().decode(u8.subarray(0, nl)));
+    const n = hdr.shape[0] * hdr.shape[1] * hdr.shape[2];
+    const data = buf.slice(nl + 1);      // typed arrays need a 4-byte aligned start: copy past the header
+    const U = new Float32Array(data, 0, n * 3), cp = new Float32Array(data, n * 12, n);
+    cfdState.view.setFlow({ origin: hdr.origin, spacing: hdr.spacing, shape: hdr.shape, speed_ms: hdr.speed_ms, U, cp });
+    cfdFlowKey = key;
+    $('#cfd-flow-status').textContent = `air field ${hdr.shape.join('×')} points from ${hdr.cases.length} attitude${hdr.cases.length > 1 ? 's' : ''}`;
+  } catch (e) { $('#cfd-flow-status').textContent = 'air field failed: ' + e.message; }
+}
+
+function cfdRenderJobs(jobs) {
+  const el = $('#cfd-jobs-rows');
+  if (!jobs || !jobs.length) { el.innerHTML = 'nothing is running'; return; }
+  const fmtEta = (s) => s == null ? '' : (s > 5400 ? `about ${(s / 3600).toFixed(1)} h left` : `about ${Math.round(s / 60)} min left`);
+  el.innerHTML = jobs.map(j => {
+    const p = j.progress;
+    const pct = p && p.total ? Math.round(100 * p.done / p.total) : 0;
+    const sub = p && p.iterations ? Math.round(100 * (p.iteration || 0) / p.iterations) : 0;
+    const col = j.state === 'paused' ? '#e0a53a' : (j.state === 'running' ? '#4caf7a' : '#8d9aa8');
+    const btn = (a, label) => `<button class="pill small" data-job="${j.id}" data-action="${a}">${label}</button>`;
+    const controls = (j.controls || []).filter(c => c !== 'none').map(c => btn(c, { pause: 'Pause', resume: 'Resume', stop: 'Stop' }[c])).join(' ');
+    const started = j.started_at ? new Date(j.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    return `<div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 12px;align-items:center;padding:6px 0;border-top:1px solid var(--ov-35,#8884)">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${col};margin-right:6px"></span><b style="color:var(--text)">${j.title}</b><br><span style="font-size:11px">${j.state}${j.pid ? ' · pid ' + j.pid : ''}${j.cores ? ' · ' + j.cores + ' cores' : ''}${started ? ' · since ' + started : ''}</span></span>
+      <span>${p && p.total ? `<div style="display:flex;align-items:center;gap:8px"><span style="min-width:90px">${p.done} / ${p.total} attitudes</span><span style="flex:1;height:8px;border-radius:4px;background:var(--ov-35,#8884);overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:var(--accent)"></span></span><span style="min-width:120px">${fmtEta(p.eta_s)}</span></div>` : ''}
+            ${p && p.iterations ? `<div style="display:flex;align-items:center;gap:8px;margin-top:3px;font-size:11px"><span style="min-width:90px">${p.current || ''}</span><span style="flex:1;height:5px;border-radius:3px;background:var(--ov-35,#8884);overflow:hidden"><span style="display:block;height:100%;width:${sub}%;background:#4caf7a"></span></span><span style="min-width:120px">iteration ${p.iteration} / ${p.iterations}</span></div>` : `<div style="font-size:11px">${j.detail || ''}</div>`}</span>
+      <span style="white-space:nowrap">${controls}</span></div>`;
+  }).join('');
+  $$('#cfd-jobs-rows button[data-job]').forEach(b => b.addEventListener('click', async () => {
+    const act = b.dataset.action;
+    if (act === 'stop' && !confirmClick(b, 'Click again to stop')) return;
+    b.disabled = true;
+    const r = await (await fetch('/api/cfd/jobs/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: b.dataset.job, action: act }) })).json();
+    if (!r.ok) $('#cfd-lib-status').textContent = r.error || 'failed';
+    cfdState.pending = true; await cfdRefresh(false);
+  }));
+}
+
+function cfdRenderLive(lib) {
+  const el = $('#cfd-live');
+  const lv = lib && lib.live;
+  if (!lv) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  if (lv.meshing) { el.innerHTML = `<b>Meshing</b> · ${lv.stage || ''}`; return; }
+  const pct = lv.iterations ? Math.min(100, Math.round(100 * lv.iteration / lv.iterations)) : 0;
+  const h = lv.history || { it: [], lift: [], drag: [] };
+  const last = h.lift.length ? h.lift[h.lift.length - 1] : NaN;
+  const chart = h.it.length > 3 ? svgChart('Lift while the solver iterates (N)', 'iteration', 'N', [{ label: 'lift', col: CR_COLS[2], x: h.it, y: h.lift }, { label: 'drag', col: CR_COLS[3], x: h.it, y: h.drag }], { w: 420, h: 150 }) : '';
+  el.innerHTML = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b>Now computing</b> α ${lv.alpha.toFixed(1)}°, β ${lv.beta.toFixed(1)}° · iteration ${lv.iteration}${lv.iterations ? ' / ' + lv.iterations : ''}` +
+    `<span style="flex:1;min-width:120px;height:8px;border-radius:4px;background:var(--ov-35,#8884);overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:#4caf7a"></span></span>` +
+    `<span>${pct} %${Number.isFinite(last) ? ' · lift now ' + last.toFixed(0) + ' N' : ''}${lv.stale ? ' · <span style="color:var(--red,#d9534f)">no output for ' + lv.age_s + ' s: is the solver still running?</span>' : ''}</span></div>` + chart;
+}
+
+async function cfdEnter() {
+  if (!cfdState.view) {
+    try {
+      cfdState.view = createCfdView($('#cfd-canvas'), {
+        onAttitude: (a, b) => { cfdSetAttitude(a, b, false); },
+        onAttitudeCommit: (a, b) => { cfdSetAttitude(a, b, true); },
+      });
+      cfdState.view.setTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+      cfdState.view.setFlowSpeed(+$('#cfd-pspeed').value || 0.3);
+    } catch (e) { console.warn('CFD view unavailable:', e.message); }
+  }
+  await cfdRefresh(true);
+  cfdPollStart();
+}
+
+async function cfdRefresh(full = false) {
+  let st;
+  try { st = await (await fetch('/api/cfd/status')).json(); } catch (e) { $('#cfd-lib-status').textContent = 'status failed: ' + e.message; return; }
+  cfdState.status = st;
+  // surfaces
+  const sel = $('#cfd-surface');
+  const cur = st.library ? st.library.dir.split('/')[2] : null;
+  const names = (st.surfaces || []).map(s => s.name);
+  if (sel.options.length !== names.length || [...sel.options].some((o, i) => o.value !== names[i])) {
+    sel.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('') || '<option value="">(none prepared)</option>';
+  }
+  if (cur && sel.value !== cur) sel.value = cur;
+  {  // quality box: the three local levels plus every library that exists for this surface (HPC imports have their own names)
+    const qsel = $('#cfd-quality');
+    const surfEntry = (st.surfaces || []).find(x => x.name === (cur || sel.value));
+    const names = ['quick', 'standard', 'fine'];
+    for (const l of (surfEntry && surfEntry.libraries) || []) if (l.quality && !names.includes(l.quality)) names.push(l.quality);
+    const have = [...qsel.options].map(o => o.value);
+    if (have.join('|') !== names.join('|')) {
+      const v = qsel.value;
+      qsel.innerHTML = names.map(n => `<option value="${n}">${{ quick: 'quick (test, ~1.5 min)', standard: 'standard (~10 min)', fine: 'fine (~40 min)' }[n] || n + ' (cluster)'}</option>`).join('');
+      if (names.includes(v)) qsel.value = v;
+    }
+    if (st.library && !qsel.dataset.touched) qsel.value = st.library.quality;
+  }
+  const surf = st.surface;
+  if (surf && cfdState.surfaceName !== cur) { cfdState.surfaceName = cur; cfdState.mesh = null; }
+  if (!$('#cfd-mass').value && st.airframe) $('#cfd-mass').value = st.airframe.mass.toFixed(2);
+  if (!$('#cfd-cg').value && st.airframe) $('#cfd-cg').value = st.airframe.cg.map(v => v.toFixed(3)).join(', ');
+  if (st.library && !$('#cfd-nproc').dataset.touched) $('#cfd-nproc').value = st.library.nproc || st.default_nproc;
+  cfdRenderJobs(st.jobs || []);
+  // foam + prepare status
+  const foam = st.foam || {};
+  const prep = st.prepare || {};
+  $('#cfd-prep-status').textContent = prep.running ? (prep.log.length ? prep.log[prep.log.length - 1].replace('[cfd.geometry] ', '') : 'preparing…')
+    : (prep.error ? prep.error : (foam.available ? `OpenFOAM ${foam.version} (${foam.cores} cores)` : 'OpenFOAM not found: brew install gerlero/openfoam/openfoam@2412'));
+  // library
+  const lib = st.library;
+  const running = !!(lib && lib.running);
+  $('#cfd-start').disabled = running || !lib;
+  $('#cfd-stop').disabled = !running;
+  $('#cfd-runone').disabled = running || !lib;
+  $('#cfd-prepare').disabled = !!prep.running;
+  if (lib) {
+    if (!$('#cfd-speed').dataset.touched) $('#cfd-speed').value = lib.speed_kmh;
+    if (lib.grid && lib.grid.alphas && lib.grid.alphas.length && !$('#cfd-alphas').dataset.touched) $('#cfd-alphas').value = lib.grid.alphas.join(',');
+    if (lib.grid && lib.grid.betas && lib.grid.betas.length && !$('#cfd-betas').dataset.touched) $('#cfd-betas').value = lib.grid.betas.join(',');
+    const pct = lib.total ? Math.round(100 * lib.done / lib.total) : 0;
+    const eta = lib.eta_s ? ` · about ${Math.round(lib.eta_s / 60)} min left` : '';
+    const mesh = lib.mesh ? `mesh ${(lib.mesh.cells / 1e6).toFixed(2)} M cells (${lib.mesh.quality}${lib.mesh.max_non_orthogonality ? ', non-ortho ' + lib.mesh.max_non_orthogonality.toFixed(0) + '°' : ''})` : 'no mesh yet';
+    $('#cfd-progress').innerHTML = `<div style="display:flex;align-items:center;gap:10px"><b>${lib.dir}</b><span>${lib.done} / ${lib.total} attitudes</span>` +
+      `<span style="flex:1;height:8px;border-radius:4px;background:var(--ov-35,#8884);overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:var(--accent)"></span></span>` +
+      `<span>${running ? (lib.stage || 'running') : (lib.error ? 'error: ' + lib.error : (lib.done ? 'idle' : 'not started'))}${eta}</span></div><div>${mesh} · ${lib.speed_kmh} km/h · ${lib.nproc} cores</div>`;
+    $('#cfd-lib-status').textContent = running ? 'running…' : '';
+    $('#cfd-log').textContent = (lib.log || []).join('\n');
+    cfdRenderCases(lib);
+    cfdRenderLive(lib);
+    hpcRenderBatches(st.hpc_batches || []);
+  } else {
+    $('#cfd-progress').textContent = st.surfaces && st.surfaces.length ? 'Surface prepared. Set speed and quality, then Start library.' : 'No surface yet: enter a file path above and press Prepare surface.';
+    $('#cfd-cases').innerHTML = '';
+  }
+  if (!cfdState.mesh && st.library && cfdState.view) await cfdLoadMesh();
+  const externallyRunning = !!(lib && lib.live && !lib.live.stale);
+  if (full || running || externallyRunning || cfdState.pending) { cfdState.pending = false; cfdQuery(); cfdStability(); cfdFetchFlow(); }
+}
+
+async function cfdLoadMesh() {
+  try {
+    const m = await (await fetch('/api/cfd/mesh')).json();
+    if (!m.ok) return;
+    cfdState.mesh = m;
+    cfdState.view.setMesh(m);
+    const cg = $('#cfd-cg').value.split(',').map(Number);
+    if (cg.length === 3 && cg.every(Number.isFinite)) cfdState.view.setCg(cg);
+    cfdState.view.setAttitude(+$('#cfd-alpha-n').value || 0, +$('#cfd-beta-n').value || 0);
+    const mt = m.meta || {};
+    $('#cfd-notes').textContent = `Surface: ${mt.source || ''} · planform ${cfdFmt(mt.area_m2, 2)} m², span ${cfdFmt(mt.span_m, 2)} m, length ${cfdFmt(mt.length_m, 2)} m, mean chord ${cfdFmt(mt.mean_chord_m, 2)} m · closed at ${mt.voxel_mm} mm voxels, ${mt.cfd_tris} triangles, watertight ${mt.watertight}`;
+  } catch (e) { console.warn('cfd mesh', e); }
+}
+
+function cfdRenderCases(lib) {
+  const alphas = [...new Set((lib.cases || []).map(c => c.alpha))].sort((a, b) => a - b);
+  const betas = [...new Set((lib.cases || []).map(c => c.beta))].sort((a, b) => a - b);
+  const by = {}; for (const c of lib.cases || []) by[`${c.alpha}|${c.beta}`] = c;
+  const dot = (s) => ({ done: '#4caf7a', doubtful: '#e0a53a', running: '#4f8fdc', failed: '#d9534f', pending: '#8d9aa8', extra: '#9b6bd6' }[s] || '#8d9aa8');
+  let h = '<table style="border-collapse:collapse;font-size:12px"><tr><th style="text-align:left;padding:2px 8px">alpha \\ beta</th>' + betas.map(b => `<th style="padding:2px 8px">${b}°</th>`).join('') + '</tr>';
+  for (const a of alphas) {
+    h += `<tr><td style="padding:2px 8px">${a}°</td>` + betas.map(b => {
+      const c = by[`${a}|${b}`];
+      if (!c) return '<td></td>';
+      const t = c.status === 'done' || c.status === 'doubtful' ? `L ${cfdFmt(c.lift, 0)} N, D ${cfdFmt(c.drag, 0)} N, ${c.iterations} it, ${cfdFmt(c.elapsed_s / 60, 1)} min${c.scatter != null ? ', scatter ' + (c.scatter * 100).toFixed(1) + '%' : ''}` : c.status;
+      return `<td style="padding:2px 8px;cursor:pointer" title="${t}" data-a="${a}" data-b="${b}"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${dot(c.status)};vertical-align:middle"></span> ${c.lift != null ? cfdFmt(c.lift, 0) + ' N' : c.status}</td>`;
+    }).join('') + '</tr>';
+  }
+  h += '</table><div class="hint" style="margin-top:4px">green done · orange done but the forces still moved (&gt;10 % scatter in the last 30 % of iterations) · blue running · grey pending · red failed · purple extra. Click a cell to show that attitude.</div>';
+  $('#cfd-cases').innerHTML = h;
+  $$('#cfd-cases td[data-a]').forEach(td => td.addEventListener('click', () => cfdSetAttitude(+td.dataset.a, +td.dataset.b, true)));
+}
+
+function cfdSetAttitude(a, b, commit) {
+  a = Math.round(a * 2) / 2; b = Math.round(b * 2) / 2;
+  $('#cfd-alpha').value = a; $('#cfd-alpha-n').value = a; $('#cfd-beta').value = b; $('#cfd-beta-n').value = b;
+  if (cfdState.view) cfdState.view.setAttitude(a, b);
+  cfdQueryDebounced(commit ? 0 : 60);
+  if (commit) cfdFetchFlow();
+}
+function cfdQueryDebounced(ms) {
+  clearTimeout(cfdState.queryTimer);
+  cfdState.queryTimer = setTimeout(cfdQuery, ms);
+}
+
+async function cfdQuery() {
+  if (!cfdState.status || !cfdState.status.library) return;
+  const a = +$('#cfd-alpha-n').value || 0, b = +$('#cfd-beta-n').value || 0;
+  const { mass, cg } = cfdMassCg();
+  const seq = ++cfdState.lastQuery;
+  let r;
+  try {
+    r = await (await fetch(`/api/cfd/query?alpha=${a}&beta=${b}&mass=${encodeURIComponent(mass)}&cg=${encodeURIComponent(cg)}`)).json();
+  } catch (e) { return; }
+  if (seq !== cfdState.lastQuery) return;      // a newer query is on its way
+  if (!r.ok) { $('#cfd-readout').innerHTML = `<div class="hint">${r.error || 'no data'}</div>`; $('#cfd-badge').textContent = ''; return; }
+  if (cfdState.view) {
+    const lo = +$('#cfd-cpmin').value, hi = +$('#cfd-cpmax').value;
+    if (r.cp_b64) cfdState.view.setCp(cfdDecodeCp(r.cp_b64), [lo, hi]);
+    cfdState.view.setForces({ lift: r.lift, drag: r.drag, side: r.side, weight: r.weight_N, My: r.M_cg_frd[1] });
+    const cgv = cg.split(',').map(Number);
+    if (cgv.length === 3 && cgv.every(Number.isFinite)) cfdState.view.setCg(cgv);
+  }
+  const src = r.exact ? 'computed attitude' : `interpolated from ${r.weights.map(w => w.key.replace('a', 'α').replace('_b', ' β') + (w.mirrored ? ' (mirrored)' : '') + ' ×' + w.w.toFixed(2)).join(', ')}`;
+  $('#cfd-badge').textContent = src;
+  const lw = r.L_over_W;
+  const rows = [
+    ['Lift', `${cfdFmt(r.lift, 1)} N`, lw != null ? `${(lw * 100).toFixed(0)} % of the weight` : ''],
+    ['Drag', `${cfdFmt(r.drag, 1)} N`, 'thrust needed to hold the speed'],
+    ['Side force', `${cfdFmt(r.side, 1)} N`, ''],
+    ['Pitching moment', `${cfdFmt(r.M_cg_frd[1], 1)} N m`, r.M_cg_frd[1] > 0 ? 'nose up' : (r.M_cg_frd[1] < 0 ? 'nose down' : '')],
+    ['Rolling moment', `${cfdFmt(r.M_cg_frd[0], 1)} N m`, r.M_cg_frd[0] > 0 ? 'right wing down' : (r.M_cg_frd[0] < 0 ? 'left wing down' : '')],
+    ['Yawing moment', `${cfdFmt(r.M_cg_frd[2], 1)} N m`, r.M_cg_frd[2] > 0 ? 'nose right' : (r.M_cg_frd[2] < 0 ? 'nose left' : '')],
+    ['CL / CD', `${cfdFmt(r.CL, 3)} / ${cfdFmt(r.CD, 3)}`, `L/D ${cfdFmt(r.CD ? r.lift / r.drag : NaN, 1)}`],
+    ['Cm / Cl / Cn', `${cfdFmt(r.Cm, 4)} / ${cfdFmt(r.Cl, 4)} / ${cfdFmt(r.Cn, 4)}`, 'about the CG'],
+    ['Cp range here', `${cfdFmt(r.cp_min, 2)} … ${cfdFmt(r.cp_max, 2)}`, ''],
+  ];
+  $('#cfd-readout').innerHTML = `<div style="font-weight:600;margin-bottom:6px">α ${a.toFixed(1)}°, β ${b.toFixed(1)}° at ${r.speed_kmh} km/h</div>` +
+    '<table style="width:100%;font-size:13px">' + rows.map(([k, v, n]) => `<tr><td class="hint" style="padding:2px 0">${k}</td><td style="text-align:right;font-weight:600">${v}</td></tr>${n ? `<tr><td colspan="2" class="hint" style="font-size:11px;padding-bottom:4px">${n}</td></tr>` : ''}`).join('') + '</table>' +
+    `<div class="hint" style="font-size:11px;margin-top:6px">S ${cfdFmt(r.ref.S_m2, 2)} m², c̄ ${cfdFmt(r.ref.c_m, 2)} m, b ${cfdFmt(r.ref.b_m, 2)} m, q ${cfdFmt(r.ref.q_Pa, 0)} Pa · clean foil, no fans or jets</div>`;
+}
+
+async function cfdStability() {
+  if (!cfdState.status || !cfdState.status.library) return;
+  const { mass, cg } = cfdMassCg();
+  let s;
+  try { s = await (await fetch(`/api/cfd/stability?mass=${encodeURIComponent(mass)}&cg=${encodeURIComponent(cg)}`)).json(); } catch (e) { return; }
+  cfdState.stab = s;
+  if (!s.ok) { $('#cfd-verdicts').textContent = s.error || 'no data'; $('#cfd-charts').innerHTML = ''; return; }
+  const v = (s.verdicts || []).map(x => `<div style="margin:3px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${x.ok === true ? '#4caf7a' : (x.ok === false ? '#d9534f' : '#e0a53a')};margin-right:6px"></span>${x.text}</div>`).join('');
+  const extra = [];
+  if (s.trim) extra.push(`trim α ${s.trim.alpha.toFixed(1)}°, CL ${s.trim.CL.toFixed(3)}, lift ${s.trim.lift_N.toFixed(0)} N`);
+  if (s.alpha_for_weight != null) extra.push(`α for L = W at ${s.speed_kmh} km/h: ${s.alpha_for_weight.toFixed(1)}° with a residual pitching moment of ${s.My_at_weight_Nm.toFixed(0)} N m (Cm ${s.Cm_at_weight.toFixed(4)}) to be held by an elevon or a CG move`);
+  else if (s.CL_required != null) extra.push(`CL ${s.CL_required.toFixed(3)} would be needed to carry the weight at this speed: outside the computed alphas`);
+  if (s.neutral_point_x != null) extra.push(`neutral point x = ${s.neutral_point_x.toFixed(3)} m (CG x ${(+s.cg[0]).toFixed(3)} m; the CG must stay ahead of it)`);
+  $('#cfd-verdicts').innerHTML = (v || '<div class="hint">Not enough computed attitudes yet.</div>') + (extra.length ? `<div class="hint" style="margin-top:6px">${extra.join(' · ')}</div>` : '') +
+    (s.notes && s.notes.length ? `<div class="hint" style="margin-top:4px;font-size:11px">${s.notes.join(' · ')}</div>` : '');
+  let ch = '<div style="display:flex;flex-wrap:wrap;gap:8px">';
+  if (s.longitudinal && s.longitudinal.length >= 2) {
+    const al = s.longitudinal.map(r => r.alpha);
+    ch += svgChart('Pitching moment about the CG', 'alpha °', 'Cm', [{ label: 'Cm (nose-up +)', col: CR_COLS[1], x: al, y: s.longitudinal.map(r => r.Cm) }, { label: 'cases', col: CR_COLS[1], x: al, y: s.longitudinal.map(r => r.Cm), dots: true }], { hline: 0, vline: s.trim ? s.trim.alpha : undefined });
+    ch += svgChart('Lift', 'alpha °', 'CL', [{ label: 'CL', col: CR_COLS[0], x: al, y: s.longitudinal.map(r => r.CL) }].concat(s.CL_required != null ? [{ label: 'CL for the weight', col: CR_COLS[3], x: al, y: al.map(() => s.CL_required) }] : []), { vline: s.alpha_for_weight != null ? s.alpha_for_weight : undefined });
+    ch += svgChart('Drag', 'alpha °', 'CD', [{ label: 'CD', col: CR_COLS[3], x: al, y: s.longitudinal.map(r => r.CD) }]);
+  }
+  if (s.lateral && s.lateral.length >= 2) {
+    const be = s.lateral.map(r => r.beta);
+    ch += svgChart(`Yaw and roll vs sideslip (alpha ${s.lateral_alpha}°)`, 'beta °', 'coefficient', [{ label: 'Cn (nose right +)', col: CR_COLS[2], x: be, y: s.lateral.map(r => r.Cn) }, { label: 'Cl (right wing down +)', col: CR_COLS[4], x: be, y: s.lateral.map(r => r.Cl) }], { hline: 0 });
+  }
+  $('#cfd-charts').innerHTML = ch + '</div>';
+}
+
+function cfdPollStart() {
+  clearInterval(cfdState.poll);
+  cfdState.poll = setInterval(() => {
+    if (!$('#tab-cfd').classList.contains('active')) return;
+    const st = cfdState.status;
+    const busy = (st && st.jobs && st.jobs.length) || (st && st.library && (st.library.running || (st.library.live && !st.library.live.stale))) || (st && st.prepare && st.prepare.running);
+    if (busy) cfdRefresh(false);
+  }, 4000);
+}
+
+// controls
+for (const [range, num] of [['#cfd-alpha', '#cfd-alpha-n'], ['#cfd-beta', '#cfd-beta-n']]) {
+  $(range).addEventListener('input', () => { $(num).value = $(range).value; cfdSetAttitude(+$('#cfd-alpha').value, +$('#cfd-beta').value, false); });
+  $(range).addEventListener('change', () => cfdSetAttitude(+$('#cfd-alpha').value, +$('#cfd-beta').value, true));
+  $(num).addEventListener('change', () => { $(range).value = $(num).value; cfdSetAttitude(+$('#cfd-alpha-n').value, +$('#cfd-beta-n').value, true); });
+}
+$('#cfd-reset').addEventListener('click', () => cfdSetAttitude(0, 0, true));
+$('#cfd-airrange').addEventListener('change', () => cfdState.view && cfdState.view.setAirRangeScale(+$('#cfd-airrange').value || 0.3));
+$('#cfd-seed').addEventListener('change', () => cfdState.view && cfdState.view.setSeedMode($('#cfd-seed').value));
+$('#cfd-sheetz').addEventListener('change', () => { const v = parseFloat($('#cfd-sheetz').value); if (cfdState.view && Number.isFinite(v)) cfdState.view.setSheetZ(v); });
+$('#cfd-particles').addEventListener('change', () => cfdState.view && cfdState.view.setShowParticles($('#cfd-particles').checked));
+$('#cfd-streams').addEventListener('change', () => cfdState.view && cfdState.view.setShowStreams($('#cfd-streams').checked));
+$('#cfd-pcount').addEventListener('change', () => cfdState.view && cfdState.view.setParticleCount(+$('#cfd-pcount').value || 6000));
+$('#cfd-scount').addEventListener('change', () => cfdState.view && cfdState.view.setStreamCount(+$('#cfd-scount').value || 0));
+$('#cfd-pspeed').addEventListener('input', () => { $('#cfd-pspeed-v').textContent = $('#cfd-pspeed').value; if (cfdState.view) cfdState.view.setFlowSpeed(+$('#cfd-pspeed').value); });
+$('#cfd-turn').addEventListener('click', () => { const on = !$('#cfd-turn').classList.contains('on'); $('#cfd-turn').classList.toggle('on', on); if (cfdState.view) cfdState.view.setTurnMode(on); });
+$('#cfd-arrows').addEventListener('change', () => cfdState.view && cfdState.view.setShowArrows($('#cfd-arrows').checked));
+$('#cfd-view').addEventListener('change', () => cfdState.view && cfdState.view.viewFrom($('#cfd-view').value));
+for (const id of ['#cfd-cpmin', '#cfd-cpmax']) $(id).addEventListener('change', () => {
+  $('#cfd-cb-lo').textContent = $('#cfd-cpmin').value; $('#cfd-cb-hi').textContent = $('#cfd-cpmax').value;
+  if (cfdState.view) cfdState.view.setCpRange([+$('#cfd-cpmin').value, +$('#cfd-cpmax').value]);
+});
+for (const id of ['#cfd-mass', '#cfd-cg']) $(id).addEventListener('change', () => { cfdQuery(); cfdStability(); });
+for (const id of ['#cfd-alphas', '#cfd-betas', '#cfd-nproc']) $(id).addEventListener('change', () => { $(id).dataset.touched = '1'; });
+// speed or quality name a different library of the same surface: switch to it (existing results show up at once)
+for (const id of ['#cfd-speed', '#cfd-quality']) $(id).addEventListener('change', async () => {
+  $(id).dataset.touched = '1';
+  const body = { surface: $('#cfd-surface').value, speed_kmh: +$('#cfd-speed').value || 60, quality: $('#cfd-quality').value };
+  const r = await (await fetch('/api/cfd/library/select', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+  if (!r.ok) { $('#cfd-lib-status').textContent = r.error; return; }
+  cfdState.pending = true; await cfdRefresh(true);
+});
+$('#cfd-surface').addEventListener('change', async () => {
+  const body = { surface: $('#cfd-surface').value, speed_kmh: +$('#cfd-speed').value || 60, quality: $('#cfd-quality').value };
+  const r = await (await fetch('/api/cfd/library/select', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+  if (!r.ok) { $('#cfd-lib-status').textContent = r.error; return; }
+  cfdState.mesh = null; cfdState.pending = true; await cfdRefresh(true);
+});
+$('#cfd-prepare').addEventListener('click', async () => {
+  const src = $('#cfd-src').value.trim();
+  if (!src) { $('#cfd-prep-status').textContent = 'enter a file path first'; return; }
+  const body = { source: src, voxel_mm: +$('#cfd-voxel').value || 10, match: $('#cfd-match').value };
+  const r = await (await fetch('/api/cfd/surface/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+  if (!r.ok) { $('#cfd-prep-status').textContent = r.error; return; }
+  $('#cfd-prep-status').textContent = 'preparing ' + r.name + '…';
+  cfdState.pending = true;
+  const wait = setInterval(async () => {
+    await cfdRefresh(false);
+    const p = cfdState.status && cfdState.status.prepare;
+    if (p && !p.running) {
+      clearInterval(wait);
+      if (!p.error) {
+        // select the new surface with the chosen speed and quality, then show it
+        const body2 = { surface: r.name, speed_kmh: +$('#cfd-speed').value || 60, quality: $('#cfd-quality').value };
+        await fetch('/api/cfd/library/select', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body2) });
+        cfdState.mesh = null; await cfdRefresh(true);
+      }
+    }
+  }, 2000);
+});
+$('#cfd-start').addEventListener('click', async () => {
+  // (re)select with the speed and quality in the boxes so the library matches them
+  const sel = { surface: $('#cfd-surface').value, speed_kmh: +$('#cfd-speed').value || 60, quality: $('#cfd-quality').value };
+  let r = await (await fetch('/api/cfd/library/select', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sel) })).json();
+  if (!r.ok) { $('#cfd-lib-status').textContent = r.error; return; }
+  const body = { alphas: $('#cfd-alphas').value, betas: $('#cfd-betas').value, nproc: +$('#cfd-nproc').value || 0 };
+  r = await (await fetch('/api/cfd/library/start', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+  if (!r.ok) { $('#cfd-lib-status').textContent = r.error; return; }
+  cfdState.mesh = null; cfdState.pending = true; await cfdRefresh(true);
+});
+$('#cfd-stop').addEventListener('click', async () => { await fetch('/api/cfd/library/stop', { method: 'POST' }); await cfdRefresh(false); });
+$('#cfd-runone').addEventListener('click', async () => {
+  const body = { alpha: +$('#cfd-alpha-n').value || 0, beta: +$('#cfd-beta-n').value || 0, nproc: +$('#cfd-nproc').value || 0 };
+  const r = await (await fetch('/api/cfd/library/run_one', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+  if (!r.ok) { $('#cfd-lib-status').textContent = r.error; return; }
+  cfdState.pending = true; await cfdRefresh(false);
+});
+$('#cfd-nproc').addEventListener('change', () => { $('#cfd-nproc').dataset.touched = '1'; });
+
+
+// ---- HPC (AUTH Aristotelis) bundles
+function hpcRenderBatches(list) {
+  const el = $('#hpc-batches');
+  if (!list || !list.length) { el.innerHTML = ''; return; }
+  el.innerHTML = '<b>Batches</b><br>' + list.map(b => `${b.batch}: ${b.cases.length} attitudes, ${b.speed_kmh} km/h, ${b.quality}, built ${new Date(b.created_at).toLocaleString()}` +
+    (b.tar ? ` · <code>${b.tar}</code>` : '') + (b.imported_at ? ` · <span style="color:#4caf7a">results imported ${new Date(b.imported_at).toLocaleString()} (${b.imported} ok, ${b.failed} failed)</span>` : ' · waiting for results')).join('<br>');
+}
+function hpcRenderSteps(m) {
+  const host = m.cluster.host, b = m.batch;
+  $('#hpc-steps').innerHTML = `<div><b>Bundle ready:</b> <code>${m.tar}</code> (${m.tar_mb} MB, ${m.cases.length} attitudes, ${m.iterations} iterations each, ${m.cores_per_node} cores per attitude)</div>
+<ol style="margin:6px 0 0 18px;line-height:1.6">
+<li>Upload (from this Mac, replace USER with your AUTH username):<br><code>scp ${m.tar} USER@${host}:~/</code></li>
+<li>Log in and unpack:<br><code>ssh USER@${host}</code><br><code>tar xzf ${b}.tar.gz && cd ${b}</code></li>
+<li>Submit everything (the mesh first, then all attitudes as a job array, ${m.max_parallel_jobs} at a time):<br><code>./submit.sh</code></li>
+<li>Follow the progress:<br><code>./status.sh</code> (or <code>squeue -u $USER</code>)</li>
+<li>When every attitude is finished, pack the results:<br><code>./collect.sh</code></li>
+<li>Download (from this Mac):<br><code>scp USER@${host}:~/${b}/${b}_results.tar.gz ~/Downloads/</code></li>
+<li>Import below (path <code>~/Downloads/${b}_results.tar.gz</code>): the library <b>${m.library_quality}</b> appears in the Quality box, with the air fields, ready for the free flight replay.</li>
+</ol>
+<div class="hint" style="margin-top:4px">Next iteration: change the batch name (b02…), the angles, speed or quality, Build bundle again, repeat. Every batch keeps its own library, so results are never overwritten.</div>`;
+}
+$('#hpc-build').addEventListener('click', async () => {
+  const st = $('#hpc-status'); st.textContent = 'building…'; $('#hpc-build').disabled = true;
+  try {
+    const body = { surface: $('#cfd-surface').value, batch: $('#hpc-batch').value, alphas: $('#hpc-alphas').value, betas: $('#hpc-betas').value,
+                   speed_kmh: +$('#hpc-speed').value || 60, quality: $('#hpc-quality').value, max_parallel_jobs: +$('#hpc-parallel').value || 10 };
+    const r = await (await fetch('/api/cfd/hpc/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+    if (!r.ok) throw new Error(r.error || 'failed');
+    hpcRenderSteps(r.manifest); st.textContent = '';
+    $('#hpc-import-path').value = `~/Downloads/${r.manifest.batch}_results.tar.gz`;
+    await cfdRefresh(false);
+  } catch (e) { st.textContent = 'error: ' + e.message; }
+  $('#hpc-build').disabled = false;
+});
+$('#hpc-import').addEventListener('click', async () => {
+  const st = $('#hpc-import-status'); st.textContent = 'importing…'; $('#hpc-import').disabled = true;
+  try {
+    const r = await (await fetch('/api/cfd/hpc/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: $('#hpc-import-path').value.trim() }) })).json();
+    if (!r.ok) throw new Error(r.error || 'failed');
+    st.textContent = `imported ${r.imported.length} attitudes into ${r.library_dir}` + (r.failed.length ? ` (${r.failed.length} missing: ${r.failed.map(f => f.key).join(', ')})` : '');
+    cfdState.mesh = null; cfdState.pending = true; delete $('#cfd-quality').dataset.touched; await cfdRefresh(true);
+  } catch (e) { st.textContent = 'error: ' + e.message; }
+  $('#hpc-import').disabled = false;
+});
+
+// ---- CFD free flight: run on the library, replay with the Cruise Test replay machinery (main 3D view)
+let cffLast = null, cffAutoDone = false;
+let cffAirLast = { a: null, b: null, t: 0 };
+function cffAirFrame(i, f, tt) {
+  // the CFD view follows the flight: aircraft at the instantaneous air angles (and bank), air field reloaded when they move
+  if (!cfdState.view || !$('#cff-air').checked) return;
+  const a = f.alpha_deg[i], b = f.beta_deg ? f.beta_deg[i] : 0, roll = f.roll_deg ? f.roll_deg[i] : 0;
+  cfdState.view.setAttitude(a, b, roll);
+  $('#cfd-badge').textContent = `replay t ${tt.toFixed(1)} s · α ${a.toFixed(1)}° β ${b.toFixed(1)}° · wind head ${f.wind_head ? f.wind_head[i].toFixed(1) : 0} / cross ${f.wind_cross ? f.wind_cross[i].toFixed(1) : 0} m/s`;
+  const now = performance.now();
+  if (cffAirLast.a === null || (Math.abs(a - cffAirLast.a) > 1.0 || Math.abs(b - cffAirLast.b) > 1.0) && now - cffAirLast.t > 700) {
+    cffAirLast = { a, b, t: now };
+    $('#cfd-alpha-n').value = Math.round(a * 2) / 2; $('#cfd-alpha').value = $('#cfd-alpha-n').value;
+    $('#cfd-beta-n').value = Math.round(b * 2) / 2; $('#cfd-beta').value = $('#cfd-beta-n').value;
+    cfdQuery(); cfdFetchFlow();
+  }
+}
+function cffReplayStart(f) {
+  if (!f || !f.pos || !f.pos.length) return;
+  if (cruiseReplay.active) cruiseReplayStop();
+  cffAirLast = { a: null, b: null, t: 0 };
+  cruiseReplay.onFrame = cffAirFrame;
+  cruiseReplay.data = f; cruiseReplay.active = true; cruiseReplay.t0 = performance.now();
+  cruiseReplay.prevCam = camMode;
+  if (camMode !== 'follow') { camMode = 'follow'; $('#btn-follow').textContent = CAM_LABELS[camMode]; $('#btn-follow').classList.add('on'); scene.setCameraMode('follow'); }
+  $('#cr-rate').value = $('#cff-rate').value;
+  $('#cff-play').disabled = true; $('#cff-stop').disabled = false;
+  cruiseReplayFrame();
+  const watch = setInterval(() => { if (!cruiseReplay.active) { clearInterval(watch); cruiseReplay.onFrame = null; if (cfdState.view) cfdState.view.setAttitude(+$('#cfd-alpha-n').value || 0, +$('#cfd-beta-n').value || 0, 0); $('#cfd-badge').textContent = ''; cfdQuery(); $('#cff-play').disabled = false; $('#cff-stop').disabled = true; } }, 300);
+}
+function cffRender(r) {
+  const s = r.summary || {}, su = r.setup || {};
+  const v = r.verdict || {};
+  const lines = [
+    `<div style="font-weight:600">${v.label || ''}${r.ended ? '' : ' (flew the whole ' + su.duration_s + ' s)'}</div>`,
+    su.controller === 'hold'
+      ? `Ideal pilot: holds ${su.speed_kmh.toFixed(0)} km/h, altitude and heading with up to ${su.thrust_max_N.toFixed(0)} N of fan thrust (${su.fans_max_N.toFixed(0)} N installed) and control moments of ${su.control_moments_Nm.join(' / ')} N m (roll / pitch / yaw). ` +
+        (su.pitch_trim_deg != null ? `Level flight needs about ${su.pitch_trim_deg.toFixed(1)}° of pitch at this speed.` : `At this speed the foil never carries the weight inside the computed range (${su.lift_at_range_top_N.toFixed(0)} N at the edge vs ${su.weight_N.toFixed(0)} N): the pilot flies at the edge and the fans' thrust cannot replace lift here.`) +
+        ` Release pitch ${su.pitch0_deg}°, mass ${su.mass_kg.toFixed(1)} kg.`
+      : `Hands off: release pitch ${su.pitch0_deg}°, ${su.speed_kmh.toFixed(0)} km/h, mass ${su.mass_kg.toFixed(1)} kg, thrust held at ${su.thrust_N.toFixed(0)} N.`,
+    `Wind: ${(su.wind_events || []).map(e => `${e.t}s → head ${e.head}, cross ${e.cross}, up ${e.up} m/s`).join('; ')}${su.turbulence_rms ? ` + turbulence ${su.turbulence_rms} m/s RMS` : ''}.`,
+    `Pitch ranged ${s.pitch_range_deg ? s.pitch_range_deg.map(x => x.toFixed(0)).join('…') : '–'}°, max roll ${cfdFmt(s.max_roll_deg, 0)}°, heading change ${cfdFmt(s.heading_change_deg, 0)}°, drifted ${cfdFmt(s.lateral_drift_m, 0)} m sideways, altitude ${cfdFmt(s.alt_change_m, 0)} m, sideslip ${s.beta_range_deg ? s.beta_range_deg.map(x => x.toFixed(0)).join('…') : '–'}°.`,
+    `Library ${su.library} (${su.attitudes} attitudes, alpha ${su.table_range.alpha.map(x => (+x).toFixed(0)).join('…')}°, beta ${su.table_range.beta.map(x => (+x).toFixed(0)).join('…')}°); ${(100 * su.outside_steps / su.steps).toFixed(0)} % of the steps were outside the computed range (rough flat-plate extension there). Damping (roll, pitch, yaw) ${su.damping_Nms_per_rad.map(x => x.toFixed(0)).join(' / ')} N m s/rad from the strip model.`,
+  ];
+  $('#cff-summary').innerHTML = lines.join('<br>');
+  const f = r;
+  $('#cff-charts').innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+    svgChart('Attitude', 't s', 'deg', [{ label: 'pitch', col: CR_COLS[0], x: f.t, y: f.pitch_deg }, { label: 'roll', col: CR_COLS[3], x: f.t, y: f.roll_deg }, { label: 'yaw', col: CR_COLS[2], x: f.t, y: f.yaw_deg }]) +
+    svgChart('Air angles', 't s', 'deg', [{ label: 'alpha', col: CR_COLS[1], x: f.t, y: f.alpha_deg }, { label: 'beta (sideslip)', col: CR_COLS[4], x: f.t, y: f.beta_deg }], { hline: 0 }) +
+    svgChart('Altitude and sideways drift', 't s', 'm', [{ label: 'altitude', col: CR_COLS[2], x: f.t, y: f.alt }, { label: 'east', col: CR_COLS[5], x: f.t, y: f.east }]) +
+    svgChart('Forces', 't s', 'N', [{ label: 'lift', col: CR_COLS[2], x: f.t, y: f.lift }, { label: 'drag', col: CR_COLS[3], x: f.t, y: f.drag }, { label: 'side', col: CR_COLS[4], x: f.t, y: f.side }], { hline: (r.setup.mass_kg || 0) * 9.81 }) +
+    svgChart('Speed', 't s', 'm/s', [{ label: 'airspeed', col: CR_COLS[0], x: f.t, y: f.airspeed }]) +
+    svgChart('Wind', 't s', 'm/s', [{ label: 'headwind', col: CR_COLS[0], x: f.t, y: f.wind_head }, { label: 'crosswind (from right +)', col: CR_COLS[4], x: f.t, y: f.wind_cross }, { label: 'updraft', col: CR_COLS[2], x: f.t, y: f.wind_up }], { hline: 0 }) +
+    (su.controller === 'hold' ? svgChart('Pilot', 't s', '', [{ label: 'thrust N', col: CR_COLS[3], x: f.t, y: f.thrust }, { label: 'pitch target °', col: CR_COLS[1], x: f.t, y: f.pitch_target_deg }]) +
+      svgChart('Control moments', 't s', 'N m', [{ label: 'roll', col: CR_COLS[3], x: f.t, y: f.M_ctrl.map(m => m[0]) }, { label: 'pitch', col: CR_COLS[0], x: f.t, y: f.M_ctrl.map(m => m[1]) }, { label: 'yaw', col: CR_COLS[2], x: f.t, y: f.M_ctrl.map(m => m[2]) }], { hline: 0 }) : '') + '</div>';
+}
+async function cffRun(playAfter) {
+  const st = $('#cff-status'); st.textContent = 'flying…'; $('#cff-run').disabled = true;
+  try {
+    const { mass, cg } = cfdMassCg();
+    const events = $('#cff-wind').value.split('\n').map(l => l.trim()).filter(l => l && !/^[a-z#]/i.test(l)).map(l => { const v = l.split(/[\s,;]+/).map(Number); return { t: v[0] || 0, head: v[1] || 0, cross: v[2] || 0, up: v[3] || 0, ramp: v[4] || 0 }; });
+    const body = { pitch0_deg: +$('#cff-pitch').value || 0, crosswind_ms: +$('#cff-cross').value || 0, headwind_ms: +$('#cff-head').value || 0,
+                   speed_kmh: +$('#cff-speed').value || 60, duration_s: +$('#cff-dur').value || 30, damping_scale: +$('#cff-damp').value, mass, cg,
+                   controller: $('#cff-ctrl').value, thrust_fraction: +$('#cff-thr').value || 1, turbulence_rms: +$('#cff-turb').value || 0, wind_events: events };
+    const r = await (await fetch('/api/cfd/flight', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+    if (!r.ok) throw new Error(r.error || 'failed');
+    cffLast = r; cffRender(r); st.textContent = ''; $('#cff-play').disabled = false;
+    if (playAfter) cffReplayStart(r);
+  } catch (e) { st.textContent = 'error: ' + e.message; }
+  $('#cff-run').disabled = false;
+}
+$('#cff-run').addEventListener('click', () => cffRun(false));
+$('#cff-play').addEventListener('click', () => cffReplayStart(cffLast));
+$('#cff-stop').addEventListener('click', () => { cruiseReplayStop(); $('#cff-play').disabled = !cffLast; $('#cff-stop').disabled = true; });
+$('#cff-auto').addEventListener('change', () => { cffAutoDone = false; if ($('#cff-auto').checked) $('#cff-status').textContent = 'waiting for the library to complete…'; else $('#cff-status').textContent = ''; });
+// the auto-run: when the selected library has every planned attitude, run the flight once and play it
+const cffAutoWatch = setInterval(() => {
+  if (!$('#cff-auto').checked || cffAutoDone) return;
+  const lib = cfdState.status && cfdState.status.library;
+  if (!lib || !lib.total || lib.done < lib.total || lib.running || (lib.live && !lib.live.stale && lib.live.key)) return;
+  cffAutoDone = true;
+  $('#cff-status').textContent = 'library complete: flying…';
+  $('.tabs button[data-tab="cfd"]').click();
+  cffRun(true);
+}, 5000);
+// keep polling the status while the auto-run waits, even if nothing seems to run
+setInterval(() => { if ($('#cff-auto').checked && !cffAutoDone && $('#tab-cfd').classList.contains('active')) cfdRefresh(false); }, 20000);
+
+
+// ============================ FLIGHT TESTS TAB ============================
+// One button per curated test (scenarios/*_winner.json); progress and result in plain words.
+const FLIGHT_TESTS = [
+  { file: 'fw_auto_hop_winner', title: 'Automatic flight',
+    what: 'The nose rises and holds at 8.5°. 3 s later the aircraft takes off by itself to 1 m, hovers 5 s, lands, lowers the nose and disarms. Sticks stay centred.' },
+  { file: 'fw_auto_hop_switchoff_winner', title: 'Nose-lift switch off in the air',
+    what: 'Same flight. 8 s after the takeoff the nose-lift switch goes off: the aircraft must land at once and disarm.' },
+  { file: 'fw_auto_hop_kill_winner', title: 'Kill in the air',
+    what: 'Same flight. 8 s after the takeoff the kill switch goes on: every motor must stop at once. The aircraft falls, that is what a kill does.' },
+];
+const TEST_PHASE_NAMES = {
+  radio_on: 'radio on', wait_ready: 'PX4 start', arm: 'arm', parked: 'on the legs', lift: 'nose lift',
+  wait_takeoff: 'hold, takeoff', flight: 'flight, landing', climb_and_hover: 'climb, hover', lowered: 'nose lowering',
+  switch_off: 'switch off', kill: 'kill', after: 'after the kill', guard_kill: 'end',
+};
+let testsScenarios = {}, testsTimer = null, testsCurrent = null;
+
+async function renderFlightTests() {
+  const el = $('#tests-list'); if (!el) return;
+  try {
+    const r = await api('/api/scenarios');
+    testsScenarios = Object.fromEntries((r.scenarios || []).map(s => [s.file.replace(/\.json$/, ''), s]));
+  } catch (e) { el.innerHTML = `<div class="hint">${esc(e.message)}</div>`; return; }
+  // the tests need the flight controller's nose-lift module (NL_AUTO): a stock PX4 build has none, and the test then
+  // waits for a nose lift that never comes (8 Oct: the app on port 8080 runs ~/PX4-Autopilot, not ~/PX4-nl)
+  let ready = false, setup = '';
+  try {
+    const [pr, st] = await Promise.all([api('/api/params'), api('/api/status')]);
+    const p = pr.params || pr;
+    const n = Object.keys(p).length;
+    const where = st.conn_mode === 'hitl' ? 'the Pixhawk (HITL)' : 'PX4 SITL';
+    if (!n) setup = `<div class="card"><b>PX4 parameters not loaded yet.</b> <span class="hint">Wait for "PX4 connected", then open this tab again.</span></div>`;
+    else if (!('NL_AUTO' in p)) setup = `<div class="card" style="box-shadow: inset 0 0 0 1.5px var(--bad)"><b style="color:var(--bad)">This PX4 has no nose-lift module.</b>
+      <div class="hint">Connected to ${esc(where)} without the nose-lift firmware (a stock PX4 build), so the nose would never rise and the test cannot run.
+      Use the app started with the nose-lift firmware: launch configuration <span class="mono">app-winnerC-sitl-mac</span> (http://localhost:8084), or start the app with <span class="mono">--px4-dir ~/PX4-nl</span>.</div></div>`;
+    else {
+      ready = true;
+      const v = k => (p[k] && p[k].value !== undefined) ? p[k].value : p[k];
+      const guards = 'NL_AUTO_HCMD' in p ? `takeoff guards on (hold limit ${mnum(v('NL_AUTO_HCMD'), 2)}, nose drop ${mnum(v('NL_AUTO_HDROP'), 1)}°)` : 'no takeoff guards (older nose-lift build)';
+      setup = `<div class="card"><b>Ready.</b> <span class="hint">Connected to ${esc(where)} · nose-lift firmware found · ${esc(guards)} · each test sets its own height and hover time.</span></div>`;
+    }
+  } catch (e) { setup = `<div class="card"><b>PX4 not reachable.</b> <span class="hint">${esc(e.message)}</span></div>`; }
+  $('#tests-setup').innerHTML = setup;
+  el.innerHTML = FLIGHT_TESTS.map(t => {
+    const sc = testsScenarios[t.file];
+    const steps = sc ? (sc.phases || []).map(p => `<span class="test-step">${esc(TEST_PHASE_NAMES[p] || p)}</span>`).join('') : '<span class="hint">scenario file missing</span>';
+    return `<div class="card test-card"><div class="test-head"><div><div class="test-title">${esc(t.title)}</div>
+      <div class="hint">${esc(t.what)}</div><div class="test-steps">${steps}</div></div>
+      <button class="pill primary test-run" data-test="${esc(t.file)}" ${sc && ready ? '' : 'disabled'}>Fly</button></div></div>`;
+  }).join('');
+  $$('#tests-list button[data-test]').forEach(b => b.addEventListener('click', async () => {
+    $$('#tests-list button[data-test]').forEach(x => { x.disabled = true; });
+    b.textContent = 'Starting…';
+    const tt = FLIGHT_TESTS.find(x => x.file === b.dataset.test);
+    $('#tests-status').innerHTML = `<div class="card"><div class="test-title">${esc(tt ? tt.title : b.dataset.test)}</div>
+      <div class="test-verdict">Starting…</div><div class="hint">PX4 restarts and the aircraft is put back on its legs (about 15 s).</div></div>`;
+    try {
+      const r = await api('/api/scenario/start', { scenario: b.dataset.test });
+      testsCurrent = b.dataset.test;
+      logLine(`[test] ${r.name}: ${(r.phases || []).join(' > ')}`);
+      pollFlightTests();
+    } catch (e) {
+      $('#tests-status').innerHTML = `<div class="card"><div class="test-verdict bad">Did not start</div><div class="hint">${esc(e.message)}</div></div>`;
+    }
+    b.textContent = 'Fly';
+    $$('#tests-list button[data-test]').forEach(x => { x.disabled = !ready; });
+  }));
+  pollFlightTests();
+}
+
+function testMetric(label, v, unit, nd = 2) {
+  return `<tr><td>${esc(label)}</td><td class="num">${v === undefined || v === null ? '-' : mnum(v, nd)}</td><td>${esc(unit)}</td></tr>`;
+}
+
+async function pollFlightTests() {
+  clearTimeout(testsTimer);
+  let st; try { st = await api('/api/scenario/status'); } catch (e) { return; }
+  const el = $('#tests-status'); if (!el) return;
+  if (!st.name) { el.innerHTML = '<div class="hint">No test running.</div>'; return; }
+  const file = Object.keys(testsScenarios).find(f => (testsScenarios[f].name || f) === st.name) || testsCurrent;
+  const phases = (testsScenarios[file] && testsScenarios[file].phases) || [];
+  const t = FLIGHT_TESTS.find(x => x.file === file);
+  const failedAt = !st.running && !st.ok ? st.phase_index : -1;
+  const steps = phases.map((p, i) => {
+    const cls = i === failedAt ? 'failed' : (st.running ? (i < st.phase_index ? 'done' : i === st.phase_index ? 'now' : '') : (st.ok || i < st.phase_index ? 'done' : ''));
+    return `<span class="test-step ${cls}">${esc(TEST_PHASE_NAMES[p] || p)}</span>`;
+  }).join('');
+  let body;
+  if (st.running) {
+    body = `<div class="test-verdict">Running: ${esc(TEST_PHASE_NAMES[st.phase] || st.phase || '')}</div>
+      <div class="hint">phase ${st.phase_index + 1} of ${st.phase_count} · sim time ${mnum(st.sim_time, 1)} s</div>
+      <div class="row tight" style="margin-top:8px"><button class="pill small" id="tests-stop">Stop the test</button></div>`;
+  } else {
+    const m = (st.result && st.result.metrics) || {};
+    const fl = (m.phases || {}).flight || (m.phases || {}).climb_and_hover || {};
+    body = `<div class="test-verdict ${st.ok ? 'ok' : 'bad'}">${st.ok ? 'PASSED' : 'FAILED'}</div>
+      ${(st.failures || []).map(f => `<div class="hint" style="color:var(--bad)">${esc(f)}</div>`).join('')}
+      <table class="grid"><tbody>
+        ${testMetric('peak height', m.max_alt_m, 'm')}
+        ${testMetric('touchdown speed', m.touchdown_speed, 'm/s')}
+        ${testMetric('max tilt', m.max_tilt_deg, '°', 1)}
+        ${testMetric('drift in the air', fl.pos_drift, 'm')}
+        ${testMetric('max speed in the air', fl.speed_max, 'm/s')}
+        ${testMetric('time in the air', (st.result || {}).flight_time ?? m.flight_time, 's', 1)}
+        <tr><td>crash</td><td colspan="2" style="color:${m.crashed ? 'var(--bad)' : 'inherit'}">${m.crashed ? esc(m.crash_reason || 'yes') : 'no'}</td></tr>
+      </tbody></table>`;
+  }
+  el.innerHTML = `<div class="card"><div class="test-title">${esc(t ? t.title : st.name)}</div><div class="test-steps">${steps}</div>${body}</div>`;
+  const stop = $('#tests-stop'); if (stop) stop.addEventListener('click', () => api('/api/scenario/stop', {}));
+  if (st.running) testsTimer = setTimeout(pollFlightTests, 700);
+}
+
+$$('.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'tests') renderFlightTests(); }));

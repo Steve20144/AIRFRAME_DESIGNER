@@ -1,0 +1,36 @@
+{
+ "base": {
+  "NL_Q_FC": 50.0,
+  "NL_STUCK_S": 10.0,
+  "NL_MAX_CMD": 1.0,
+  "NL_I_MAX": 40,
+  "NL_AUTO_HCMD": 0.83,
+  "NL_AUTO_HDROP": 5.0,
+  "NL_AUTO_RAMP": 2.0,
+  "NL_AUTO_SLEW": 0.3,
+  "NL_AUTO_HOLD": 1,
+  "NL_AUTO_HFL": 0.7,
+  "NL_AUTO_VFL": 0.15,
+  "MPC_LAND_ALT3": 0.7,
+  "MPC_LAND_CRWL": 0.15,
+  "MPC_LAND_SPEED": 0.2,
+  "NL_AUTO_TD": 3,
+  "NL_AUTO_ALT": 1.0,
+  "NL_AUTO_HOV": 10.0
+ },
+ "candidates": {
+  "final": {}
+ },
+ "thrusts": [
+  36,
+  32,
+  30,
+  28
+ ],
+ "seeds": [
+  0,
+  1,
+  2
+ ],
+ "scenario": "scenarios/fw_auto_hop_winner.json"
+}

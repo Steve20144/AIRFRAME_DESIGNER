@@ -489,6 +489,249 @@ def build_app(state: AppState) -> FastAPI:
         r["groups"] = default_groups(af)
         return json_safe(r)
 
+    @app.post("/api/cruise/test")
+    async def cruise_test_api(body: dict | None = None):
+        """Cruise Test tab: alpha sweep, trim, static margin and a free-flight stability run on the loaded airframe."""
+        from ..analysis import cruise as cruise_mod
+        body = body or {}
+        af = sim.airframe
+        kw = {k: float(body[k]) for k in ("speed_kmh", "alpha_min", "alpha_max", "step", "duration_s", "perturb_q_deg_s", "altitude_m", "cg_shift_m") if k in body}
+        try:
+            r = await run_in_threadpool(cruise_mod.cruise_test, af, **kw)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
+        return json_safe(r)
+
+    # ---- CFD tab: OpenFOAM attitude library on the prepared foil surface (airframe_designer/cfd)
+    cfd = {"mgr": None}
+
+    def cfd_mgr():
+        if cfd["mgr"] is None:
+            from ..cfd.library import Manager
+            cfd["mgr"] = Manager()
+        return cfd["mgr"]
+
+    def cfd_auto_select(mgr):
+        """No library chosen yet: take the first prepared surface and its most complete library (or 60 km/h standard)."""
+        from ..cfd import library as cfdlib
+        if mgr.lib is not None:
+            return mgr.lib
+        surfaces = cfdlib.list_surfaces()
+        if not surfaces:
+            return None
+        s = surfaces[0]
+        best = max(s["libraries"], key=lambda l: l["done"], default=None)
+        if best:
+            return mgr.select(s["name"], best["speed_kmh"], best["quality"])
+        return mgr.select(s["name"], 60.0, "standard")
+
+    def cfd_mass_cg(body: dict | None):
+        body = body or {}
+        af = sim.airframe
+        m = body.get("mass")
+        cg = body.get("cg")
+        try:
+            mass = float(m) if m not in (None, "") else float(af.mass.mass)
+        except Exception:  # noqa: BLE001
+            mass = None
+        try:
+            if isinstance(cg, str):
+                cg = [float(v) for v in cg.replace(";", ",").split(",") if v.strip()]
+            cg = [float(v) for v in cg] if cg else [float(v) for v in af.cg]
+            if len(cg) != 3:
+                cg = None
+        except Exception:  # noqa: BLE001
+            cg = None
+        return mass, cg
+
+    @app.get("/api/cfd/status")
+    async def cfd_status():
+        from ..cfd import case as cfdcase
+        from ..cfd import library as cfdlib
+        mgr = cfd_mgr()
+        lib = await run_in_threadpool(cfd_auto_select, mgr)
+        af = sim.airframe
+        return json_safe({
+            "foam": await run_in_threadpool(cfdcase.foam_info), "surfaces": cfdlib.list_surfaces(), "prepare": mgr.prepare_status(),
+            "library": lib.status() if lib else None, "surface": lib.meta if lib else None,
+            "airframe": {"name": getattr(af, "name", None), "mass": float(af.mass.mass), "cg": [float(v) for v in af.cg]},
+            "qualities": list(cfdcase.QUALITY), "default_nproc": cfdlib.default_nproc(), "jobs": mgr.jobs(),
+            "hpc_batches": (__import__("airframe_designer.cfd.hpc", fromlist=["list_batches"]).list_batches(lib.surface_dir.parent.name) if lib else []),
+        })
+
+    @app.post("/api/cfd/hpc/export")
+    async def cfd_hpc_export(body: dict):
+        """Bundle a batch of attitudes for the AUTH cluster (airframe_designer/cfd/hpc.py)."""
+        from ..cfd import hpc as cfdhpc
+        mgr = cfd_mgr()
+        lib = cfd_auto_select(mgr)
+        surface = str(body.get("surface") or (lib.surface_dir.parent.name if lib else ""))
+        if not surface:
+            return JSONResponse({"ok": False, "error": "prepare a surface first"}, status_code=400)
+        try:
+            alphas = [float(v) for v in str(body.get("alphas", "-12,-9,-6,-3,0,3,6,9,12")).split(",") if v.strip()]
+            betas = [float(v) for v in str(body.get("betas", "0,5,10")).split(",") if v.strip()]
+            m = await run_in_threadpool(cfdhpc.export_bundle, surface, str(body.get("batch") or ""), alphas, betas, float(body.get("speed_kmh", 60)),
+                                        str(body.get("quality", "standard")), int(body.get("cores_per_node") or 20), int(body.get("max_parallel_jobs") or 10),
+                                        None, str(body.get("walltime_case") or "03:00:00"), str(body.get("walltime_mesh") or "02:00:00"), state.log)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=400)
+        return json_safe({"ok": True, "manifest": m})
+
+    @app.post("/api/cfd/hpc/import")
+    async def cfd_hpc_import(body: dict):
+        from ..cfd import hpc as cfdhpc
+        mgr = cfd_mgr()
+        try:
+            r = await run_in_threadpool(cfdhpc.import_results, str(body.get("path", "")), state.log)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=400)
+        # show the imported library right away
+        try:
+            mgr.select(r["library_dir"].split("/")[2], float(r["speed_kmh"]), str(r["quality"]))
+        except Exception:  # noqa: BLE001
+            pass
+        return json_safe(r)
+
+    @app.post("/api/cfd/jobs/action")
+    async def cfd_job_action(body: dict):
+        mgr = cfd_mgr()
+        try:
+            return json_safe(await run_in_threadpool(mgr.job_action, str(body.get("id", "")), str(body.get("action", ""))))
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=400)
+
+    @app.post("/api/cfd/surface/prepare")
+    async def cfd_prepare(body: dict):
+        mgr = cfd_mgr()
+        kw = {}
+        if body.get("voxel_mm"):
+            kw["voxel_mm"] = float(body["voxel_mm"])
+        match = [m.strip() for m in str(body.get("match", "")).split(",") if m.strip()]
+        if match:
+            kw["match"] = match
+        try:
+            name = mgr.prepare(str(body.get("source", "")), body.get("name") or None, **kw)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=400)
+        return {"ok": True, "name": name}
+
+    @app.post("/api/cfd/library/select")
+    async def cfd_select(body: dict):
+        mgr = cfd_mgr()
+        try:
+            lib = mgr.select(str(body["surface"]), float(body.get("speed_kmh", 60.0)), str(body.get("quality", "standard")))
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=400)
+        return json_safe({"ok": True, "library": lib.status(), "surface": lib.meta})
+
+    @app.post("/api/cfd/library/start")
+    async def cfd_start(body: dict):
+        mgr = cfd_mgr()
+        lib = cfd_auto_select(mgr)
+        if lib is None:
+            return JSONResponse({"ok": False, "error": "prepare a surface first"}, status_code=400)
+        try:
+            alphas = [float(v) for v in str(body.get("alphas", "-6,-3,0,3,6,9,12")).split(",") if v.strip()]
+            betas = [float(v) for v in str(body.get("betas", "0,5,10")).split(",") if v.strip()]
+            lib.start(alphas, betas, int(body.get("nproc") or 0) or None, bool(body.get("rebuild_mesh", False)))
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=400)
+        return json_safe({"ok": True, "library": lib.status()})
+
+    @app.post("/api/cfd/library/stop")
+    async def cfd_stop():
+        mgr = cfd_mgr()
+        if mgr.lib:
+            mgr.lib.stop()
+        return {"ok": True}
+
+    @app.post("/api/cfd/library/run_one")
+    async def cfd_run_one(body: dict):
+        mgr = cfd_mgr()
+        lib = cfd_auto_select(mgr)
+        if lib is None:
+            return JSONResponse({"ok": False, "error": "prepare a surface first"}, status_code=400)
+        try:
+            lib.run_one(float(body.get("alpha", 0.0)), float(body.get("beta", 0.0)), int(body.get("nproc") or 0) or None)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=400)
+        return {"ok": True}
+
+    @app.get("/api/cfd/mesh")
+    async def cfd_mesh():
+        mgr = cfd_mgr()
+        lib = cfd_auto_select(mgr)
+        if lib is None:
+            return JSONResponse({"ok": False, "error": "no prepared surface"}, status_code=404)
+        d = await run_in_threadpool(lib.display)
+        return {"ok": True, "vertices": d["vertices"], "indices": d["indices"], "meta": json_safe(lib.meta)}
+
+    @app.get("/api/cfd/query")
+    async def cfd_query(alpha: float = 0.0, beta: float = 0.0, mass: str | None = None, cg: str | None = None, cp: int = 1):
+        import base64
+        mgr = cfd_mgr()
+        lib = cfd_auto_select(mgr)
+        if lib is None:
+            return JSONResponse({"ok": False, "error": "no prepared surface"}, status_code=404)
+        m, c = cfd_mass_cg({"mass": mass, "cg": cg})
+        r = await run_in_threadpool(lib.query, alpha, beta, m, c, bool(cp))
+        if r.get("cp") is not None:
+            arr = r.pop("cp")
+            r["cp_b64"] = base64.b64encode(arr.astype("<f4").tobytes()).decode("ascii")
+            r["cp_min"] = float(arr.min()); r["cp_max"] = float(arr.max())
+        return json_safe(r)
+
+    @app.get("/api/cfd/flow")
+    async def cfd_flow(alpha: float = 0.0, beta: float = 0.0):
+        """Velocity and Cp on the sampling grid, interpolated: a JSON header line, then float32 U (nx*ny*nz*3) and cp (nx*ny*nz)."""
+        from starlette.responses import Response
+        mgr = cfd_mgr()
+        lib = cfd_auto_select(mgr)
+        if lib is None:
+            return JSONResponse({"ok": False, "error": "no prepared surface"}, status_code=404)
+        r = await run_in_threadpool(lib.flow, alpha, beta)
+        if r is None:
+            return JSONResponse({"ok": False, "error": "no flow field for this library yet"}, status_code=404)
+        header = json.dumps({"ok": True, "origin": r["origin"], "spacing": r["spacing"], "shape": r["shape"], "speed_ms": r["speed_ms"], "cases": r["cases"]}).encode()
+        body = header + b"\n" + r["U"].astype("<f4").tobytes() + r["cp"].astype("<f4").tobytes()
+        return Response(content=body, media_type="application/octet-stream")
+
+    @app.post("/api/cfd/flight")
+    async def cfd_flight(body: dict | None = None):
+        """Free flight on the CFD library (airframe_designer/cfd/flight.py): release in forward flight with wind, no controller."""
+        from ..cfd import flight as cfdflight
+        body = body or {}
+        mgr = cfd_mgr()
+        lib = cfd_auto_select(mgr)
+        if lib is None:
+            return JSONResponse({"ok": False, "error": "no prepared surface"}, status_code=400)
+        m, c = cfd_mass_cg(body)
+        kw = {k: float(body[k]) for k in ("speed_kmh", "pitch0_deg", "crosswind_ms", "headwind_ms", "duration_s", "damping_scale", "perturb_q_deg_s", "altitude_m", "turbulence_rms", "thrust_fraction") if k in body and body[k] not in (None, "")}
+        if body.get("controller"):
+            kw["controller"] = str(body["controller"])
+        if body.get("wind_events"):
+            kw["wind_events"] = [{"t": float(e.get("t", 0)), "head": float(e.get("head", 0)), "cross": float(e.get("cross", 0)), "up": float(e.get("up", 0)), "ramp": float(e.get("ramp", 0))} for e in body["wind_events"]]
+        if body.get("control_moments"):
+            kw["control_moments"] = [float(x) for x in body["control_moments"]][:3]
+        if float(body.get("duration_s", 30) or 30) > 120:
+            kw["dt"] = 0.004
+        try:
+            r = await run_in_threadpool(cfdflight.cfd_free_flight, sim.airframe, lib, mass_kg=m, cg=c, **kw)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
+        r["ok"] = True
+        return json_safe(r)
+
+    @app.get("/api/cfd/stability")
+    async def cfd_stability(mass: str | None = None, cg: str | None = None):
+        mgr = cfd_mgr()
+        lib = cfd_auto_select(mgr)
+        if lib is None:
+            return JSONResponse({"ok": False, "error": "no prepared surface"}, status_code=404)
+        m, c = cfd_mass_cg({"mass": mass, "cg": cg})
+        return json_safe(await run_in_threadpool(lib.stability, m, c))
+
     @app.post("/api/design/optimize")
     async def design_optimize(body: dict):
         job = state.opt_job
@@ -531,7 +774,8 @@ def build_app(state: AppState) -> FastAPI:
     async def get_connection():
         st = state.conn.status()
         st["checklist"] = state.conn.checklist(export_params() if state.conn.mode == "hitl" else None)
-        return st
+        # the board's live telemetry can carry NaN (e.g. the nose lift's "no throttle" value), which JSON refuses
+        return json_safe(st)
 
     @app.post("/api/connection/connect")
     async def connect(body: dict):

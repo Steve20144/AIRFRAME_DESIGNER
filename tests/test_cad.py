@@ -52,6 +52,48 @@ def test_import_measures_solids(step_file):
     assert cadmod.import_step(step_file) == r                                    # cache hit
 
 
+def test_open_shell_is_a_massless_surface(tmp_path):
+    """A surface model (an open box: five faces, no solid) next to a solid: shown and picked, never weighed."""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Shell, TopoDS
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.gp import gp_Pnt
+    from OCP.STEPCAFControl import STEPCAFControl_Writer
+    from OCP.STEPControl import STEPControl_AsIs
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.XCAFDoc import XCAFDoc_DocumentTool
+    from OCP.TDataStd import TDataStd_Name
+    from OCP.Interface import Interface_Static
+    Interface_Static.SetCVal_s("xstep.cascade.unit", "MM")   # an earlier import left it at M: shapes below are in mm
+    open_box, bld = TopoDS_Shell(), BRep_Builder()
+    bld.MakeShell(open_box)
+    ex = TopExp_Explorer(BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), gp_Pnt(100, 100, 100)).Shape(), TopAbs_FACE)
+    for _ in range(5):
+        bld.Add(open_box, TopoDS.Face(ex.Current()))
+        ex.Next()
+    doc = TDocStd_Document(TCollection_ExtendedString("t"))
+    st = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    for shape, name in ((BRepPrimAPI_MakeBox(gp_Pnt(200, 0, 0), gp_Pnt(300, 100, 100)).Shape(), "Solid"), (open_box, "Canopy")):
+        TDataStd_Name.Set_s(st.AddShape(shape, False), TCollection_ExtendedString(name))
+    w = STEPCAFControl_Writer(); w.SetNameMode(True)
+    Interface_Static.SetCVal_s("write.step.unit", "MM")
+    w.Transfer(doc, STEPControl_AsIs)
+    p = tmp_path / "solid_and_surface.step"
+    w.Write(str(p))
+    r = cadmod.import_step(p)
+    solid, surf = r["bodies"]
+    assert (solid["name"], surf["name"]) == ("Solid", "Canopy")
+    assert solid["volume"] == pytest.approx(1e-3, rel=1e-6) and "surface" not in solid
+    assert surf["surface"] is True and surf["volume"] == 0.0 and len(surf["indices"]) > 0
+    m = cadmod.model_from_import(r, "cad/solid_and_surface.step")
+    for b in m.bodies:
+        b.mass = 1.0
+    assert [i.name for i in m.mass_items()] == ["cad:Solid"]
+
+
 def test_bodies_drive_the_cg(step_file):
     r = cadmod.import_step(step_file)
     m = cadmod.model_from_import(r, "cad/two_bodies.step")

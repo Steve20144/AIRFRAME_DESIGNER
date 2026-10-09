@@ -10,11 +10,15 @@ The flight: 4 s disarmed, armed in
 Stabilized for ``--armed`` seconds (nose lift parked -> raising -> holding, outputs 9/10 spinning, Altitude mode
 8 s after arming), then disarmed
 for 5 s. Sends what the dashboard reads: HEARTBEAT, ATTITUDE, SERVO_OUTPUT_RAW 0/1, DEBUG_VECT NLIFT, SYS_STATUS,
-STATUSTEXT (one long text in 50-character chunks), PARAM_VALUE for the output functions and NL_MOT_MSK."""
+STATUSTEXT (one long text in 50-character chunks), PARAM_VALUE for the output functions and NL_MOT_MSK, and the
+H-FLOW card's OPTICAL_FLOW_RAD, DISTANCE_SENSOR, LOCAL_POSITION_NED, ESTIMATOR_STATUS: still on the floor while
+disarmed, armed it climbs to 1 m and sways forward / right at up to 0.3 m/s; the flow reads that with noise and a
+``--flow-scale`` error (which only the distance check sees)."""
 import argparse
 import os
 os.environ.setdefault("MAVLINK20", "1")
 import math
+import random
 import struct
 import time
 
@@ -23,6 +27,7 @@ from pymavlink import mavutil
 p = argparse.ArgumentParser()
 p.add_argument("--to", default="udpout:127.0.0.1:14660")
 p.add_argument("--armed", type=float, default=12.0)
+p.add_argument("--flow-scale", type=float, default=1.1, help="the flow's scale error (1 = none)")
 a = p.parse_args()
 m = mavutil.mavlink_connection(a.to, source_system=1, source_component=1)
 f = lambda i: struct.unpack("<f", struct.pack("<i", i))[0]
@@ -30,7 +35,8 @@ STAB = 7 << 16
 t0 = time.time()
 boot0 = 123_000                     # the board has been up 123 s
 t_arm, t_disarm, t_end = 4.0, 4.0 + a.armed, 4.0 + a.armed + 5.0
-last = {"hb": -9, "par": -9, "att": -9, "srv": -9, "nl": -9, "sys": -9}
+last = {"hb": -9, "par": -9, "att": -9, "srv": -9, "nl": -9, "sys": -9, "flow": -9, "pos": -9, "rng": -9, "est": -9}
+pos, t_prev = [0.0, 0.0], 0.0
 said = set()
 while True:
     t = time.time() - t0
@@ -59,6 +65,29 @@ while True:
     if t - last["att"] >= 0.05:
         last["att"] = t
         m.mav.attitude_send(boot0 + int(t * 1000), 0.01 * math.sin(t), math.radians(pitch - 24), 0.3, 0, 0, 0)
+    # H-FLOW: yaw 0.3 rad as in ATTITUDE, body velocity -> north / east
+    vf, vr = (0.3 * math.sin(0.7 * ta), 0.2 * math.sin(0.45 * ta)) if armed else (0.0, 0.0)
+    h = 0.15 + (min(1.0, 0.25 * ta) if armed else 0.0)
+    pos[0] += (math.cos(0.3) * vf - math.sin(0.3) * vr) * (t - t_prev)
+    pos[1] += (math.sin(0.3) * vf + math.cos(0.3) * vr) * (t - t_prev)
+    t_prev = t
+    if t - last["flow"] >= 0.2:
+        last["flow"] = t
+        dt, k = 0.02, a.flow_scale
+        nx, ny = (random.gauss(0, 0.06 if armed else 0.02) for _ in range(2))
+        m.mav.optical_flow_rad_send(int(t * 1e6), 0, int(dt * 1e6), -(k * vr + nx) * dt / h, (k * vf + ny) * dt / h,
+                                    0.0, 0.0, 0.0, 3000, random.randint(150, 220) if armed else 180, 0, h)
+    if t - last["pos"] >= 0.2:
+        last["pos"] = t
+        vn, ve = math.cos(0.3) * vf - math.sin(0.3) * vr, math.sin(0.3) * vf + math.cos(0.3) * vr
+        m.mav.local_position_ned_send(boot0 + int(t * 1000), pos[0], pos[1], -h, vn, ve, 0.0)
+    if t - last["rng"] >= 0.5:
+        last["rng"] = t
+        m.mav.distance_sensor_send(boot0 + int(t * 1000), 2, 3000, int(round((h + random.gauss(0, 0.005)) * 100)),
+                                   0, 0, 25, 0, signal_quality=90)
+    if t - last["est"] >= 1:
+        last["est"] = t
+        m.mav.estimator_status_send(int(t * 1e6), 0b1111111, 0.1, 0, 0.2, 0.1, 0.3, 0, 0.15 if armed else 0.05, 0.1)
     if t - last["srv"] >= 0.1:
         last["srv"] = t
         pw = 1000 + int(1000 * cmd) if armed else 900

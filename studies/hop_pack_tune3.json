@@ -1,0 +1,62 @@
+{
+ "base": {
+  "NL_Q_FC": 50.0,
+  "NL_STUCK_S": 10.0,
+  "NL_MAX_CMD": 1.0,
+  "NL_I_MAX": 40,
+  "NL_AUTO_HCMD": 0.83,
+  "NL_AUTO_HDROP": 5.0,
+  "NL_AUTO_RAMP": 2.0,
+  "NL_AUTO_SLEW": 0.3,
+  "NL_AUTO_ALT": 1.0,
+  "NL_AUTO_HOV": 10.0,
+  "NL_AUTO_HOLD": 1,
+  "NL_AUTO_HFL": 0.7,
+  "NL_AUTO_VFL": 0.15,
+  "MPC_LAND_ALT3": 0.7,
+  "MPC_LAND_CRWL": 0.15,
+  "MPC_LAND_SPEED": 0.2
+ },
+ "candidates": {
+  "current": {
+   "NL_AUTO_TD": 0
+  },
+  "td2_z_att_lnd": {
+   "NL_AUTO_TD": 2,
+   "MPC_Z_VEL_P_ACC": 6.0,
+   "MPC_Z_VEL_I_ACC": 3.0,
+   "MC_PITCH_P": 5.0,
+   "MC_ROLL_P": 4.5,
+   "LNDMC_TRIG_TIME": 0.5
+  },
+  "td3": {
+   "NL_AUTO_TD": 3
+  },
+  "td3_z_att": {
+   "NL_AUTO_TD": 3,
+   "MPC_Z_VEL_P_ACC": 6.0,
+   "MPC_Z_VEL_I_ACC": 3.0,
+   "MC_PITCH_P": 5.0,
+   "MC_ROLL_P": 4.5
+  },
+  "td3_z_att_lnd": {
+   "NL_AUTO_TD": 3,
+   "MPC_Z_VEL_P_ACC": 6.0,
+   "MPC_Z_VEL_I_ACC": 3.0,
+   "MC_PITCH_P": 5.0,
+   "MC_ROLL_P": 4.5,
+   "LNDMC_TRIG_TIME": 0.5
+  }
+ },
+ "thrusts": [
+  36,
+  30,
+  28
+ ],
+ "seeds": [
+  0,
+  1,
+  2
+ ],
+ "scenario": "scenarios/fw_auto_hop_winner.json"
+}

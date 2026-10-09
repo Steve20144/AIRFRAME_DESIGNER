@@ -47,6 +47,7 @@ class WingAeroCoefficients:
 class Wing:
     name: str = "wing"
     enabled: bool = True
+    visual: bool = True          # draw the planform in the app's 3D view (False: aero only, e.g. a stand-in under a CAD mesh)
     pos: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])   # root leading edge, structural frame
     span: float = 1.0
     root_chord: float = 0.3
@@ -57,8 +58,12 @@ class Wing:
     twist_deg: float = 0.0
     pitch_deg: float = 0.0       # rigid rotation of the whole wing about the aircraft pitch axis through ``pos``, nose-up positive
     symmetric: bool = True       # left + right halves; False = one panel (fin, strake)
+    side: int = 1                # single panel only: +1 extends to the right (+y), -1 to the left
     panels: int = 6              # strips per half
     aspect_ratio: float | None = None   # override the geometric aspect ratio used for lift slope / induced drag
+    elevon: dict | None = None   # trailing-edge control surface: {"chord_fraction": 0.25, "max_deg": 25, "span_from": 0.0,
+                                 #   "span_to": 1.0 (fraction of the half-span it covers), "pitch_gain": 1, "roll_gain": 1,
+                                 #   "deflection_deg": 0 (trailing edge down positive)}; mixed as pitch*pitch_gain + roll*roll_gain*side
     aero: WingAeroCoefficients = field(default_factory=WingAeroCoefficients)
 
     # ------------------------------------------------------------ planform
@@ -113,7 +118,7 @@ def wing_panels(w: Wing) -> dict:
     pos (n,3) quarter-chord points, e_c (n,3) chordwise unit vectors (forward, incidence applied),
     e_n (n,3) lift-direction unit vectors ("up" of the panel), e_s (n,3) spanwise (root to tip), pitch_axis (n,3)
     the axis a nose-up pitching moment acts about, area (n,), chord (n,), side (n,) +1 right / -1 left."""
-    halves = [1.0, -1.0] if w.symmetric else [1.0]
+    halves = [1.0, -1.0] if w.symmetric else [float(1 if int(getattr(w, 'side', 1) or 1) >= 0 else -1)]
     n = max(1, int(w.panels))
     dih = math.radians(w.dihedral_deg)
     swp = math.radians(w.sweep_deg)
@@ -153,7 +158,7 @@ def wing_outline(w: Wing) -> list[list[list[float]]]:
     hs = w.half_span
     root = np.asarray(w.pos, float)
     Rp = rot_y(math.radians(w.pitch_deg))
-    for sd in ([1.0, -1.0] if w.symmetric else [1.0]):
+    for sd in ([1.0, -1.0] if w.symmetric else [float(1 if int(getattr(w, 'side', 1) or 1) >= 0 else -1)]):
         es = np.array([0.0, sd * math.cos(dih), -math.sin(dih)])
         pitch_axis = sd * es
         pts = []

@@ -1,0 +1,1195 @@
+{
+  "schema": 2,
+  "name": "ATLAS_V1_M001",
+  "mass": {
+    "mass": 45.994,
+    "cg": [
+      1.36945,
+      0.00076,
+      0.13381
+    ],
+    "inertia": [
+      18.29098,
+      56.503207,
+      66.834196
+    ],
+    "inertia_products": [
+      0.284075,
+      -10.670343,
+      0.051138
+    ],
+    "items": [
+      {
+        "name": "fan L1 (Sch\u00fcbeler DS-215 HST AERO duct)",
+        "mass": 4.3,
+        "pos": [
+          0.7207,
+          0.4604,
+          0.1706
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "fan R1 (Sch\u00fcbeler DS-215 HST AERO duct)",
+        "mass": 4.3,
+        "pos": [
+          0.7207,
+          -0.4604,
+          0.1706
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "fan L2 (Sch\u00fcbeler DS-215 HST AERO duct)",
+        "mass": 4.3,
+        "pos": [
+          0.6145,
+          0.6677,
+          0.3406
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "fan R2 (Sch\u00fcbeler DS-215 HST AERO duct)",
+        "mass": 4.3,
+        "pos": [
+          0.6145,
+          -0.6677,
+          0.3406
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "fan L3 (Sch\u00fcbeler DS-215 HST AERO duct)",
+        "mass": 4.3,
+        "pos": [
+          0.607,
+          0.9096,
+          0.5031
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "fan R3 (Sch\u00fcbeler DS-215 HST AERO duct)",
+        "mass": 4.3,
+        "pos": [
+          0.607,
+          -0.9096,
+          0.5031
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "fan N1 (nose)",
+        "mass": 4.3,
+        "pos": [
+          3.0517,
+          -0.0031,
+          -0.2024
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "fan N2 (nose)",
+        "mass": 4.3,
+        "pos": [
+          2.9075,
+          -0.0761,
+          -0.1622
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "fan N3 (nose)",
+        "mass": 4.3,
+        "pos": [
+          2.8412,
+          0.1137,
+          -0.1505
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC L1",
+        "mass": 0.6,
+        "pos": [
+          0.6766,
+          0.3713,
+          0.0972
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC R1",
+        "mass": 0.6,
+        "pos": [
+          0.6766,
+          -0.3713,
+          0.0972
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC L2",
+        "mass": 0.6,
+        "pos": [
+          0.4357,
+          0.5825,
+          0.2724
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC R2",
+        "mass": 0.6,
+        "pos": [
+          0.4357,
+          -0.5825,
+          0.2724
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC L3",
+        "mass": 0.6,
+        "pos": [
+          0.4449,
+          0.8292,
+          0.4603
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC R3",
+        "mass": 0.6,
+        "pos": [
+          0.4449,
+          -0.8292,
+          0.4603
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC N1 (nose)",
+        "mass": 0.6,
+        "pos": [
+          2.7983,
+          -0.144,
+          -0.1479
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC N2 (nose)",
+        "mass": 0.6,
+        "pos": [
+          2.6288,
+          0.1844,
+          -0.1233
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "ESC N3 (nose)",
+        "mass": 0.6,
+        "pos": [
+          3.1083,
+          -0.0021,
+          -0.2246
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "Avionics power modules #1",
+        "mass": 0.038,
+        "pos": [
+          0.5722,
+          0.1702,
+          -0.5291
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "Avionics power modules #2",
+        "mass": 0.038,
+        "pos": [
+          0.5898,
+          -0.1602,
+          -0.5336
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "BEC #1",
+        "mass": 0.048,
+        "pos": [
+          0.4209,
+          0.1059,
+          -0.5297
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "BEC #2",
+        "mass": 0.048,
+        "pos": [
+          0.3305,
+          -0.2419,
+          -0.4778
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "Avionics battery #1",
+        "mass": 0.861,
+        "pos": [
+          0.7641,
+          0.009,
+          -0.5676
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "Avionics battery #2",
+        "mass": 0.861,
+        "pos": [
+          0.8293,
+          -0.16,
+          -0.5513
+        ],
+        "inertia": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "inertia_products": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "from_items": true,
+    "manual": {
+      "mass": 0,
+      "cg": [
+        0,
+        0,
+        0
+      ],
+      "inertia": [
+        1,
+        1,
+        1
+      ],
+      "inertia_products": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "body": {
+    "size": [
+      3.8,
+      1.0,
+      0.4
+    ],
+    "drag_quadratic": [
+      0.1,
+      0.6,
+      0.8
+    ],
+    "drag_angular": [
+      2.0,
+      4.0,
+      4.0
+    ],
+    "drag_center": [
+      -1.4,
+      0,
+      -0.1
+    ]
+  },
+  "rotors": [
+    {
+      "name": "M1",
+      "pos": [
+        0.7207,
+        0.4604,
+        0.1706
+      ],
+      "axis": [
+        0.2588189595935754,
+        0.0,
+        -0.9659258492011169
+      ],
+      "km": 0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "M2",
+      "pos": [
+        0.7207,
+        -0.4604,
+        0.1706
+      ],
+      "axis": [
+        0.2588189595935754,
+        0.0,
+        -0.9659258492011169
+      ],
+      "km": -0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "M3",
+      "pos": [
+        0.6145,
+        0.6677,
+        0.3406
+      ],
+      "axis": [
+        0.2588189595935754,
+        0.0,
+        -0.9659258492011169
+      ],
+      "km": -0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "M4",
+      "pos": [
+        0.6145,
+        -0.6677,
+        0.3406
+      ],
+      "axis": [
+        0.2588189595935754,
+        0.0,
+        -0.9659258492011169
+      ],
+      "km": 0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "M5",
+      "pos": [
+        0.607,
+        0.9096,
+        0.5031
+      ],
+      "axis": [
+        0.2588189595935754,
+        0.0,
+        -0.9659258492011169
+      ],
+      "km": 0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "M6",
+      "pos": [
+        0.607,
+        -0.9096,
+        0.5031
+      ],
+      "axis": [
+        0.2588189595935754,
+        0.0,
+        -0.9659258492011169
+      ],
+      "km": -0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "M7",
+      "pos": [
+        3.0517,
+        -0.0031,
+        -0.2024
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "km": 0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": null,
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "M8",
+      "pos": [
+        2.9075,
+        -0.0761,
+        -0.1622
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "km": -0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": null,
+      "turn_loss": 0.1,
+      "enabled": true
+    },
+    {
+      "name": "M9",
+      "pos": [
+        2.8412,
+        0.1137,
+        -0.1505
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "km": 0.01,
+      "max_thrust": 215.0,
+      "tau": 0.3,
+      "tau_down": 0,
+      "diameter": 0.195,
+      "thrust_exponent": 2,
+      "kind": "ducted",
+      "ram_drag": true,
+      "duct_axis": null,
+      "turn_loss": 0.1,
+      "enabled": true
+    }
+  ],
+  "wings": [
+    {
+      "name": "body R (E908)",
+      "enabled": true,
+      "visual": false,
+      "pos": [
+        3.24,
+        0.0,
+        -0.1
+      ],
+      "span": 0.51,
+      "root_chord": 3.83,
+      "tip_chord": 1.72,
+      "sweep_deg": 73.5,
+      "dihedral_deg": -11.0,
+      "incidence_deg": 0,
+      "twist_deg": 0,
+      "pitch_deg": 0,
+      "symmetric": false,
+      "side": 1,
+      "panels": 4,
+      "aspect_ratio": 2.13,
+      "elevon": null,
+      "aero": {
+        "model": "polar",
+        "airfoil_root": "e908",
+        "airfoil_tip": "e908",
+        "polar_source": "auto",
+        "ncrit": 9.0,
+        "cl_alpha": 6.2832,
+        "cl0": 0.0,
+        "cd0": 0.01,
+        "oswald": 0.8,
+        "stall_deg": 12,
+        "stall_blend_deg": 6,
+        "cd_flat": 1.2,
+        "cm0": 0.0,
+        "vortex_lift": false
+      }
+    },
+    {
+      "name": "transition R (GOE 5K)",
+      "enabled": true,
+      "visual": false,
+      "pos": [
+        1.55,
+        0.5,
+        0.0
+      ],
+      "span": 0.7,
+      "root_chord": 1.72,
+      "tip_chord": 1.2,
+      "sweep_deg": 30.0,
+      "dihedral_deg": -31.0,
+      "incidence_deg": 0,
+      "twist_deg": 0,
+      "pitch_deg": 0,
+      "symmetric": false,
+      "side": 1,
+      "panels": 4,
+      "aspect_ratio": 2.13,
+      "elevon": {
+        "chord_fraction": 0.25,
+        "max_deg": 25,
+        "span_from": 0.0,
+        "span_to": 1.0,
+        "pitch_gain": 1.0,
+        "roll_gain": 1.0,
+        "deflection_deg": 0.0
+      },
+      "aero": {
+        "model": "polar",
+        "airfoil_root": "goe05k",
+        "airfoil_tip": "goe05k",
+        "polar_source": "auto",
+        "ncrit": 9.0,
+        "cl_alpha": 6.2832,
+        "cl0": 0.0,
+        "cd0": 0.01,
+        "oswald": 0.8,
+        "stall_deg": 12,
+        "stall_blend_deg": 6,
+        "cd_flat": 1.2,
+        "cm0": 0.0,
+        "vortex_lift": false
+      }
+    },
+    {
+      "name": "outer R (SC(2)-0402)",
+      "enabled": true,
+      "visual": false,
+      "pos": [
+        1.2,
+        1.1,
+        0.4
+      ],
+      "span": 1.0,
+      "root_chord": 1.2,
+      "tip_chord": 0.7,
+      "sweep_deg": 14.0,
+      "dihedral_deg": -37.0,
+      "incidence_deg": 0,
+      "twist_deg": 0,
+      "pitch_deg": 0,
+      "symmetric": false,
+      "side": 1,
+      "panels": 5,
+      "aspect_ratio": 2.13,
+      "elevon": {
+        "chord_fraction": 0.25,
+        "max_deg": 25,
+        "span_from": 0.0,
+        "span_to": 1.0,
+        "pitch_gain": 1.0,
+        "roll_gain": 1.0,
+        "deflection_deg": 0.0
+      },
+      "aero": {
+        "model": "polar",
+        "airfoil_root": "sc20402",
+        "airfoil_tip": "sc20402",
+        "polar_source": "auto",
+        "ncrit": 9.0,
+        "cl_alpha": 6.2832,
+        "cl0": 0.0,
+        "cd0": 0.01,
+        "oswald": 0.8,
+        "stall_deg": 12,
+        "stall_blend_deg": 6,
+        "cd_flat": 1.2,
+        "cm0": 0.0,
+        "vortex_lift": false
+      }
+    },
+    {
+      "name": "body L (E908)",
+      "enabled": true,
+      "visual": false,
+      "pos": [
+        3.24,
+        0.0,
+        -0.1
+      ],
+      "span": 0.51,
+      "root_chord": 3.83,
+      "tip_chord": 1.72,
+      "sweep_deg": 73.5,
+      "dihedral_deg": -11.0,
+      "incidence_deg": 0,
+      "twist_deg": 0,
+      "pitch_deg": 0,
+      "symmetric": false,
+      "side": -1,
+      "panels": 4,
+      "aspect_ratio": 2.13,
+      "elevon": null,
+      "aero": {
+        "model": "polar",
+        "airfoil_root": "e908",
+        "airfoil_tip": "e908",
+        "polar_source": "auto",
+        "ncrit": 9.0,
+        "cl_alpha": 6.2832,
+        "cl0": 0.0,
+        "cd0": 0.01,
+        "oswald": 0.8,
+        "stall_deg": 12,
+        "stall_blend_deg": 6,
+        "cd_flat": 1.2,
+        "cm0": 0.0,
+        "vortex_lift": false
+      }
+    },
+    {
+      "name": "transition L (GOE 5K)",
+      "enabled": true,
+      "visual": false,
+      "pos": [
+        1.55,
+        -0.5,
+        0.0
+      ],
+      "span": 0.7,
+      "root_chord": 1.72,
+      "tip_chord": 1.2,
+      "sweep_deg": 30.0,
+      "dihedral_deg": -31.0,
+      "incidence_deg": 0,
+      "twist_deg": 0,
+      "pitch_deg": 0,
+      "symmetric": false,
+      "side": -1,
+      "panels": 4,
+      "aspect_ratio": 2.13,
+      "elevon": {
+        "chord_fraction": 0.25,
+        "max_deg": 25,
+        "span_from": 0.0,
+        "span_to": 1.0,
+        "pitch_gain": 1.0,
+        "roll_gain": 1.0,
+        "deflection_deg": 0.0
+      },
+      "aero": {
+        "model": "polar",
+        "airfoil_root": "goe05k",
+        "airfoil_tip": "goe05k",
+        "polar_source": "auto",
+        "ncrit": 9.0,
+        "cl_alpha": 6.2832,
+        "cl0": 0.0,
+        "cd0": 0.01,
+        "oswald": 0.8,
+        "stall_deg": 12,
+        "stall_blend_deg": 6,
+        "cd_flat": 1.2,
+        "cm0": 0.0,
+        "vortex_lift": false
+      }
+    },
+    {
+      "name": "outer L (SC(2)-0402)",
+      "enabled": true,
+      "visual": false,
+      "pos": [
+        1.2,
+        -1.1,
+        0.4
+      ],
+      "span": 1.0,
+      "root_chord": 1.2,
+      "tip_chord": 0.7,
+      "sweep_deg": 14.0,
+      "dihedral_deg": -37.0,
+      "incidence_deg": 0,
+      "twist_deg": 0,
+      "pitch_deg": 0,
+      "symmetric": false,
+      "side": -1,
+      "panels": 5,
+      "aspect_ratio": 2.13,
+      "elevon": {
+        "chord_fraction": 0.25,
+        "max_deg": 25,
+        "span_from": 0.0,
+        "span_to": 1.0,
+        "pitch_gain": 1.0,
+        "roll_gain": 1.0,
+        "deflection_deg": 0.0
+      },
+      "aero": {
+        "model": "polar",
+        "airfoil_root": "sc20402",
+        "airfoil_tip": "sc20402",
+        "polar_source": "auto",
+        "ncrit": 9.0,
+        "cl_alpha": 6.2832,
+        "cl0": 0.0,
+        "cd0": 0.01,
+        "oswald": 0.8,
+        "stall_deg": 12,
+        "stall_blend_deg": 6,
+        "cd_flat": 1.2,
+        "cm0": 0.0,
+        "vortex_lift": false
+      }
+    }
+  ],
+  "legs": [
+    {
+      "name": "L",
+      "attach": [
+        0.38498968966875785,
+        1.9016050651445435,
+        1.016355226827335
+      ],
+      "length": 0.1499999999999999,
+      "tilt_deg": 0.0,
+      "cant_deg": 0.0,
+      "foot_radius": 0.0,
+      "stiffness": 7517.5,
+      "damping": 543.2,
+      "friction": 0.8,
+      "enabled": true
+    },
+    {
+      "name": "R",
+      "attach": [
+        0.38498968966875785,
+        -1.9016050651445435,
+        1.016355226827335
+      ],
+      "length": 0.1499999999999999,
+      "tilt_deg": 0.0,
+      "cant_deg": -0.0,
+      "foot_radius": 0.0,
+      "stiffness": 7517.5,
+      "damping": 543.2,
+      "friction": 0.8,
+      "enabled": true
+    },
+    {
+      "name": "N (nose skid)",
+      "attach": [
+        3.05,
+        0.0,
+        -0.15000000000000036
+      ],
+      "length": 0.8464420052496981,
+      "tilt_deg": 0.0,
+      "cant_deg": 0.0,
+      "foot_radius": 0.0,
+      "stiffness": 7517.5,
+      "damping": 543.2,
+      "friction": 0.8,
+      "enabled": true
+    }
+  ],
+  "hover_pitch_deg": 10.65,
+  "landed_pitch_deg": -10.0,
+  "px4_overrides": {
+    "MIS_TAKEOFF_ALT": 1,
+    "MPC_TKO_RAMP_T": 0.20000000298023224,
+    "MPC_THR_HOVER": 0.249,
+    "MC_AIRMODE": 0,
+    "MPC_MAN_Y_MAX": 60,
+    "MC_YAWRATE_I": 0.02,
+    "IMU_INTEG_RATE": 250,
+    "IMU_GYRO_CUTOFF": 25,
+    "IMU_DGYRO_CUTOFF": 15,
+    "SENS_MAG_AUTOCAL": 0,
+    "MC_PITCHRATE_P": 0.3,
+    "MC_PITCHRATE_I": 0.1,
+    "MC_PITCHRATE_D": 0.02,
+    "MC_PITCH_P": 3.0,
+    "MC_ROLLRATE_P": 0.3,
+    "MC_ROLLRATE_I": 0.1,
+    "MC_ROLLRATE_D": 0.02,
+    "MC_ROLL_P": 3.0,
+    "MPC_VEL_MANUAL": 10,
+    "MPC_ACC_HOR": 3,
+    "MPC_ACC_HOR_MAX": 5,
+    "MC_YAWRATE_MAX": 60,
+    "MC_YAW_P": 2.8,
+    "MC_YAWRATE_P": 0.15,
+    "MC_YAW_WEIGHT": 0.4,
+    "COM_DISARM_LAND": 120,
+    "THR_MDL_FAC": 1,
+    "MPC_MAN_TILT_MAX": 12,
+    "MC_YAWRATE_D": 0.0,
+    "EKF2_GPS_CTRL": 7,
+    "EKF2_HGT_REF": 0,
+    "EKF2_RNG_CTRL": 0,
+    "EKF2_OF_CTRL": 0
+  },
+  "design": {
+    "cruise_speed_kmh": 60,
+    "battery_wh": 13986.0,
+    "pixhawk_position": [
+      0.5,
+      0.0,
+      -0.45
+    ],
+    "nose_lift": {
+      "enabled": true,
+      "motors": [
+        6,
+        7,
+        8
+      ],
+      "target_pitch_deg": 10.65,
+      "rate_deg_s": 3,
+      "assist_cmd": 0,
+      "rc_channel": 7,
+      "rc_threshold": 1300,
+      "rc_active_low": true,
+      "rc_takeoff": false,
+      "executor": "sim"
+    },
+    "nose_lower": {
+      "enabled": true,
+      "motors": [
+        6,
+        7,
+        8
+      ],
+      "target_pitch_deg": -10.0,
+      "rate_deg_s": 3,
+      "fade_s": 4
+    },
+    "vibration": {
+      "enabled": false,
+      "rpm_max": 30000,
+      "imbalance_gmm": 12.63,
+      "blades": 12,
+      "imu_pos": [
+        0.5,
+        0.0,
+        -0.45
+      ],
+      "accel_rectification": [
+        0,
+        0,
+        -0.0067
+      ]
+    },
+    "flow_sensor": {
+      "enabled": false,
+      "pos": [
+        -0.015,
+        0.0,
+        0.062
+      ],
+      "mount": "structure",
+      "rate": 50,
+      "flow_noise": 0.02,
+      "range_noise": 0.01,
+      "range_min": 0.08,
+      "range_max": 8,
+      "fov_deg": 42,
+      "note": "as built: fixed to the frame tilted 20.4 deg, right below the Pixhawk (CAD spot); in hover it looks hover_pitch - 20.4 deg off vertical. Enable per flight (scenario design.flow_sensor.enabled).",
+      "extra_pitch_deg": 20.4
+    }
+  },
+  "notes": "Built 2026-10-05T20:47-07:00 by scripts/atlas_v1_from_masses.py from results/handoff/T20261005-atlas-v1-foil-references/from_A/v002/masses.json (saved 2026-10-05T19:12:30-07:00, 24 clicked points, 45.994 kg: the user's 'crucial' parts only, the BOM's airborne total is 149.6 kg). FRD = R (CAD - (0,0,5.0 m)), nose = CAD -Y. Rotors at the fan mass points; wing fans jet 75 deg above a +x fan axis (assumed), tail fans vertical; 215 N, km +-0.01, tau 0.3 s. Wing group symmetrised (right side mirrored). Legs: wing tips with 0.15 m pads and a nose skid, parked nose-down at -10 deg; the nose trio M7..M9 lifts the nose. PX4 gains from atlas_v3_30.json.",
+  "mesh": {
+    "file": "atlas_v1_cand_v002.stl",
+    "frame": "frd",
+    "scale": 1.0,
+    "opacity": 0.6
+  },
+  "cad": null
+}

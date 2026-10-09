@@ -83,3 +83,14 @@ the real package on `airframes/atlas_v3_v34_foils_50_65_50_tuned.json`. Kernel "
 ipykernel installed with `uv pip install --python .venv/bin/python`, the venv has no pip). Source of truth is
 `notebooks/_build_notebooks.py`; rebuild with it rather than hand-editing the .ipynb files. Long-form version:
 `docs/ATLAS_Simulator_Physics.pdf`.
+
+## Flight tests tab (2026-10-08)
+
+The UI's first tab, "Flight tests" (English: the user wants no Greek in the UI), flies curated scenarios live on whatever PX4 the app is connected to (SITL or the
+HITL board): one "Fly" button per test, phase chips that fill in as it runs, a Stop button, and the result in plain
+words (passed/failed, peak height, touchdown speed, max tilt, drift, time in the air, crash). Tests:
+`scenarios/fw_auto_hop_winner.json` (the automatic hop: ALT 1.0, HOV 5), `fw_auto_hop_switchoff_winner.json` and
+`fw_auto_hop_kill_winner.json` (switch off / kill 8 s into a 15 s hover). The list is `FLIGHT_TESTS` at the end of
+`ui/app.js`; a press restarts PX4 first (about 15 s). SITL with the winner firmware C and the board's parameters:
+launch config `app-winnerC-sitl-mac` (port 8084, PX4 instance 4, airframe `airframes/atlas_v3_30_board_winnerC_sitl.json`).
+- 2026-10-08: the tab checks /api/params for NL_AUTO first and disables the tests on a PX4 without the nose-lift module (the app-mac config on 8080 launches stock ~/PX4-Autopilot: the user's first run there failed at 'parked', then RC loss -> RTL).

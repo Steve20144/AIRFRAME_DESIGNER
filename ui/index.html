@@ -9,7 +9,12 @@
 <script type="importmap">
 { "imports": { "three": "/static/vendor/three/three.module.js",
                "three/addons/controls/OrbitControls.js": "/static/vendor/three/OrbitControls.js",
-               "three/addons/controls/TransformControls.js": "/static/vendor/three/TransformControls.js" } }
+               "three/addons/controls/TransformControls.js": "/static/vendor/three/TransformControls.js",
+               "three/addons/lines/Line2.js": "/static/vendor/three/lines/Line2.js",
+               "three/addons/lines/LineSegments2.js": "/static/vendor/three/lines/LineSegments2.js",
+               "three/addons/lines/LineGeometry.js": "/static/vendor/three/lines/LineGeometry.js",
+               "three/addons/lines/LineSegmentsGeometry.js": "/static/vendor/three/lines/LineSegmentsGeometry.js",
+               "three/addons/lines/LineMaterial.js": "/static/vendor/three/lines/LineMaterial.js" } }
 </script>
 </head>
 <body>
@@ -59,9 +64,12 @@
   <div class="vresizer" id="resize-side" title="Drag to resize"></div>
   <aside class="panel side" id="side">
     <nav class="tabs">
+      <button data-tab="tests" class="tests-tab">Flight tests</button>
       <button data-tab="airframe" class="active">Geometry</button>
       <button data-tab="px4">PX4</button>
       <button data-tab="design">Optimize</button>
+      <button data-tab="cruise">Cruise Test</button>
+      <button data-tab="cfd">CFD</button>
       <button data-tab="batch">Batch</button>
       <button data-tab="tuning">Tuning</button>
       <button data-tab="sim">Flight</button>
@@ -72,6 +80,19 @@
     <div class="panel-body">
 
     <!-- ============================ GEOMETRY ============================ -->
+    <!-- ============================ FLIGHT TESTS ============================ -->
+    <section id="tab-tests" class="tab">
+      <h3>Flight tests</h3>
+      <div class="hint">One button per test. The test flies on the live simulation on the left (or on the Pixhawk when
+        the app is connected in HITL). PX4 restarts first and the aircraft is put back on its legs, then the phases run in
+        order. Progress and the result show here.</div>
+      <div id="tests-setup"></div>
+      <h3>Current test</h3>
+      <div id="tests-status"><div class="hint">No test running.</div></div>
+      <h3>Choose a test</h3>
+      <div id="tests-list"></div>
+    </section>
+
     <section id="tab-airframe" class="tab active">
       <div class="row">
         <label style="flex:1">Name <input id="af-name" type="text"></label>
@@ -231,6 +252,140 @@
     </section>
 
     <!-- ============================ DESIGN / OPTIMIZE ============================ -->
+    <section id="tab-cruise" class="tab">
+      <h3>Cruise Test <span class="hint">the lifting body in forward flight, from the section polars; fans are mass only</span></h3>
+      <div class="row">
+        <label title="airspeed of the test">Speed km/h <input id="cr-speed" type="number" step="5" min="10" value="60" style="width:70px"></label>
+        <label title="angle-of-attack sweep, nose-up positive">Alpha from <input id="cr-amin" type="number" step="1" value="-6" style="width:56px"></label>
+        <label>to <input id="cr-amax" type="number" step="1" value="16" style="width:56px"></label>
+        <label title="free flight: seconds integrated after release at the trim">Flight s <input id="cr-dur" type="number" step="5" min="2" value="30" style="width:56px"></label>
+        <label title="pitch-rate kick at release, deg/s, to excite the pitch motion">Kick °/s <input id="cr-kick" type="number" step="1" value="1" style="width:56px"></label>
+        <label title="what-if: move the CG this far forward (+) or aft (-) without touching the mass points, m">CG shift m <input id="cr-cg" type="number" step="0.1" value="0" style="width:60px"></label>
+        <button id="cr-run" class="pill small primary">Run</button>
+        <button id="cr-play" class="pill small" disabled title="Replay the free flight in the 3D view (the live simulation is paused in the view meanwhile)">Play in 3D</button>
+        <select id="cr-which" title="which free flight to replay"><option value="L">pitch plane only</option><option value="6">all six axes</option></select>
+        <label title="replay speed">x <select id="cr-rate" style="width:64px"><option value="0.1">0.1</option><option value="0.25" selected>0.25</option><option value="0.5">0.5</option><option value="1">1</option></select></label>
+        <button id="cr-stop" class="pill small" disabled>Stop</button>
+        <span class="hint" id="cr-status"></span>
+      </div>
+      <div id="cr-summary" class="card hint">Press Run: alpha sweep (CL, CD, CM), trim and static margin, then a free flight released at the trim with no controller.</div>
+      <div id="cr-charts"></div>
+      <div id="cr-flight"></div>
+      <h3>Panels <span class="hint">strip-theory panels carrying the section polars (hidden in the 3D view)</span></h3>
+      <div id="cr-panels" class="card"></div>
+      <h3>Sections <span class="hint">the app's polar against Agent B's XFOIL 6.99 points (natural transition)</span></h3>
+      <div id="cr-sections"></div>
+      <div id="cr-notes" class="hint"></div>
+    </section>
+
+    <section id="tab-cfd" class="tab">
+      <h3>CFD <span class="hint">OpenFOAM on the clean foil: a library of attitudes computed once, then turn the aircraft and read the flow</span></h3>
+      <div id="cfd-jobs" class="card"><b>Background work</b> <span class="hint">everything computing right now, with its progress and controls</span><div id="cfd-jobs-rows" class="hint" style="margin-top:6px">nothing is running</div></div>
+      <div class="row">
+        <label title="prepared surface (results/cfd/&lt;name&gt;/surface)">Surface <select id="cfd-surface"></select></label>
+        <label title="path of a STEP, STL, OBJ or .blend file; the skins are closed into one watertight body">From file <input id="cfd-src" type="text" placeholder="blender/atlas_v1.stp or path/to/model.blend" style="width:300px"></label>
+        <label title="voxel size of the closing step; the trailing edge cannot be thinner than this">Voxel mm <input id="cfd-voxel" type="number" step="1" min="4" value="10" style="width:56px"></label>
+        <label title="only Blender objects whose name contains one of these (comma separated); empty = all mesh objects">Objects <input id="cfd-match" type="text" placeholder="all" style="width:110px"></label>
+        <button id="cfd-prepare" class="pill small">Prepare surface</button>
+        <span class="hint" id="cfd-prep-status"></span>
+      </div>
+      <div class="row">
+        <label>Speed km/h <input id="cfd-speed" type="number" step="5" min="10" value="60" style="width:64px"></label>
+        <label title="mesh and iteration count per attitude">Quality <select id="cfd-quality"><option value="quick">quick (test, ~1.5 min)</option><option value="standard" selected>standard (~10 min)</option><option value="fine">fine (~40 min)</option></select></label>
+        <label title="angles of attack, deg, nose-up positive">Alphas <input id="cfd-alphas" type="text" value="-6,-3,0,3,6,9,12" style="width:150px"></label>
+        <label title="sideslip angles, deg; negative ones come from symmetry">Betas <input id="cfd-betas" type="text" value="0,5,10" style="width:80px"></label>
+        <label>Cores <input id="cfd-nproc" type="number" step="1" min="1" max="64" value="8" style="width:48px"></label>
+        <button id="cfd-start" class="pill small primary">Start library</button>
+        <button id="cfd-stop" class="pill small" disabled>Stop</button>
+        <button id="cfd-runone" class="pill small" title="compute the attitude currently shown as one extra case">Compute this attitude</button>
+        <span class="hint" id="cfd-lib-status"></span>
+      </div>
+      <div id="cfd-progress" class="card hint">No library yet. Prepare a surface, then start the library: it meshes once and runs every attitude in the background (the app stays usable).</div>
+      <div id="cfd-live" class="card hint" style="display:none"></div>
+      <div class="row">
+        <label><input id="cfd-particles" type="checkbox" checked> air particles</label>
+        <label title="how many particles travel through the field">count <input id="cfd-pcount" type="number" step="2000" min="500" max="60000" value="14000" style="width:70px"></label>
+        <label title="playback speed of the air, 1 = real time at the library speed">air speed × <input id="cfd-pspeed" type="range" min="0.05" max="1" step="0.05" value="0.3" style="width:110px"> <span id="cfd-pspeed-v">0.3</span></label>
+        <label title="where the air is released upstream: smoke sheets (a horizontal sheet through the CG and a vertical one on the centreline) read like a wind tunnel; volume fills the whole box">smoke <select id="cfd-seed"><option value="sheets" selected>two sheets</option><option value="horizontal">horizontal sheet</option><option value="vertical">vertical sheet</option><option value="volume">whole volume</option></select></label>
+        <label title="height of the horizontal sheet, body frame, metres, positive down (default: the CG)">sheet z <input id="cfd-sheetz" type="number" step="0.05" style="width:64px" placeholder="CG"></label>
+        <label><input id="cfd-streams" type="checkbox"> air threads</label>
+        <label title="number of air threads released upstream">threads <input id="cfd-scount" type="number" step="10" min="0" max="400" value="60" style="width:56px"></label>
+        <label title="the air is coloured with the skin's palette on a narrower Cp range (this fraction of it), since the air away from the body is near Cp 0">air colour range × <input id="cfd-airrange" type="number" step="0.05" min="0.05" max="1" value="0.3" style="width:56px"></label>
+        <span class="hint" id="cfd-flow-status"></span>
+      </div>
+      <div class="row">
+        <label title="angle of attack, nose-up positive">Alpha ° <input id="cfd-alpha" type="range" min="-12" max="18" step="0.5" value="3" style="width:200px"> <input id="cfd-alpha-n" type="number" step="0.5" value="3" style="width:60px"></label>
+        <label title="sideslip, wind from the right positive">Beta ° <input id="cfd-beta" type="range" min="-15" max="15" step="0.5" value="0" style="width:160px"> <input id="cfd-beta-n" type="number" step="0.5" value="0" style="width:60px"></label>
+        <button id="cfd-turn" class="pill small toggle" title="drag in the 3D view to tilt the aircraft (vertical: alpha, horizontal: beta) instead of orbiting the camera">Turn aircraft by dragging</button>
+        <button id="cfd-reset" class="pill small">Level</button>
+        <label title="Cp colour range">Cp range <input id="cfd-cpmin" type="number" step="0.1" value="-1.5" style="width:56px"> to <input id="cfd-cpmax" type="number" step="0.1" value="1" style="width:56px"></label>
+        <label><input id="cfd-arrows" type="checkbox" checked> force arrows</label>
+        <select id="cfd-view" title="camera"><option value="iso">camera: iso</option><option value="side">side</option><option value="top">top</option><option value="front">front</option><option value="below">below</option></select>
+        <label title="mass used for the weight comparison and trim (default: the loaded airframe)">Mass kg <input id="cfd-mass" type="number" step="0.5" style="width:64px"></label>
+        <label title="CG in FRD metres, x forward (default: the loaded airframe)">CG <input id="cfd-cg" type="text" style="width:150px"></label>
+      </div>
+      <div style="display:flex;gap:12px;align-items:stretch;flex-wrap:wrap">
+        <div style="flex:1 1 560px;min-width:320px;position:relative">
+          <canvas id="cfd-canvas" style="width:100%;height:480px;display:block;border-radius:12px"></canvas>
+          <div id="cfd-colorbar" class="hint" style="position:absolute;left:12px;bottom:10px;display:flex;align-items:center;gap:6px;font-size:12px">
+            <span>pulls (Cp <span id="cfd-cb-lo">-1.5</span>)</span><span style="display:inline-block;width:160px;height:10px;border-radius:5px;background:linear-gradient(90deg,#2980d6,#f5f5f0,#f53d2e)"></span><span>pushes (Cp <span id="cfd-cb-hi">1</span>)</span>
+          </div>
+          <div id="cfd-badge" class="hint" style="position:absolute;right:12px;top:10px;font-size:12px"></div>
+        </div>
+        <div id="cfd-readout" class="card" style="flex:0 1 330px;min-width:280px;font-variant-numeric:tabular-nums"></div>
+      </div>
+      <h3>Does it return on its own? <span class="hint">static tendencies from the computed attitudes, about the CG</span></h3>
+      <div id="cfd-verdicts" class="card hint">Waiting for computed attitudes.</div>
+      <div id="cfd-charts"></div>
+      <h3>HPC: run the library on the AUTH cluster <span class="hint">Aristotelis, OpenFOAM v2506, Slurm: one bundle out, one results file back</span></h3>
+      <div class="row">
+        <label title="short name of this batch (letters, digits, dashes)">Batch <input id="hpc-batch" type="text" value="b01" style="width:80px"></label>
+        <label>Alphas <input id="hpc-alphas" type="text" value="-12,-9,-6,-3,0,3,6,9,12" style="width:170px"></label>
+        <label>Betas <input id="hpc-betas" type="text" value="0,5,10" style="width:80px"></label>
+        <label>Speed km/h <input id="hpc-speed" type="number" step="5" value="60" style="width:64px"></label>
+        <label>Quality <select id="hpc-quality"><option value="standard" selected>standard</option><option value="fine">fine</option><option value="quick">quick</option></select></label>
+        <label title="attitudes computed at the same time on the cluster (one node of 20 cores each)">Parallel jobs <input id="hpc-parallel" type="number" min="1" max="17" value="10" style="width:52px"></label>
+        <button id="hpc-build" class="pill small primary">Build bundle</button>
+        <span class="hint" id="hpc-status"></span>
+      </div>
+      <div id="hpc-steps" class="card hint">Press Build bundle: it writes one tar.gz with the surface, the mesh template, one case per attitude and the Slurm scripts, and shows the commands to run.</div>
+      <div class="row">
+        <label title="path of the <batch>_results.tar.gz downloaded from the cluster">Results file <input id="hpc-import-path" type="text" placeholder="~/Downloads/b01_results.tar.gz" style="width:320px"></label>
+        <button id="hpc-import" class="pill small">Import results</button>
+        <span class="hint" id="hpc-import-status"></span>
+      </div>
+      <div id="hpc-batches" class="hint"></div>
+      <h3>Free flight on the CFD model <span class="hint">released in forward flight with wind, no controller; forces from the library, damping from the strip model; replays in the main 3D view</span></h3>
+      <div class="row">
+        <label title="pitch (and angle of attack) at release, nose-up positive">Pitch at release ° <input id="cff-pitch" type="number" step="1" value="-8" style="width:60px"></label>
+        <label title="crosswind, m/s, from the right positive (the aircraft starts heading north)">Crosswind m/s <input id="cff-cross" type="number" step="0.5" value="3" style="width:60px"></label>
+        <label title="headwind, m/s">Headwind m/s <input id="cff-head" type="number" step="0.5" value="0" style="width:60px"></label>
+        <label>Speed km/h <input id="cff-speed" type="number" step="5" value="60" style="width:64px"></label>
+        <label>Duration s <input id="cff-dur" type="number" step="10" min="2" value="120" style="width:60px"></label>
+        <label title="hands off: nothing holds it. Ideal pilot: holds altitude, heading and airspeed with the fans' thrust and bounded control moments, so you can watch the response to the wind for a long time">Pilot <select id="cff-ctrl"><option value="hold" selected>ideal pilot (hold altitude, heading, speed)</option><option value="none">hands off</option></select></label>
+        <label title="fraction of the fans' total thrust the pilot may use">Thrust avail. × <input id="cff-thr" type="number" step="0.1" min="0.1" max="1" value="1" style="width:52px"></label>
+        <label title="turbulence: random gusts with this RMS speed on every axis, m/s">Turbulence m/s <input id="cff-turb" type="number" step="0.5" min="0" value="0" style="width:56px"></label>
+        <label title="scale of the strip-theory rate damping (1 = as estimated, 0 = none)">Damping × <input id="cff-damp" type="number" step="0.25" min="0" value="1" style="width:56px"></label>
+        <button id="cff-run" class="pill small primary">Run flight</button>
+        <button id="cff-play" class="pill small" disabled title="replay in the main 3D view">Play in 3D</button>
+        <button id="cff-stop" class="pill small" disabled>Stop</button>
+        <label title="replay speed">× <select id="cff-rate" style="width:64px"><option value="0.1">0.1</option><option value="0.25">0.25</option><option value="0.5" selected>0.5</option><option value="1">1</option></select></label>
+        <label title="during the replay, the CFD view above turns the aircraft to the flight's instantaneous air angles and reloads the air field, so the particles show the real flow of that moment"><input id="cff-air" type="checkbox" checked> show the air in the CFD view during the replay</label>
+        <label title="when the library finishes computing, run this flight and play it in 3D by itself"><input id="cff-auto" type="checkbox"> auto-run and play when the library completes</label>
+        <span class="hint" id="cff-status"></span>
+      </div>
+      <div class="row">
+        <label title="wind programme, one event per line: time s, headwind m/s, crosswind m/s (from the right), updraft m/s, ramp s. Leave empty to use the two boxes above for the whole flight.">Wind programme
+          <textarea id="cff-wind" rows="4" style="width:330px;font:12px monospace" placeholder="t  head  cross  up  ramp&#10;0   0   0   0   0&#10;30  0   5   0   3&#10;70  5   5   0   3&#10;100 0  -5   0   2"></textarea></label>
+        <span class="hint" style="max-width:420px">Example: calm for 30 s, then a 5 m/s crosswind from the right blending in over 3 s, then a 5 m/s headwind on top, then the crosswind switches to the left. Turbulence adds random gusts on top of all of it.</span>
+      </div>
+      <div id="cff-summary" class="card hint">Set the release pitch and the wind, then Run flight (or tick auto-run and wait for the library).</div>
+      <div id="cff-charts"></div>
+      <h3>Attitudes <span class="hint">one OpenFOAM case per cell; negative betas are mirrored</span></h3>
+      <div id="cfd-cases" class="card"></div>
+      <details><summary class="hint">Log</summary><pre id="cfd-log" class="hint" style="max-height:220px;overflow:auto;font-size:11px"></pre></details>
+      <div id="cfd-notes" class="hint"></div>
+    </section>
     <section id="tab-design" class="tab">
       <h3>Cruise</h3>
       <div class="row">

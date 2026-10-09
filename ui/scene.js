@@ -294,6 +294,9 @@ export function createScene(canvas, handlers) {
     for (const w of af.wings || []) {
       if (!w || !w.pos) { wingArrows.push(null); continue; }
       const on = w.enabled !== false;
+      if (w.visual === false) {   // aero stand-in hidden under a CAD mesh: keep its force arrow, draw no planform
+        const fa0 = makeForceArrow(liftArrowMat); fa0.visible = false; frame.add(fa0); wingArrows.push(fa0); continue;
+      }
       if (w.aero && w.aero.model === 'polar' && w.aero.airfoil_root) {
         const rootName = w.aero.airfoil_root, tipName = w.aero.airfoil_tip || rootName;
         const rc = airfoilCache.get(rootName), tc = airfoilCache.get(tipName);
@@ -739,7 +742,7 @@ export function wingOutline(w) {
   const hs = sym ? (+w.span || 0) / 2 : (+w.span || 0);
   const root = new THREE.Vector3(+w.pos[0] || 0, +w.pos[1] || 0, +w.pos[2] || 0);
   const rc = +w.root_chord || 0, tc = +w.tip_chord || 0, inc0 = +w.incidence_deg || 0, tw = +w.twist_deg || 0;
-  for (const sd of (sym ? [1, -1] : [1])) {
+  for (const sd of (sym ? [1, -1] : [(+w.side || 1) < 0 ? -1 : 1])) {
     const es = new THREE.Vector3(0, sd * Math.cos(dih), -Math.sin(dih));
     const pitchAxis = es.clone().multiplyScalar(sd);
     const pts = [];

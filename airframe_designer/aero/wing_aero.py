@@ -90,6 +90,7 @@ class WingSet:
         self.area = np.concatenate([p["area"] for p in parts])
         self.chord = np.concatenate([p["chord"] for p in parts])
         self.wing_index = np.concatenate([np.full(len(p["area"]), i) for i, p in enumerate(parts)])
+        self.e_s_side = np.concatenate([p["side"] for p in parts])          # +1 right / -1 left strip
 
         def per(fn):
             return np.concatenate([np.full(len(p["area"]), fn(w)) for w, p in zip(wings, parts)])
@@ -124,6 +125,25 @@ class WingSet:
         self.RC = np.cross(self.r, self.e_c)                          # r x e_c
         self.RD = np.cross(self.r, self.e_d)                          # r x e_d
         self.cm_term = self.cm0 * self.chord                          # cm0 * c (times q at run time)
+        # elevons: thin-airfoil plain flap. Effective angle gain tau = 1 - (th - sin th)/pi, quarter-chord moment
+        # dcm/ddelta = -(sin th - sin 2th / 2) / 2, with cos th = 2 cf - 1 (cf = flap chord fraction); delta in rad, TE down +
+        self.flap_tau = np.zeros(self.n); self.flap_cm = np.zeros(self.n); self.delta = np.zeros(self.n)
+        self.elevon_wings = []
+        for i, w in enumerate(wings):
+            ev = getattr(w, "elevon", None)
+            if not ev:
+                continue
+            cf = float(np.clip(ev.get("chord_fraction", 0.25), 0.02, 0.9))
+            th = math.acos(2.0 * cf - 1.0)
+            tau = 1.0 - (th - math.sin(th)) / math.pi
+            cmd = -(math.sin(th) - math.sin(2.0 * th) / 2.0) / 2.0
+            m = (self.wing_index == i) & (self.eta >= float(ev.get("span_from", 0.0)) - 1e-9) & (self.eta <= float(ev.get("span_to", 1.0)) + 1e-9)
+            self.flap_tau[m] = tau; self.flap_cm[m] = cmd
+            self.elevon_wings.append({"idx": i, "mask": m, "max": math.radians(float(ev.get("max_deg", 25.0))),
+                                      "pitch_gain": float(ev.get("pitch_gain", 1.0)), "roll_gain": float(ev.get("roll_gain", 1.0)),
+                                      "side": float(1 if int(getattr(w, "side", 1) or 1) >= 0 else -1), "symmetric": bool(w.symmetric)})
+            self.delta[m] = math.radians(float(ev.get("deflection_deg", 0.0)))
+        self.has_elevons = bool(self.elevon_wings)
         self.half_rho_area = 0.5 * RHO * self.area
         self.rows = np.arange(self.n)
         # area-weighted alpha per wing
@@ -145,6 +165,24 @@ class WingSet:
             cl, cd = section_coefficients(self.table_alpha, model, self.a3d[i], self.cl0[i], self.cd0[i], self.oswald[i],
                                           self.ar[i], self.stall[i], self.blend[i], self.cd_flat[i], self.kv[i])
             self.cl_tab[i], self.cd_tab[i] = cl, cd
+
+    def set_elevons(self, deflection_deg) -> None:
+        """Deflection per elevon wing (one number for all, or a list in elevon_wings order), degrees, TE down positive."""
+        vals = [float(deflection_deg)] * len(self.elevon_wings) if np.isscalar(deflection_deg) else [float(v) for v in deflection_deg]
+        for ew, v in zip(self.elevon_wings, vals):
+            self.delta[ew["mask"]] = float(np.clip(math.radians(v), -ew["max"], ew["max"]))
+
+    def set_controls(self, pitch_deg: float, roll_deg: float = 0.0) -> None:
+        """Mix a pitch command (TE down positive, nose-down) and a roll command (right wing's TE down positive) into
+        the elevons; a symmetric wing's halves get opposite roll signs through the strips' side."""
+        for ew in self.elevon_wings:
+            m = ew["mask"]
+            if ew["symmetric"]:
+                side = np.sign(self.e_s_side[m]) if hasattr(self, "e_s_side") else np.ones(m.sum())
+            else:
+                side = np.full(int(m.sum()), ew["side"])
+            d = np.radians(pitch_deg * ew["pitch_gain"] + roll_deg * ew["roll_gain"] * side)
+            self.delta[m] = np.clip(d, -ew["max"], ew["max"])
 
     def coefficients(self, alpha: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Per-strip CL, CD by table lookup (alpha in rad, array of length n)."""
@@ -215,11 +253,16 @@ class WingSet:
         v2 = u * u + w * w
         alpha = np.arctan2(w, u)
         speed = np.sqrt(v2)
+        if self.has_elevons:          # a deflected flap: the section behaves at alpha + tau * delta, plus its own moment
+            alpha = alpha + self.flap_tau * self.delta
         cl, cd = self.coefficients(alpha)
         cm = self.cm0
         if self.polar_wings:
             cl = cl.copy(); cd = cd.copy(); cm = self.cm0.copy()
             self.polar_coefficients(alpha, speed, cl, cd, cm)
+        if self.has_elevons:
+            cm = cm + self.flap_cm * self.delta
+            cd = cd + 0.05 * self.delta * self.delta * (self.flap_tau > 0)     # flap profile-drag rise, small
         qv = self.half_rho_area * speed                                     # q / V
         a = qv * (cl * w - cd * u)
         b = -qv * (cl * u + cd * w)

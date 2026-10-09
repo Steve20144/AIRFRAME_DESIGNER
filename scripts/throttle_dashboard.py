@@ -12,6 +12,8 @@ then open http://127.0.0.1:8095. Needs pymavlink and pyserial.
   consistently: SENS_BOARD_Y_OFF, the nose-lift target (NL_TGT, NL_HOV_PITCH), every rotor's position and thrust axis
   in PX4's frame (CA_ROTOR*_PX/PZ/AX/AZ, rotated by the change), the H-FLOW's range tilt and lever arms
   (EKF2_RNG_PITCH, EKF2_OF_POS / EKF2_RNG_POS); then saves and reboots the board so the estimator re-aligns.
+- H-FLOW: how far to trust it (FlowCheck): the flow's velocity against EKF2's, the noise floor at rest, quality,
+  range noise, the EKF's own accuracy, and a distance check against a tape measure for the true scale error.
 - Every run (arm to disarm) saved to results/telemetry_runs/run_<time>.json with its messages, nose-lift states,
   mode changes and peak outputs, and listed under Runs on the page.
 - Every flight's live log, arm to disarm: the live values 10 times a second (mode, link, battery, RSSI, attitude,
@@ -32,6 +34,7 @@ import os
 import struct
 import threading
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -50,7 +53,7 @@ state = {
     "pwm": [0] * 16, "pwm_t": [0.0] * 16, "funcs": [0] * 16, "lift": [],
     "nl": None, "nl_t": 0.0, "volt": None, "rssi": None, "remrssi": None, "texts": [], "rate": 0.0, "ack": None,
     "att": None, "att_t": 0.0, "boot_ms": None, "boot_t": 0.0,
-    "port": "", "params": {}, "hover": {"deg": None, "busy": False, "msg": "", "ok": None, "t": 0.0, "readback": None},
+    "port": "", "link_pref": "auto", "params": {}, "flow": None, "hover": {"deg": None, "busy": False, "msg": "", "ok": None, "t": 0.0, "readback": None},
 }
 INT_TYPES = {mavutil.mavlink.MAV_PARAM_TYPE_INT32, mavutil.mavlink.MAV_PARAM_TYPE_UINT32, mavutil.mavlink.MAV_PARAM_TYPE_INT16,
              mavutil.mavlink.MAV_PARAM_TYPE_UINT16, mavutil.mavlink.MAV_PARAM_TYPE_INT8, mavutil.mavlink.MAV_PARAM_TYPE_UINT8}
@@ -261,6 +264,123 @@ def set_hover(deg):
 FN_NAMES = {**{101 + i: f"M{i + 1}" for i in range(12)}, **{201 + i: f"S{i + 1}" for i in range(8)}}
 
 
+class FlowCheck:
+    """How far to trust the H-FLOW, live. Indoors there is no ground truth in flight, so three measures, each
+    seeing something the others cannot:
+
+    - flow vs EKF: the velocity the flow implies (gyro-compensated flow x range) against EKF2's velocity in the body
+      frame, RMS over the last WINDOW s. EKF2 fuses the flow, so this cannot see a scale error (both agree on it);
+      it shows noise, dropouts, vibration and gyro-compensation errors: the flow disagreeing with the IMU.
+    - at rest: disarmed, the aircraft is still, so any flow velocity is error (the noise floor). Meaningful only
+      above the sensor's minimum focus range (~8 cm).
+    - distance check: Start, carry the aircraft a measured distance, Stop. The EKF's and the flow's own displacement
+      against the tape is the one true accuracy (scale) number.
+
+    Sign convention as PX4 (VehicleOpticalFlow, EKF2 predictFlow): compensated c = pixel - gyro over dt,
+    v_forward = c_y d / dt, v_right = -c_x d / dt, with d the range along the optical axis."""
+
+    WINDOW = 5.0
+
+    def __init__(self):
+        self.win = deque()        # (t, quality, flow velocity or None, EKF velocity or None, armed), body fwd/right
+        self.rng = deque()        # (t, range m)
+        self.att = None           # (t, roll, pitch, yaw, rollspeed, pitchspeed), rad
+        self.ekf = None           # (t, (v fwd, v right), (north, east))
+        self.rng_now = None       # (t, range m or None, signal quality %)
+        self.est = None           # (t, horizontal accuracy m, range test ratio, relative position valid)
+        self.rest = None          # (t, rms m/s): the last disarmed noise floor
+        self.chk = None           # the distance check
+        self.qmin = 1             # EKF2_OF_QMIN: flow below this quality is not fused
+
+    def fresh(self, item, now, age=0.5):
+        return item is not None and now - item[0] < age
+
+    def attitude(self, now, msg):
+        self.att = (now, msg.roll, msg.pitch, msg.yaw, msg.rollspeed, msg.pitchspeed)
+
+    def local_position(self, now, msg):
+        if not self.fresh(self.att, now):
+            return
+        _, r, p, y = self.att[:4]
+        cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
+        n, e, d = msg.vx, msg.vy, msg.vz                       # NED -> body: R^T v
+        fwd = cp * cy * n + cp * sy * e - sp * d
+        right = (sr * sp * cy - cr * sy) * n + (sr * sp * sy + cr * cy) * e + sr * cp * d
+        self.ekf = (now, (fwd, right), (msg.x, msg.y))
+
+    def distance(self, now, msg):
+        ok = msg.min_distance <= msg.current_distance <= msg.max_distance
+        self.rng_now = (now, msg.current_distance / 100 if ok else None, msg.signal_quality)
+        if ok:
+            self.rng.append((now, msg.current_distance / 100))
+
+    def estimator(self, now, msg):
+        self.est = (now, msg.pos_horiz_accuracy, msg.hagl_ratio,
+                    bool(msg.flags & mavutil.mavlink.ESTIMATOR_POS_HORIZ_REL))
+
+    def flow(self, now, msg, armed):
+        dt, v = msg.integration_time_us / 1e6, None
+        d = msg.distance if msg.distance > 0 else (self.rng_now[1] if self.fresh(self.rng_now, now, 1.0) else None)
+        gx, gy = msg.integrated_xgyro, msg.integrated_ygyro
+        if not (math.isfinite(gx) and math.isfinite(gy)):  # no sensor gyro: the board's rates over the same window
+            gx, gy = (self.att[4] * dt, self.att[5] * dt) if self.fresh(self.att, now) else (None, None)
+        if dt > 0 and msg.quality > 0 and d and gx is not None:
+            cx, cy = msg.integrated_x - gx, msg.integrated_y - gy
+            v = (cy * d / dt, -cx * d / dt)
+        ekf = self.ekf[1] if self.fresh(self.ekf, now) else None
+        self.win.append((now, msg.quality, v, ekf, armed))
+        c = self.chk
+        if c and c["on"]:
+            if v and self.fresh(self.att, now) and now - c["t_last"] < 0.6:  # the flow alone, turned north/east
+                gap, yaw = now - c["t_last"], self.att[3]
+                c["flow"][0] += (math.cos(yaw) * v[0] - math.sin(yaw) * v[1]) * gap
+                c["flow"][1] += (math.sin(yaw) * v[0] + math.cos(yaw) * v[1]) * gap
+            c["t_last"] = now
+
+    def check(self, now, on):
+        pos = self.ekf[2] if self.fresh(self.ekf, now, 1.0) else None
+        if on:
+            self.chk = {"on": True, "t0": now, "t1": None, "p0": pos, "p1": None, "flow": [0.0, 0.0], "t_last": now}
+        elif self.chk and self.chk["on"]:
+            self.chk.update(on=False, t1=now, p1=pos)
+
+    def summary(self, now, armed):
+        for q in (self.win, self.rng):
+            while q and now - q[0][0] > self.WINDOW:
+                q.popleft()
+        if not self.win and self.rng_now is None:
+            return None
+        rms = lambda xs: math.sqrt(sum(x * x for x in xs) / len(xs)) if xs else None
+        w = list(self.win)
+        res = [math.hypot(f[0] - e[0], f[1] - e[1]) for _, _, f, e, _ in w if f and e]
+        still = [math.hypot(*f) for _, _, f, _, a in w if f and not a]
+        if not armed and len(still) >= 5:
+            self.rest = (now, rms(still))
+        # range noise from second differences (white noise: var = 6 sigma^2), blind to a steady climb or descent
+        rs = [r for _, r in self.rng]
+        rd = [rs[i + 1] - 2 * rs[i] + rs[i - 1] for i in range(1, len(rs) - 1)]
+        out = {
+            "t": w[-1][0] if w else 0.0, "rate": len(w) / self.WINDOW, "qmin": self.qmin,
+            "q": w[-1][1] if w else None, "q_mean": sum(s[1] for s in w) / len(w) if w else None,
+            "q_low": 100.0 * sum(s[1] < self.qmin for s in w) / len(w) if w else None,
+            "v_flow": w[-1][2] if w else None, "v_ekf": w[-1][3] if w else None,
+            "resid": rms(res), "resid_n": len(res),
+            "rest": self.rest[1] if self.rest else None, "rest_t": self.rest[0] if self.rest else None,
+            "range": self.rng_now[1] if self.rng_now else None, "range_q": self.rng_now[2] if self.rng_now else None,
+            "range_t": self.rng_now[0] if self.rng_now else 0.0,
+            "range_std": math.sqrt(sum(x * x for x in rd) / len(rd) / 6) if len(rd) >= 3 else None,
+            "hacc": self.est[1] if self.est else None, "hagl_ratio": self.est[2] if self.est else None,
+            "relpos": self.est[3] if self.est else None, "est_t": self.est[0] if self.est else 0.0,
+        }
+        c = self.chk
+        if c:
+            p = c["p1"] if not c["on"] else (self.ekf[2] if self.fresh(self.ekf, now, 1.0) else None)
+            ekf = (p[0] - c["p0"][0], p[1] - c["p0"][1]) if p and c["p0"] else None
+            out["check"] = {"on": c["on"], "secs": (c["t1"] or now) - c["t0"],
+                            "ekf": math.hypot(*ekf) if ekf else None, "flow": math.hypot(*c["flow"])}
+        return out
+
+
 class LiveLog:
     """One CSV per flight, from arming to disarming: the dashboard's live values ``hz`` times a second and every
     event as its own row, each timestamped three ways (local time, seconds since arming, the board's uptime, which
@@ -269,8 +389,10 @@ class LiveLog:
 
     STALE = 1.5
     HEAD = ["time", "epoch", "since_arm_s", "board_uptime_s", "armed", "mode", "link", "msg_rate", "battery_v", "rssi",
-            "remote_rssi", "px4_roll_deg", "px4_pitch_deg", "px4_yaw_deg", "nl_state", "nl_abort", "nl_pitch_deg", "nl_cmd"]
-    # px4_*: ATTITUDE, in PX4's frame (level = the hover pitch on ATLAS); nl_pitch_deg: the nose lift's nose angle
+            "remote_rssi", "px4_roll_deg", "px4_pitch_deg", "px4_yaw_deg", "nl_state", "nl_abort", "nl_pitch_deg", "nl_cmd",
+            "flow_quality", "flow_vfwd", "flow_vright", "ekf_vfwd", "ekf_vright", "flow_ekf_rms", "range_m"]
+    # px4_*: ATTITUDE, in PX4's frame (level = the hover pitch on ATLAS); nl_pitch_deg: the nose lift's nose angle;
+    # flow_* / ekf_*: the H-FLOW's velocity and EKF2's, body forward / right m/s; flow_ekf_rms over the last 5 s
 
     def __init__(self, folder, hz=10.0):
         self.dir = folder
@@ -305,6 +427,9 @@ class LiveLog:
         up = st["boot_ms"] is not None and fresh(st["boot_t"])
         att = st["att"] if st["att"] is not None and fresh(st["att_t"]) else None
         nl = st["nl"] if st["nl"] is not None and fresh(st["nl_t"]) else None
+        fl = st["flow"] if st["flow"] is not None and fresh(st["flow"]["t"]) else None
+        rng = st["flow"]["range"] if st["flow"] is not None and fresh(st["flow"]["range_t"]) else None
+        vf, ve = (fl["v_flow"], fl["v_ekf"]) if fl else (None, None)
         r = lambda v, d: "" if v is None else round(v, d)
         # the arm / disarm rows are written as the heartbeat changes it, before state["armed"] follows
         armed = (text == "armed") if kind == "armed" else st["armed"]
@@ -314,6 +439,8 @@ class LiveLog:
                r(st["volt"], 2), "" if st["rssi"] is None else st["rssi"], "" if st["remrssi"] is None else st["remrssi"],
                *((r(a, 2) for a in att) if att else ("", "", "")),
                *((nl["state"], nl["abort"], r(nl["pitch"], 2), r(nl["cmd"], 3)) if nl else ("", "", "", "")),
+               "" if fl is None else fl["q"], *((r(x, 3) for x in vf) if vf else ("", "")),
+               *((r(x, 3) for x in ve) if ve else ("", "")), r(fl and fl["resid"], 3), r(rng, 3),
                *(st["pwm"][i] if fresh(st["pwm_t"][i]) else "" for i in range(16)), kind, text]
         self.w.writerow(row)
         self.f.flush()
@@ -476,12 +603,18 @@ def shell(m, cmds):
 def configure(m, dev):
     shell(m, [f"mavlink stream -d {dev} -s SERVO_OUTPUT_RAW_1 -r 10",
               f"mavlink stream -d {dev} -s SERVO_OUTPUT_RAW_0 -r 5",
-              f"mavlink stream -d {dev} -s DEBUG_VECT -r 10"])
+              f"mavlink stream -d {dev} -s DEBUG_VECT -r 10",
+              # the H-FLOW card: ~0.6 kB/s more on the radio
+              f"mavlink stream -d {dev} -s OPTICAL_FLOW_RAD -r 5",
+              f"mavlink stream -d {dev} -s LOCAL_POSITION_NED -r 5",
+              f"mavlink stream -d {dev} -s DISTANCE_SENSOR -r 2",
+              f"mavlink stream -d {dev} -s ESTIMATOR_STATUS -r 1"])
     for i, n in enumerate(FUNC_PARAMS):
         m.mav.param_request_read_send(1, 1, n.encode(), -1)
         time.sleep(0.05)
     m.mav.param_request_read_send(1, 1, b"NL_MOT_MSK", -1)
     m.mav.param_request_read_send(1, 1, b"SENS_BOARD_Y_OFF", -1)
+    m.mav.param_request_read_send(1, 1, b"EKF2_OF_QMIN", -1)
 
 
 def reader(args):
@@ -492,25 +625,62 @@ def reader(args):
         except OSError as e:  # serial.SerialException is an OSError
             link.pop("m", None)
             with lock:
-                state["link"], state["last_hb"] = False, 0.0
+                state["link"], state["last_hb"], state["rate"] = False, 0.0, 0.0
+                if str(e).startswith("LINK: "):      # pick_link found nothing for the chosen link: say so on the page
+                    state["port"] = str(e)[6:]
             print(f"{args.port}: {e}; retrying")
-            time.sleep(1)
+            busy = "busy" in str(e).lower()
+            if busy:
+                # another program (QGC) holds the port: every open attempt reconfigures the port under it and
+                # broke QGC's parameter download (6 Oct); back off and say so, QG / the toggle decide
+                with lock:
+                    state["port"] = "port busy (QGC has it?): waiting; press QG to release, or pick the other link"
+            time.sleep(10 if busy else 1)
+            while state["link_pref"] == "off":      # QG: the port stays closed until the page asks for a link again
+                time.sleep(0.5)
 
 
 def pick_link(args):
     """(port, baud, board-side device) to use now. --port auto: the ground telemetry radio if one is plugged in
     (USB serial, 57600, the radio on TELEM3 = /dev/ttyS1), else the Pixhawk on USB (921600, /dev/ttyACM0); checked
     again at every reconnect, so unplugging one and plugging in the other just works."""
-    if args.port != "auto":
+    with lock:
+        pref = state["link_pref"]      # the page's Auto / Radio / USB toggle (POST /link?want=)
+    if args.port != "auto" and pref == "auto":
         return args.port, args.baud, args.dev
     import glob
     radio = sorted(glob.glob("/dev/cu.usbserial-*") + glob.glob("/dev/ttyUSB*"))
+    usb = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/ttyACM*"))
+    if pref == "off":
+        raise OSError("LINK: released for QGC (press QG again to take it back)")
+    if pref == "radio":
+        if radio:
+            return radio[0], 57600, "/dev/ttyS1"
+        raise OSError("LINK: no telemetry radio plugged in")
+    if pref == "usb":
+        if usb:
+            return usb[0], 921600, "/dev/ttyACM0"
+        raise OSError("LINK: no Pixhawk on USB")
     if radio:
         return radio[0], 57600, "/dev/ttyS1"
-    usb = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/ttyACM*"))
     if usb:
         return usb[0], 921600, "/dev/ttyACM0"
-    raise OSError("no telemetry radio or Pixhawk USB port found")
+    raise OSError("LINK: no telemetry radio or Pixhawk USB port found")
+
+
+def switch_link(want):
+    """The page asked for another link: remember it and drop the current connection; the reader reopens."""
+    with lock:
+        state["link_pref"] = want
+        if want == "off":
+            state["port"] = "released for QGC (press QG again to take it back)"
+    m = link.get("m")
+    if m is not None:
+        try:
+            m.close()
+        except Exception:
+            pass
+    link["reopen"] = True
 
 
 def read_link(args):
@@ -550,7 +720,12 @@ def read_link(args):
                         m.write(q.get_msgbuf())
             except OSError:
                 pass
-        msg = m.recv_match(blocking=True, timeout=0.05)
+        if link.pop("reopen", False):
+            raise OSError("link switched from the page")
+        try:
+            msg = m.recv_match(blocking=True, timeout=0.05)
+        except Exception as e:      # the connection was closed under us by a link switch
+            raise OSError(str(e)) from e
         now = time.time()
         with lock:
             if now - t_rate > 1:
@@ -596,6 +771,18 @@ def read_link(args):
                 state["boot_ms"], state["boot_t"] = msg.time_boot_ms, now
                 state["att"] = [msg.roll * 57.29578, msg.pitch * 57.29578, msg.yaw * 57.29578]
                 state["att_t"] = now
+                fcheck.attitude(now, msg)
+            elif ty in ("OPTICAL_FLOW_RAD", "DISTANCE_SENSOR", "LOCAL_POSITION_NED", "ESTIMATOR_STATUS"):
+                if ty == "OPTICAL_FLOW_RAD":
+                    fcheck.flow(now, msg, state["armed"])
+                elif ty == "DISTANCE_SENSOR":
+                    fcheck.distance(now, msg)
+                elif ty == "LOCAL_POSITION_NED":
+                    fcheck.local_position(now, msg)
+                else:
+                    fcheck.estimator(now, msg)
+                if ty != "LOCAL_POSITION_NED":
+                    state["flow"] = fcheck.summary(now, state["armed"])
             elif ty == "SERVO_OUTPUT_RAW" and msg.port in (0, 1):
                 for i in range(8):
                     pwm = getattr(msg, f"servo{i + 1}_raw")
@@ -634,6 +821,8 @@ def read_link(args):
                 state["params"][msg.param_id] = (v, msg.param_type, now)
                 if msg.param_id == "SENS_BOARD_Y_OFF":
                     state["hover"]["deg"] = round(v, 2)
+                if msg.param_id == "EKF2_OF_QMIN":
+                    fcheck.qmin = int(v)
                 if msg.param_id in FUNC_PARAMS:
                     state["funcs"][FUNC_PARAMS.index(msg.param_id)] = as_int(msg.param_value)
                 elif msg.param_id == "NL_MOT_MSK":
@@ -648,7 +837,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;padding:16px}
 .top{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}.pill{background:var(--card);padding:8px 12px;border-radius:8px}
 .pill b{font-variant-numeric:tabular-nums}.btn{border:1px solid var(--bar);color:var(--fg);font:inherit;cursor:pointer}
-.btn:hover{background:var(--bar);color:#fff}.btn.on{background:var(--bar);color:#fff;cursor:default}.armed{background:var(--hot);color:#fff}.ok{color:var(--ok)}.bad{color:var(--hot)}
+.btn:hover{background:var(--bar);color:#fff}.btn.lnk{padding:0 6px;margin-left:3px;border-radius:9px;font-size:11px;background:transparent}.btn.lnk.qg{margin-left:8px;border-color:var(--warn)}.btn.lnk.qg.on{background:var(--warn);color:#000;cursor:pointer}.btn.on{background:var(--bar);color:#fff;cursor:default}.armed{background:var(--hot);color:#fff}.ok{color:var(--ok)}.bad{color:var(--hot)}
 .big{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}.big.front{grid-template-columns:repeat(3,minmax(0,1fr))}
 .modes{display:inline-flex;gap:6px;flex-wrap:wrap}
 .hov{display:inline-flex;align-items:center;gap:6px}.hov input{width:64px;background:var(--bg);color:var(--fg);border:1px solid var(--track);border-radius:6px;padding:4px 6px;font:inherit}
@@ -657,7 +846,12 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 .vbar{height:220px;background:var(--track);border-radius:8px;position:relative;overflow:hidden;margin:8px 0}
 .vfill{position:absolute;bottom:0;left:0;right:0;background:var(--bar)}
 .rear{grid-template-columns:repeat(auto-fit,minmax(96px,1fr))}.rear .vbar{height:160px}.rear .pct{font-size:24px}
-.row{margin:0 0 6px;font-size:13px}
+.row{margin:0 0 6px;font-size:13px}.warn{color:var(--warn)}
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
+.flow .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;margin:4px 0}.flow .us{font-size:12px;line-height:1.5}
+.flow .wide{grid-column:span 2}.chkrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.chkrow input{width:72px;background:var(--bg);color:var(--fg);border:1px solid var(--track);border-radius:6px;padding:4px 6px;font:inherit}
+@media(max-width:420px){.flow .wide{grid-column:auto}}
 .pct{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}.us{color:var(--dim);font-variant-numeric:tabular-nums}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:8px}
 .hbar{height:10px;background:var(--track);border-radius:5px;overflow:hidden;margin-top:6px}.hfill{height:100%;background:var(--bar)}
@@ -678,8 +872,19 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 </style></head><body>
 <nav class="tabs"><button class="tab on" data-tab="live">Live</button><button class="tab" data-tab="logs">Logs<span class="rec" id="recdot"></span></button></nav>
 <section id="tab-live">
-<div class="top"><div class="top" id="top" style="margin:0"></div>
-<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover(this)">Set hover pitch</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button><button class="btn hovbtn rbt" onclick="rebootBoard(this)">Reboot board</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
+<div class="top"><div class="top" id="top" style="margin:0"></div><div class="pill" id="linkpill">link <b id="lnkstate" class="bad">-</b> <span id="lnkport"></span> <button class="btn lnk" data-lnk="auto" onclick="setLink('auto')">auto</button><button class="btn lnk" data-lnk="radio" onclick="setLink('radio')">radio</button><button class="btn lnk" data-lnk="usb" onclick="setLink('usb')">usb</button><button class="btn lnk qg" data-lnk="off" title="release the serial port so QGroundControl can open it; press again to take it back" onclick="qg()">QG</button></div>
+<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover(this)">Set hover pitch</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button><button class="btn hovbtn rbt" onclick="rebootBoard(this)">Reboot board</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div>
+<h3 class="lbl row">H-FLOW · how far to trust it</h3><div class="flow" id="flow">
+<div class="card" id="fl-res"><div class="lbl">flow vs EKF velocity</div><div class="v">-</div><div class="us"></div></div>
+<div class="card" id="fl-rest"><div class="lbl">at rest (noise floor)</div><div class="v">-</div><div class="us"></div></div>
+<div class="card" id="fl-q"><div class="lbl">flow quality</div><div class="v">-</div><div class="us"></div></div>
+<div class="card" id="fl-rng"><div class="lbl">range</div><div class="v">-</div><div class="us"></div></div>
+<div class="card" id="fl-ekf"><div class="lbl">EKF's own accuracy</div><div class="v">-</div><div class="us"></div></div>
+<div class="card wide"><div class="lbl">distance check · the true scale error</div>
+<div class="us">Start, carry the aircraft level (hover attitude) at hover height along a tape, Stop, enter the tape distance.</div>
+<div class="chkrow"><button class="btn hovbtn" id="fl-go" onclick="flowCheck()">Start</button><span class="us">tape</span><input id="fl-true" type="number" step="0.05" min="0" placeholder="m"><span class="us">m</span></div>
+<div class="us" id="fl-chk"></div></div>
+</div><div class="grid" id="grid"></div><div class="texts" id="texts"></div>
 <h3 class="lbl" style="margin:20px 0 8px;font-size:13px">Runs</h3><div id="runs" class="runs"></div>
 </section>
 <section id="tab-logs" hidden>
@@ -695,12 +900,16 @@ function render(s){
   const now=s.now, age=i=>now-s.pwm_t[i];
   const lift=new Set(s.lift.map(m=>100+m));
   let top=`<div class="pill ${s.armed?'armed':''}">${s.armed?'ARMED':'disarmed'}</div>`+
-    `<div class="pill">link <b class="${s.link?'ok':'bad'}">${s.link?'OK':'LOST'}</b> ${s.rate.toFixed(0)} msg/s${s.port?' · '+s.port:''}</div>`+
+
     `<div class="pill">battery <b>${s.volt==null?'-':s.volt.toFixed(2)+' V'}</b></div>`+
     `<div class="pill">RSSI <b>${s.rssi??'-'}/${s.remrssi??'-'}</b></div>`;
   if(s.nl){const st=now-s.nl_t>1.5;top+=`<div class="pill ${st?'stale':''}">nose lift <b>${s.nl.state}</b>${s.nl.abort!='none'?' <span class="bad">('+s.nl.abort+')</span>':''} · pitch <b>${s.nl.pitch.toFixed(1)}°</b> · cmd <b>${(s.nl.cmd*100).toFixed(0)}%</b></div>`}
   top=`<div class="pill">mode <b>${s.mode_name}</b></div>`+top;
   document.getElementById('top').innerHTML=top;
+  // the link pill is static markup (a rebuilt button loses the click that is in progress on it): restyle only
+  const ls=document.getElementById('lnkstate');ls.textContent=s.link?'OK':'LOST';ls.className=s.link?'ok':'bad';
+  document.getElementById('lnkport').textContent=`${s.rate.toFixed(0)} msg/s${s.port?' · '+s.port:''}`;
+  linkPref=s.link_pref;document.querySelectorAll('.btn.lnk').forEach(b=>b.classList.toggle('on',b.dataset.lnk==s.link_pref));
   document.querySelectorAll('.btn[data-mode]').forEach(b=>b.classList.toggle('on',s.mode_name==b.dataset.mode));
   if(s.hover){document.getElementById('hovnow').textContent=s.hover.deg??'-';
     const hb=document.querySelector('.hovbtn');hb.disabled=!!(s.armed||s.hover.busy);
@@ -730,8 +939,39 @@ function render(s){
   document.getElementById('rear').innerHTML=rear||'<div class="card lbl">waiting for the motor list…</div>';
   document.getElementById('grid').innerHTML=grid;
   document.getElementById('texts').textContent=s.texts.join('\n');
+  renderFlow(s);
 }
+// ---- H-FLOW: static tiles, only their text updated (the tape input must survive the 20 Hz redraw)
+let flowNow=null;
+const f2=(v,d=2)=>v==null?'-':v.toFixed(d), grade=(v,g,w)=>v==null?'':v<g?'ok':v<w?'warn':'bad';
+const vec=v=>v?`${f2(v[0])} / ${f2(v[1])}`:'-';
+function tile(id,val,cls,sub,stale){const el=document.getElementById(id);el.classList.toggle('stale',!!stale);
+  const v=el.querySelector('.v');v.textContent=val;v.className='v '+(cls||'');el.querySelector('.us').innerHTML=sub}
+function renderFlow(s){
+  const f=flowNow=s.flow,now=s.now;
+  if(!f){tile('fl-res','-','','no OPTICAL_FLOW_RAD yet',true);return}
+  const st=now-f.t>1.5;
+  tile('fl-res',f.resid==null?'-':f2(f.resid)+' m/s',grade(f.resid,0.15,0.4),
+    `RMS of the difference, last 5 s, ${f.resid_n} samples<br>fwd / right: flow ${vec(f.v_flow)} · EKF ${vec(f.v_ekf)}<br>noise, dropouts, vibration; blind to scale`,st);
+  tile('fl-rest',f.rest==null?'-':f2(f.rest)+' m/s',grade(f.rest,0.05,0.15),
+    (s.armed?'measured before arming':'disarmed and still: any flow is error')+(f.rest_t?` · ${Math.round(now-f.rest_t)} s ago`:''),f.rest==null);
+  tile('fl-q',f.q_mean==null?'-':f.q_mean.toFixed(0)+' / 255',grade(f.q_low,5,25),
+    `now ${f.q??'-'} · ${f2(f.q_low,0)}% below EKF2_OF_QMIN ${f.qmin} (not fused)<br>${f.rate.toFixed(1)} samples/s`,st);
+  const rst=now-f.range_t>2;
+  tile('fl-rng',f.range==null?'-':f2(f.range)+' m',f.range==null&&!rst?'bad':'',
+    `noise ±${f.range_std==null?'-':(f.range_std*100).toFixed(1)} cm (1σ, 5 s) · signal ${f.range_q?f.range_q+'%':'-'}`+(f.range==null&&!rst?'<br>out of range':''),rst);
+  tile('fl-ekf',f.hacc==null?'-':'±'+f2(f.hacc)+' m',f.relpos===false?'bad':'',
+    `horizontal position, EKF's estimate · relative position ${f.relpos==null?'-':f.relpos?'<span class="ok">valid</span>':'<span class="bad">invalid</span>'}<br>range test ratio ${f2(f.hagl_ratio)} (under 1 passes)`,now-f.est_t>3);
+  const c=f.check,go=document.getElementById('fl-go'),tape=parseFloat(document.getElementById('fl-true').value);
+  go.textContent=c&&c.on?'Stop':'Start';
+  const err=m=>m!=null&&tape>0?` <span class="${grade(Math.abs(m-tape)/tape*100,5,15)}">(${((m-tape)/tape*100>=0?'+':'')}${((m-tape)/tape*100).toFixed(1)}%)</span>`:'';
+  document.getElementById('fl-chk').innerHTML=c?`${c.on?'measuring':'measured'} ${c.secs.toFixed(0)} s · EKF moved <b>${c.ekf==null?'- (no position)':f2(c.ekf)+' m'}</b>${err(c.ekf)} · flow alone <b>${f2(c.flow)} m</b>${err(c.flow)}`:'';
+}
+function flowCheck(){fetch('/flowcheck?on='+(flowNow&&flowNow.check&&flowNow.check.on?0:1),{method:'POST'})}
 function setMode(n){fetch('/mode?name='+n,{method:'POST'})}
+let linkPref='auto';
+function setLink(w){fetch('/link?want='+w,{method:'POST'}).then(r=>{if(!r.ok)note('Link not switched: disarm first.',true)})}
+function qg(){setLink(linkPref=='off'?'auto':'off')}
 // confirmations on the page itself: the first click arms the button for 5 s, the second does it (browser pop-ups
 // such as confirm() and alert() are blocked in some embedded browsers, which made these buttons do nothing)
 const armedBtn={};
@@ -796,12 +1036,13 @@ async function loadLog(name,el){
   if(mode=='events')rows=rows.filter(r=>r[ev]);
   else if(mode=='1s'){let last=-1;rows=rows.filter(r=>{if(r[ev])return true;const s=Math.floor(+r[ix('since_arm_s')]);if(s==last)return false;last=s;return true})}
   const num=(v,d=1)=>v===''?'':(+v).toFixed(d);
-  const cols=[['time','l'],['+s'],['uptime'],['mode','l'],['link'],['batt V'],['roll'],['pitch'],['yaw'],['nose lift','l'],['NL pitch'],['NL cmd'],...outs.map(([h])=>[h.replace(/^out\d+ /,'')||h]),['event','l'],['text','l']];
+  const cols=[['time','l'],['+s'],['uptime'],['mode','l'],['link'],['batt V'],['roll'],['pitch'],['yaw'],['nose lift','l'],['NL pitch'],['NL cmd'],['flow q'],['flow−EKF'],['range'],...outs.map(([h])=>[h.replace(/^out\d+ /,'')||h]),['event','l'],['text','l']];
   const head='<tr>'+cols.map(([h,cl])=>`<th class="${cl||''}">${esc(h)}</th>`).join('')+'</tr>';
   const body=rows.map(r=>{
+    const g=k=>ix(k)<0?'':r[ix(k)];  // older logs have no H-FLOW columns
     const nl=r[ix('nl_state')]+(r[ix('nl_abort')]&&r[ix('nl_abort')]!='none'?' ('+r[ix('nl_abort')]+')':'');
-    return `<tr class="${r[ev]?'ev':''}"><td class="l">${esc(r[0].slice(11))}</td><td>${num(r[ix('since_arm_s')],2)}</td><td>${num(r[ix('board_uptime_s')],2)}</td><td class="l">${esc(r[ix('mode')])}</td><td>${r[ix('link')]=='1'?'':'<span class="bad">lost</span>'}</td><td>${num(r[ix('battery_v')],2)}</td><td>${num(r[ix('px4_roll_deg')])}</td><td>${num(r[ix('px4_pitch_deg')])}</td><td>${num(r[ix('px4_yaw_deg')])}</td><td class="l">${esc(nl)}</td><td>${num(r[ix('nl_pitch_deg')])}</td><td>${r[ix('nl_cmd')]===''?'':Math.round(+r[ix('nl_cmd')]*100)+'%'}</td>${outs.map(([h,i])=>`<td>${opct(r[i])}</td>`).join('')}<td class="l">${esc(r[ev])}</td><td class="l txt">${esc(r[tx])}</td></tr>`}).join('');
-  const bar=`<div class="logbar"><select data-view="${name}"><option value="all">every sample (10 per second)</option><option value="1s">one per second</option><option value="events">events only</option></select><a href="/logs/${name}.csv" download>Download CSV</a><span class="us">${d.rows.length} rows${d.recording?' · recording…':''} · pitch/roll/yaw: PX4's frame · outputs: % of 1000-2000 µs</span></div>`;
+    return `<tr class="${r[ev]?'ev':''}"><td class="l">${esc(r[0].slice(11))}</td><td>${num(r[ix('since_arm_s')],2)}</td><td>${num(r[ix('board_uptime_s')],2)}</td><td class="l">${esc(r[ix('mode')])}</td><td>${r[ix('link')]=='1'?'':'<span class="bad">lost</span>'}</td><td>${num(r[ix('battery_v')],2)}</td><td>${num(r[ix('px4_roll_deg')])}</td><td>${num(r[ix('px4_pitch_deg')])}</td><td>${num(r[ix('px4_yaw_deg')])}</td><td class="l">${esc(nl)}</td><td>${num(r[ix('nl_pitch_deg')])}</td><td>${r[ix('nl_cmd')]===''?'':Math.round(+r[ix('nl_cmd')]*100)+'%'}</td><td>${g('flow_quality')}</td><td>${num(g('flow_ekf_rms'),2)}</td><td>${num(g('range_m'),2)}</td>${outs.map(([h,i])=>`<td>${opct(r[i])}</td>`).join('')}<td class="l">${esc(r[ev])}</td><td class="l txt">${esc(r[tx])}</td></tr>`}).join('');
+  const bar=`<div class="logbar"><select data-view="${name}"><option value="all">every sample (10 per second)</option><option value="1s">one per second</option><option value="events">events only</option></select><a href="/logs/${name}.csv" download>Download CSV</a><span class="us">${d.rows.length} rows${d.recording?' · recording…':''} · pitch/roll/yaw: PX4's frame · outputs: % of 1000-2000 µs · flow−EKF: m/s RMS, 5 s</span></div>`;
   const wrap=el.querySelector('.tblwrap'),top=wrap?wrap.scrollTop:0;
   el.innerHTML=bar+`<div class="tblwrap"><table>${head}${body}</table></div>`;
   el.querySelector('.tblwrap').scrollTop=top;
@@ -837,11 +1078,29 @@ setInterval(refreshLogs,2000);refreshLogs();
 </script></body></html>"""
 
 
+def no_nan(o):
+    """NaN is not JSON: the browser's JSON.parse threw on it and the page stopped rendering (seen with the link down,
+    the last flow summary's hagl ratio NaN). None instead, at any depth."""
+    if isinstance(o, float):
+        return None if math.isnan(o) or math.isinf(o) else o
+    if isinstance(o, dict):
+        return {k: no_nan(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [no_nan(v) for v in o]
+    return o
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
     def do_POST(self):
+        if self.path.startswith("/link?"):
+            want = self.path.partition("want=")[2]
+            ok = want in ("auto", "radio", "usb", "off") and not state["armed"]
+            if ok:
+                switch_link(want)
+            self.send_response(204 if ok else 400); self.end_headers(); return
         if self.path == "/reboot":
             with lock:
                 ok = "m" in link and not state["armed"] and not state["hover"]["busy"]
@@ -849,6 +1108,11 @@ class Handler(BaseHTTPRequestHandler):
                 hover_msg("starting reboot…")
                 threading.Thread(target=reboot_board, daemon=True).start()
             self.send_response(204 if ok else 400); self.end_headers(); return
+        if self.path.startswith("/flowcheck?"):
+            with lock:
+                fcheck.check(time.time(), self.path.endswith("on=1"))
+                state["flow"] = fcheck.summary(time.time(), state["armed"])
+            self.send_response(204); self.end_headers(); return
         if self.path == "/readback":
             m = link.get("m")
             if m is None:
@@ -931,7 +1195,7 @@ class Handler(BaseHTTPRequestHandler):
                 while True:
                     with lock:
                         s = dict(state, now=time.time(), mode_name=mode_name(state["mode"]) if state["link"] else "-")
-                    self.wfile.write(f"data: {json.dumps(s)}\n\n".encode())
+                    self.wfile.write(f"data: {json.dumps(no_nan(s))}\n\n".encode())
                     self.wfile.flush()
                     time.sleep(0.05)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -954,8 +1218,9 @@ def main():
     p.add_argument("--runs-dir", default=str(Path(__file__).resolve().parents[1] / "results" / "telemetry_runs"),
                    help="where each run's messages are saved")
     args = p.parse_args()
-    global rec
+    global rec, fcheck
     rec = Recorder(Path(args.runs_dir))
+    fcheck = FlowCheck()
     print(f"runs saved to {rec.dir}")
     threading.Thread(target=reader, args=(args,), daemon=True).start()
     print(f"throttle dashboard: http://127.0.0.1:{args.http}  (radio {args.port}, QGC udp {args.qgc_port or 'off'})")

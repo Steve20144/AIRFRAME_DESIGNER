@@ -32,6 +32,18 @@ Windows Python (pymavlink, pyserial, pyulog installed with `--user`), not WSL: t
 - Forces MAVLink 2 (`MAVLINK20`): this pymavlink defaults to MAVLink 1, whose STATUSTEXT has no chunk id.
 - Desk test without the radio: launch `throttle-fake` (the dashboard on `udpin:127.0.0.1:14660`, port 8097, runs
   in /tmp/throttle_fake_runs), then `python scripts/fake_px4_telemetry.py` flies a scripted flight into it.
+- H-FLOW card (added 2026-10-05, `FlowCheck`): indoors there is no ground truth in flight, so three measures.
+  (1) Flow vs EKF: velocity from OPTICAL_FLOW_RAD (pixel minus gyro over the window, times range; v_fwd = c_y d/dt,
+  v_right = -c_x d/dt, PX4's sign convention) against LOCAL_POSITION_NED turned into the body frame, RMS over 5 s.
+  EKF2 fuses the flow, so this is blind to scale; it shows noise, dropouts, vibration, compensation errors.
+  (2) At rest: disarmed = still, so flow velocity is pure error (valid only above the ~8 cm focus range).
+  (3) Distance check: Start / carry along a tape / Stop; EKF displacement and the flow alone (5 Hz samples
+  integrated, coarse) against the tape is the only true scale error. Also quality vs EKF2_OF_QMIN, range noise
+  (second differences, blind to steady climbs; DISTANCE_SENSOR is cm-quantised), ESTIMATOR_STATUS horizontal accuracy,
+  hagl test ratio, relative-position flag. Streams added in `configure`: OPTICAL_FLOW_RAD 5, LOCAL_POSITION_NED 5,
+  DISTANCE_SENSOR 2, ESTIMATOR_STATUS 1 Hz (~0.6 kB/s on the radio). Logged per flight (flow_*, ekf_*, range_m).
+  Desk test on macOS: `throttle-fake-mac` + `fake_px4_telemetry.py` (its flow has a `--flow-scale` 1.1 error).
+  Not yet checked against the real H-FLOW: signs and whether EKF2 moves its position while landed.
 
 Quirks it handles, each found the hard way:
 - PX4 streams outputs 9-16 only as `SERVO_OUTPUT_RAW_1`, on no link by default, and forgets `mavlink stream` at every

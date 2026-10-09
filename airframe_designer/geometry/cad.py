@@ -242,15 +242,31 @@ def _mass_props(shape) -> tuple[float, np.ndarray, np.ndarray]:
     return v, c, Ic
 
 
+def _surface_props(shape) -> np.ndarray:
+    """Area centroid of an open shell (no volume: it weighs nothing, it is shown and can be measured)."""
+    from OCP.GProp import GProp_GProps
+    from OCP.BRepGProp import BRepGProp
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(shape, props)
+    c = props.CentreOfMass()
+    return np.array([c.X(), c.Y(), c.Z()])
+
+
+def _is_shell(shape) -> bool:
+    from OCP.TopAbs import TopAbs_SHELL
+    return shape.ShapeType() == TopAbs_SHELL
+
+
 def _collect_solids(step_path: Path) -> list[tuple[str, object]]:
-    """[(name, TopoDS_Shape solid)] in file order, names from the STEP product structure when present."""
+    """[(name, TopoDS_Shape solid or free shell)] in file order, names from the STEP product structure when present.
+    Shells that belong to no solid (surface models, an open canopy) come after the solids of the same label."""
     try:
         from OCP.Interface import Interface_Static
     except ImportError as e:
         raise RuntimeError("STEP import needs OpenCascade: .venv/bin/pip install cadquery-ocp") from e
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.TopExp import TopExp_Explorer
-    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopAbs import TopAbs_SOLID, TopAbs_SHELL
     from OCP.TopoDS import TopoDS
     from OCP.STEPControl import STEPControl_Reader
     STEPControl_Reader()   # constructing a reader registers the STEP statics; only then can the unit be set
@@ -298,6 +314,10 @@ def _collect_solids(step_path: Path) -> list[tuple[str, object]]:
                 k += 1
                 solids.append((name or f"body {len(solids) + 1}", TopoDS.Solid(ex.Current())))
                 ex.Next()
+            ex = TopExp_Explorer(shape, TopAbs_SHELL, TopAbs_SOLID)
+            while ex.More():
+                solids.append((name or f"surface {len(solids) + 1}", TopoDS.Shell(ex.Current())))
+                ex.Next()
 
         from OCP.TopLoc import TopLoc_Location
         free = TDF_LabelSequence()
@@ -319,6 +339,10 @@ def _collect_solids(step_path: Path) -> list[tuple[str, object]]:
         while ex.More():
             solids.append((f"body {len(solids) + 1}", TopoDS.Solid(ex.Current())))
             ex.Next()
+        ex = TopExp_Explorer(shape, TopAbs_SHELL, TopAbs_SOLID)
+        while ex.More():
+            solids.append((f"surface {len(solids) + 1}", TopoDS.Shell(ex.Current())))
+            ex.Next()
     # de-duplicate names so ids stay unique and readable
     seen: dict[str, int] = {}
     out = []
@@ -330,6 +354,8 @@ def _collect_solids(step_path: Path) -> list[tuple[str, object]]:
 
 def import_step(step_path: str | Path, log=None) -> dict:
     """Parse a STEP file: per solid the mass properties and a mesh. Writes the cache beside the file and returns it.
+    Open shells (surface models) become bodies with volume 0, their area centroid and "surface": true: they are
+    shown and picked but never carry mass (mass_items skips volume 0).
     Cache format: {"file", "sha1", "bodies": [{"id","name","volume","centroid","inertia_unit","vertices","indices"}]}"""
     step_path = Path(step_path)
     data = step_path.read_bytes()
@@ -344,7 +370,7 @@ def import_step(step_path: str | Path, log=None) -> dict:
             pass
     solids = _collect_solids(step_path)
     if not solids:
-        raise RuntimeError(f"{step_path.name} contains no solids (surfaces only?)")
+        raise RuntimeError(f"{step_path.name} contains no solids or shells")
     # a common tessellation tolerance: 0.15 % of the whole model's diagonal
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
@@ -357,15 +383,17 @@ def import_step(step_path: str | Path, log=None) -> dict:
     deflection = max(2e-4, 0.0015 * diag)
     bodies = []
     for k, (name, s) in enumerate(solids):
-        v, c, Ic = _mass_props(s)
+        surface = _is_shell(s)
+        v, c, Ic = (0.0, _surface_props(s), np.zeros((3, 3))) if surface else _mass_props(s)
         verts, tris = _mesh_shape(s, deflection)
         bodies.append({
             "id": f"{k}:{name}", "name": name, "volume": v, "centroid": [float(x) for x in c],
             "inertia_unit": [float(Ic[0, 0]), float(Ic[1, 1]), float(Ic[2, 2]), float(-Ic[0, 1]), float(-Ic[0, 2]), float(-Ic[1, 2])],
             "vertices": [round(float(x), 6) for x in verts.ravel()], "indices": [int(x) for x in tris.ravel()],
+            **({"surface": True} if surface else {}),
         })
         if log:
-            log(f"[cad] {name}: {v * 1e3:.3f} L, centroid {np.round(c, 4).tolist()}, {len(tris)} triangles")
+            log(f"[cad] {name}: {'open surface' if surface else f'{v * 1e3:.3f} L'}, centroid {np.round(c, 4).tolist()}, {len(tris)} triangles")
     out = {"file": step_path.name, "sha1": sha, "bounds": [xmin, ymin, zmin, xmax, ymax, zmax], "bodies": bodies}
     cp.write_text(json.dumps(out))
     return out
