@@ -42,7 +42,8 @@ def cmd_run(a) -> int:
     r = run_once(a.airframe, a.scenario, variables=_parse_set(a.set), px4_dir=a.px4_dir, instance=a.instance, speed=a.speed,
                  rate=a.rate, substeps=a.substeps, noise=not a.no_noise, seed=a.seed, timeout_wall=a.timeout,
                  log=(print if a.verbose else None), quiet=not a.verbose, extra_params=_parse_set(a.param),
-                 timeseries_path=a.timeseries, physics=a.physics)
+                 timeseries_path=a.timeseries, physics=a.physics,
+                 accel_bias=[float(v) for v in a.accel_bias.split(",")] if a.accel_bias else None)
     if not a.keep_airframe:
         r.pop("airframe", None)
     text = json.dumps(r, indent=2)
@@ -275,6 +276,7 @@ def main(argv=None) -> int:
     p.add_argument("--param", action="append", metavar="NAME=VALUE", help="extra PX4 parameter (repeatable)")
     p.add_argument("--instance", type=int, default=None); p.add_argument("--seed", type=int, default=1)
     p.add_argument("--out", default=None); p.add_argument("--timeseries", default=None, help="write the sampled time series here (JSON)")
+    p.add_argument("--accel-bias", default=None, metavar="X,Y,Z", help="constant accelerometer error in m/s^2 (body axes): a tilt PX4 estimates wrong")
     p.add_argument("-v", "--verbose", action="store_true")
 
     p = sub.add_parser("batch", help="many runs in parallel from a tasks file"); sim_args(p)

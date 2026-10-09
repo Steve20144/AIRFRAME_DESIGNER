@@ -94,6 +94,13 @@ class MetricsRecorder:
             vib_cols = [vm.accel, vm.gyro] if vm is not None else [float("nan")] * 2
             pos = getattr(link, "board_pos", None)          # PX4's height estimate (LOCAL_POSITION_NED), up positive
             vib_cols += [-float(pos["z"]) if pos else float("nan"), self.cmd_jitter]
+            # landing order and the nose rotation: feet on the ground, the firmware nose-lift state and its command
+            nl = getattr(link, "nose_lift_fw", None) or {}
+            vib_cols += [float(getattr(s, "feet_down", float("nan"))), float(nl.get("state_i", float("nan"))),
+                         float(nl.get("cmd", float("nan")))]
+            # PX4's own horizontal position / velocity estimate (EKF origin), against the truth n, e, vn, ve
+            vib_cols += [float(pos.get("x", float("nan"))) if pos else float("nan"), float(pos.get("y", float("nan"))) if pos else float("nan"),
+                         float(pos.get("vx", float("nan"))) if pos else float("nan"), float(pos.get("vy", float("nan"))) if pos else float("nan")]
             if vm is not None:
                 self.clipping = {"accel": vm.accel_clipping, "gyro": vm.gyro_clipping}
             self.rows.append([t, *s.pos.tolist(), *s.vel.tolist(), r, p, y, *s.rates.tolist(), tilt,
@@ -104,7 +111,7 @@ class MetricsRecorder:
     # ------------------------------------------------------------ summary
     COLS = ["t", "n", "e", "d", "vn", "ve", "vd", "roll", "pitch", "yaw", "p", "q", "r", "tilt", "thrust", "power", "lift",
             "airspeed", "util_max", "cmd_mean", "airborne", "roll_sp", "pitch_sp", "yaw_sp", "thr_sp", "roll_est", "pitch_est", "yaw_est",
-            "vib_acc", "vib_gyro", "alt_est", "cmd_jitter"]
+            "vib_acc", "vib_gyro", "alt_est", "cmd_jitter", "feet_down", "nl_state", "nl_cmd", "n_est", "e_est", "vn_est", "ve_est"]
     # *_sp: PX4's attitude setpoint (ATTITUDE_TARGET, hover frame), NaN until the first one arrives
     # vib_*: PX4's accel (m/s^2) and gyro (rad/s) vibration metrics on the samples sent (sensors/vibration.py)
     # alt_est: PX4's height above its EKF origin (NaN until LOCAL_POSITION_NED arrives); cmd_jitter: see __call__

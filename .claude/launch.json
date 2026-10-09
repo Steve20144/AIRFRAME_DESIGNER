@@ -124,6 +124,157 @@
         "8098"
       ],
       "port": 8098
+    },
+    {
+      "name": "throttle-radio-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "scripts/throttle_dashboard.py",
+        "--port",
+        "/dev/cu.usbserial-DU0E76IN",
+        "--baud",
+        "57600",
+        "--http",
+        "8095"
+      ],
+      "port": 8095
+    },
+    {
+      "name": "throttle-usb-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-u",
+        "scripts/throttle_dashboard.py",
+        "--port",
+        "/dev/cu.usbmodem01",
+        "--baud",
+        "921600",
+        "--dev",
+        "/dev/ttyACM0",
+        "--http",
+        "8095"
+      ],
+      "port": 8095
+    },
+    {
+      "name": "throttle-auto-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-u",
+        "scripts/throttle_dashboard.py",
+        "--port",
+        "auto",
+        "--http",
+        "8095"
+      ],
+      "port": 8095
+    },
+    {
+      "name": "throttle-fake-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "scripts/throttle_dashboard.py",
+        "--port",
+        "udpin:127.0.0.1:14660",
+        "--http",
+        "8097",
+        "--qgc-port",
+        "0",
+        "--runs-dir",
+        "/tmp/throttle_fake_runs"
+      ],
+      "port": 8097
+    },
+    {
+      "name": "mass-tool-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "scripts/atlas_v1_mass_tool.py",
+        "--http",
+        "8099"
+      ],
+      "port": 8099
+    },
+    {
+      "name": "app-atlas-v1-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "airframe_designer",
+        "ui",
+        "--mode",
+        "sitl",
+        "--launch-px4",
+        "--px4-instance",
+        "5",
+        "--airframe",
+        "airframes/atlas_v1_m001.json",
+        "--http",
+        "127.0.0.1:8082",
+        "--no-browser"
+      ],
+      "port": 8082
+    },
+    {
+      "name": "app-cfd-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "airframe_designer",
+        "ui",
+        "--mode",
+        "sitl",
+        "--no-launch-px4",
+        "--airframe",
+        "airframes/atlas_v1_m001.json",
+        "--http",
+        "127.0.0.1:8083",
+        "--no-browser"
+      ],
+      "port": 8083
+    },
+    {
+      "name": "app-winnerC-sitl-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "airframe_designer",
+        "ui",
+        "--mode",
+        "sitl",
+        "--launch-px4",
+        "--px4-dir",
+        "/Users/stefanosfragkoulis/PX4-nl",
+        "--px4-instance",
+        "4",
+        "--tcp",
+        "0.0.0.0:4564",
+        "--airframe",
+        "airframes/atlas_v3_30_board_winnerC_sitl.json",
+        "--http",
+        "127.0.0.1:8084",
+        "--no-browser"
+      ],
+      "port": 8084
+    },
+    {
+      "name": "app-winnerC-hitl-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "airframe_designer",
+        "ui",
+        "--mode",
+        "hitl",
+        "--serial",
+        "/dev/cu.usbmodem01",
+        "--airframe",
+        "airframes/atlas_v3_30_board_winnerC_sitl.json",
+        "--http",
+        "127.0.0.1:8085",
+        "--no-browser"
+      ],
+      "port": 8085
     }
   ]
 }

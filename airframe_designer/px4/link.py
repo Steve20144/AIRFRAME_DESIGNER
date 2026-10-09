@@ -410,7 +410,7 @@ class PX4Link:
             elif t == "ATTITUDE":
                 self.board_att = {"roll": msg.roll, "pitch": msg.pitch, "yaw": msg.yaw, "t": time.time()}
             elif t == "LOCAL_POSITION_NED":
-                self.board_pos = {"z": msg.z, "vz": msg.vz, "t": time.time()}
+                self.board_pos = {"x": msg.x, "y": msg.y, "z": msg.z, "vx": msg.vx, "vy": msg.vy, "vz": msg.vz, "t": time.time()}
             elif t == "ATTITUDE_TARGET":
                 # the attitude controller's setpoint (PX4 body frame = the hover frame), for setpoint-vs-actual plots
                 w, x, y, z = (float(v) for v in msg.q)
@@ -453,7 +453,7 @@ class PX4Link:
                 if key.rstrip("\x00") == "NLIFT":         # the nose_lift PX4 module (firmware/px4_ext)
                     code = float(msg.x)
                     st = int(code + 1e-3)
-                    self.nose_lift_fw = {"state": NOSE_LIFT_STATES[st] if 0 <= st < len(NOSE_LIFT_STATES) else str(st),
+                    self.nose_lift_fw = {"state_i": st, "state": NOSE_LIFT_STATES[st] if 0 <= st < len(NOSE_LIFT_STATES) else str(st),
                                          "abort": NOSE_LIFT_ABORTS[min(int(round((code - st) * 100)), len(NOSE_LIFT_ABORTS) - 1)],
                                          "pitch_deg": float(msg.y), "cmd": float(msg.z), "t": time.time()}
             elif t == "STATUSTEXT":

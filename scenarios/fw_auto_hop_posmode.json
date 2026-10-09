@@ -1,0 +1,117 @@
+{
+  "max_time": 200,
+  "design": {
+    "nose_lift": {
+      "executor": "firmware"
+    }
+  },
+  "params": {
+    "COM_RC_IN_MODE": 0,
+    "RC_CHAN_CNT": 18,
+    "RC_MAP_ROLL": 1,
+    "RC_MAP_PITCH": 2,
+    "RC_MAP_THROTTLE": 3,
+    "RC_MAP_YAW": 4,
+    "RC3_TRIM": 1000,
+    "RC_MAP_KILL_SW": 9,
+    "RC_KILLSWITCH_TH": 0.75,
+    "COM_DISARM_LAND": -1,
+    "COM_DISARM_PRFLT": -1,
+    "NL_AUTO": 1,
+    "NL_AUTO_WAIT": 3,
+    "NL_AUTO_ALT": 1.5,
+    "NL_AUTO_HOV": 30,
+    "NL_AUTO_PILOT": 1400
+  },
+  "abort": {
+    "max_tilt_deg": 100,
+    "max_alt": 30,
+    "crash_speed": 2.0
+  },
+  "name": "fw_auto_hop_posmode",
+  "description": "NL_AUTO armed in Position mode (as the aircraft was on 6 Oct, no flight-mode channel): the module must switch PX4 to Stabilized itself before the takeoff, or refuse.",
+  "phases": [
+    {
+      "type": "rc",
+      "name": "radio_on",
+      "channels": {
+        "7": 1500,
+        "9": 1000
+      },
+      "throttle": 0.0,
+      "duration": 2
+    },
+    {
+      "type": "wait_ready",
+      "timeout": 45
+    },
+    {
+      "type": "rc",
+      "name": "arm",
+      "channels": {},
+      "mode": "position",
+      "arm": true,
+      "until": {
+        "armed": true,
+        "nl_state": "parked"
+      },
+      "timeout": 30
+    },
+    {
+      "type": "rc",
+      "name": "parked",
+      "duration": 2
+    },
+    {
+      "type": "rc",
+      "name": "lift",
+      "channels": {
+        "7": 1000
+      },
+      "throttle": 0.0,
+      "until": {
+        "nl_state": "holding"
+      },
+      "timeout": 60
+    },
+    {
+      "type": "rc",
+      "name": "wait_takeoff",
+      "throttle": 0.0,
+      "until": {
+        "nl_state": [
+          "handover",
+          "nosehold",
+          "flying"
+        ]
+      },
+      "timeout": 15
+    },
+    {
+      "type": "rc",
+      "name": "flight",
+      "throttle": 0.0,
+      "until": {
+        "nl_state": "lowering"
+      },
+      "timeout": 90
+    },
+    {
+      "type": "rc",
+      "name": "lowered",
+      "throttle": 0.0,
+      "until": {
+        "armed": false
+      },
+      "timeout": 40
+    },
+    {
+      "type": "rc",
+      "name": "guard_kill",
+      "channels": {
+        "9": 2000
+      },
+      "duration": 1
+    }
+  ]
+}

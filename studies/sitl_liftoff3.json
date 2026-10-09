@@ -1,0 +1,85 @@
+{
+ "base": {
+  "COM_DISARM_LAND": -1.0,
+  "COM_RC_OVERRIDE": 0,
+  "MC_PITCHRATE_D": 0.012,
+  "MC_PITCH_P": 4.0,
+  "MPC_ACC_HOR": 2.0,
+  "MPC_JERK_MAX": 2.0,
+  "MPC_LAND_ALT3": 0.7,
+  "MPC_LAND_CRWL": 0.15,
+  "MPC_LAND_SPEED": 0.2,
+  "MPC_XY_P": 1.5,
+  "MPC_XY_VEL_I_ACC": 1.0,
+  "MPC_XY_VEL_P_ACC": 2.4,
+  "NL_AUTO_ALT": 1.0,
+  "NL_AUTO_HCMD": 0.83,
+  "NL_AUTO_HDROP": 5.0,
+  "NL_AUTO_HFL": 0.7,
+  "NL_AUTO_HOLD": 1,
+  "NL_AUTO_HOV": 5.0,
+  "NL_AUTO_PACC": 0.3,
+  "NL_AUTO_PCLB": 2,
+  "NL_AUTO_PDSC": 1,
+  "NL_AUTO_PTKO": 0,
+  "NL_AUTO_RAMP": 4.0,
+  "NL_AUTO_RNG": 1,
+  "NL_AUTO_SLEW": 0.3,
+  "NL_AUTO_TD": 3,
+  "NL_AUTO_VFL": 0.15,
+  "NL_AUTO_VTD": 0.05,
+  "NL_AUTO_VUP": 0.3,
+  "NL_HO_FF": 0.0,
+  "NL_HO_LIFT": 1,
+  "NL_HO_LIFT_H": 0.06,
+  "NL_I_MAX": 40,
+  "NL_LOW_RRAMP": 1.0,
+  "NL_MAX_CMD": 1.0,
+  "NL_Q_FC": 50.0,
+  "NL_STUCK_S": 10.0,
+  "NL_WEIGHT": 141.2353973,
+  "NL_LOW_VMIN": 1.0
+ },
+ "candidates": {
+  "base": {},
+  "kqi024": {
+   "NL_KQI": 0.024
+  },
+  "kqi018": {
+   "NL_KQI": 0.018
+  },
+  "kang2": {
+   "NL_K_ANG": 2.0
+  },
+  "kang15": {
+   "NL_K_ANG": 1.5
+  },
+  "pitchp3": {
+   "MC_PITCH_P": 3.0
+  },
+  "kqi024_p3": {
+   "NL_KQI": 0.024,
+   "MC_PITCH_P": 3.0
+  },
+  "kang15_kqi018": {
+   "NL_K_ANG": 1.5,
+   "NL_KQI": 0.018
+  },
+  "kqi018_p3": {
+   "NL_KQI": 0.018,
+   "MC_PITCH_P": 3.0
+  }
+ },
+ "thrusts": [
+  36,
+  30,
+  28
+ ],
+ "seeds": [
+  0,
+  1,
+  2
+ ],
+ "scenario": "scenarios/fw_auto_hop_winner.json",
+ "hover_s": 5
+}

@@ -67,6 +67,19 @@ void NoseLift::update_attitude(hrt_abstime now)
 		_q_settled += (_q - _q_settled) * (dt / (dt + 1.f / (2.f * M_PI_F * 1.f)));
 	}
 
+	// the loops' damping term: the same rocking (+-20 deg/s at 10 to 15 Hz) chopped the nose command between 0.5 and
+	// 1.0 at that frequency (7 Oct 16:06, the nose stuck, the fans averaging 0.85), so the rate the loops damp on is
+	// low-passed at NL_Q_FC (default 2 Hz: 10 Hz rocking cut 5 times, a 3 deg/s rotation seen with 80 ms of lag)
+	if (_q_f_t == 0) {
+		_q_f = _q;
+
+	} else if (_angvel.timestamp_sample != _q_f_t) {
+		const float dt = math::constrain((_angvel.timestamp_sample - _q_f_t) * 1e-6f, 0.f, 0.05f);
+		const float fc = math::max(_param_nl_q_fc.get(), 0.1f);
+		_q_f += (_q - _q_f) * (dt / (dt + 1.f / (2.f * M_PI_F * fc)));
+	}
+
+	_q_f_t = _angvel.timestamp_sample;
 	_q_settled_t = _angvel.timestamp_sample;
 }
 
@@ -121,7 +134,26 @@ void NoseLift::update_baro()
 
 	const float dt = _baro_t > 0 ? math::constrain((_air.timestamp_sample - _baro_t) * 1e-6f, 0.f, 0.5f) : 0.f;
 	_baro_t = _air.timestamp_sample;
+	const float prev = _baro_f;
 	_baro_f = PX4_ISFINITE(_baro_f) ? _baro_f + dt / (0.5f + dt) * (_air.baro_alt_meter - _baro_f) : _air.baro_alt_meter;
+
+	// its rate, low-passed the same way: the automatic flight damps its height loop on it (the estimator's vz drifts
+	// by tenths of a m/s on the ground under fan vibration, the baro does not)
+	if (PX4_ISFINITE(prev) && dt > 1e-4f) {
+		_baro_vz += dt / (0.3f + dt) * ((_baro_f - prev) / dt - _baro_vz);
+	}
+}
+
+int NoseLift::pilot_throttle_us() const
+{
+	// the pilot's throttle stick, raw, straight from the receiver: manual_control_setpoint carries the override
+	const int ch = _param_rc_map_throttle.get();
+
+	if (ch < 1 || ch > _rc.channel_count || _rc.timestamp_last_signal == 0 || _rc.rc_lost) {
+		return 0;
+	}
+
+	return _rc.values[ch - 1];
 }
 
 bool NoseLift::lifted_off(hrt_abstime now)
@@ -266,6 +298,9 @@ void NoseLift::try_start(hrt_abstime now)
 	_pitch0 = _pitch;
 	_target = _param_nl_tgt.get();
 	_integral = 0.f;
+	_sat_since = 0;
+	_sat_pitch = _pitch;
+	_cmd_avg = 0.f;
 	_cmd = 0.f;
 	_ceiling = false;
 	_hold_since = 0;
@@ -355,8 +390,49 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 			const float ease = math::min(1.f, el / 1.5f);
 			const bool down = over_ceiling(now);
 			const float q_des = down ? -rate : math::constrain(k_ang * (_target - _pitch), -rate, rate * ease);
-			const float eq = q_des - _q;
-			_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
+			const float eq = q_des - _q_f;
+
+			// 7 Oct: the nose sat still for 4 to 8 s with the fans at full command (something held it), the
+			// integral filled to its cap (40 deg = 0.48 of thrust) and, once the nose broke free, drove it
+			// through the target at 12 deg/s instead of 3; the fans cannot pull the nose back down, so it ran
+			// to 24-27 deg and the aircraft sat on its tail. Three guards:
+			//  1. no integration while the command is at its limit and still asking for more (anti-windup);
+			//  2. the integral may not exceed NL_I_MAX (default 10 deg = 0.12 of thrust);
+			//  3. once the nose runs faster than the wanted rate by a full NL_RATE, whatever the integral
+			//     stored is wrong: drop it to zero at once (the rate and feed-forward terms then brake).
+			// And a stuck nose aborts (NL_STUCK_S): full command for that long with less than 1 deg of motion
+			// starts the controlled lowering instead of waiting for the breakaway.
+			const bool saturated = _cmd >= _param_nl_max_cmd.get() - 0.01f;
+			const float i_max = math::max(_param_nl_i_max.get(), 0.f);
+			// the stuck test looks at the command averaged over 0.5 s (the instantaneous one never sat at the limit
+			// through the 7 Oct rocking, so the 10 s test never fired): stuck = the average above 0.9 of the limit
+			_cmd_avg += (_cmd - _cmd_avg) * math::min(1.f, dt / 0.5f);
+			const bool saturated_avg = _cmd_avg >= 0.9f * _param_nl_max_cmd.get();
+
+			if (saturated_avg) {
+				if (_sat_since == 0) {
+					_sat_since = now;
+					_sat_pitch = _pitch;
+
+				} else if (_param_nl_stuck_s.get() > 0.f && (now - _sat_since) * 1e-6f > _param_nl_stuck_s.get()
+					   && _pitch - _sat_pitch < 1.f) {
+					abort(Abort::Stuck, true, now);
+					return;
+				}
+
+			} else {
+				_sat_since = 0;
+			}
+
+			// the overspeed test reads the 1 Hz rate: on the legs the raw rate rocks +-20 deg/s at 10 to 15 Hz and
+			// tripped this test all the time, which kept emptying the integral (7 Oct evening: no authority left)
+			if (_q_settled > q_des + rate) {
+				_integral = math::min(_integral, 0.f);
+
+			} else if (!(saturated && eq > 0.f)) {
+				_integral = math::constrain(_integral + eq * dt, -i_max, i_max);
+			}
+
 			_cmd = down ? thrust_to_cmd(ff + _param_nl_low_kq.get() * eq + _param_nl_low_kqi.get() * _integral)
 			       : thrust_to_cmd(ease * ff + _param_nl_kq.get() * eq + _param_nl_kqi.get() * _integral);
 
@@ -364,9 +440,32 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 				if (_hold_since == 0) { _hold_since = now; }
 
 				if ((now - _hold_since) * 1e-6f >= _param_nl_hold_s.get()) {
+					_hold_cmd_avg = _cmd;
 					set_state(State::Holding, now);
-					mavlink_log_info(&_mavlink_log_pub, "Nose lift: holding at %.1f deg, raise the throttle to take off\t",
-							 (double)_pitch);
+
+					if (_param_nl_auto.get() && _param_nl_fly_hold.get()) {
+						// the nose fans' own flight loop multiplies every throttle change (NL_F_FF): the height
+						// loop oscillated 0.2-0.76 of throttle in SITL. Not tuned for it: the pilot flies.
+						mavlink_log_critical(&_mavlink_log_pub, "Nose lift: NL_AUTO needs NL_FLY_HOLD 0, the pilot flies the throttle\t");
+					}
+
+					if (_param_nl_auto.get() && !_param_nl_fly_hold.get()) {
+						_auto = AutoPhase::Wait;
+						_auto_since = now;
+
+						if (ptko()) {
+							request_px4_mode(3.f, 0.f, "Position (takeoff)", now);
+
+						} else {
+							request_stabilized(now);
+						}
+						mavlink_log_info(&_mavlink_log_pub, "Nose lift: holding at %.1f deg, automatic takeoff in %.0f s\t",
+								 (double)_pitch, (double)_param_nl_auto_wait.get());
+
+					} else {
+						mavlink_log_info(&_mavlink_log_pub, "Nose lift: holding at %.1f deg, raise the throttle to take off\t",
+								 (double)_pitch);
+					}
 				}
 
 			} else {
@@ -381,18 +480,51 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 
 			const bool down = over_ceiling(now);
 			const float q_des = down ? -rate : math::constrain(k_ang * (_target - _pitch), -rate, rate);
-			const float eq = q_des - _q;
+			const float eq = q_des - _q_f;
 			_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
 			_cmd = down ? thrust_to_cmd(ff + _param_nl_low_kq.get() * eq + _param_nl_low_kqi.get() * _integral)
 			       : thrust_to_cmd(ff + _param_nl_kq.get() * eq + _param_nl_kqi.get() * _integral);
 
-			if (throttle() > _param_nl_ho_thr.get()) {
+			// the nose command averaged over about 1 s while holding: what the nose fans need to keep the nose up
+			_hold_cmd_avg += (_cmd - _hold_cmd_avg) * math::min(1.f, dt / 1.f);
+
+			bool auto_go = _auto == AutoPhase::Wait && (now - _auto_since) * 1e-6f >= _param_nl_auto_wait.get();
+
+			if (auto_go && _param_nl_auto_hcmd.get() > 0.f && _hold_cmd_avg > _param_nl_auto_hcmd.get()) {
+				// 7 Oct SITL sweep: the takeoff passes while the nose holds at a command up to ~0.67 (nose fans worth
+				// 28 N and more) and crashes from 0.75 (25 N: the nose fans saturate in the handover, the nose drops,
+				// the aircraft slides forward); a sagging pack moved the aircraft across that line within one session
+				mavlink_log_critical(&_mavlink_log_pub, "Nose lift: NL_AUTO refused, nose fans at %.0f%% to hold (limit %.0f%%): too weak, lowering\t",
+						     (double)(100.f * _hold_cmd_avg), (double)(100.f * _param_nl_auto_hcmd.get()));
+				abort(Abort::Weak, true, now);
+				return;
+			}
+
+			if (auto_go && (ptko() ? !in_px4_hold() : !in_stabilized())) {
+				// 6 Oct: armed in Position mode (no flight-mode channel), the throttle override became a climb-rate
+				// command and the position controller flew the attitude: 1 m/s climbs, 12 deg nose-up. Never again in
+				// the thrust-stick flight; NL_AUTO_PTKO takes off in Position on purpose, with a climb-rate stick
+				auto_go = false;
+
+				if ((now - _auto_since) * 1e-6f >= _param_nl_auto_wait.get() + 2.f) {
+					_auto = AutoPhase::Off;
+					mavlink_log_critical(&_mavlink_log_pub, "Nose lift: NL_AUTO refused, not in %s (mode %d); the pilot flies\t",
+							     ptko() ? "Position" : "Stabilized", (int)_status.nav_state);
+				}
+			}
+
+			if (auto_go) {
+				start_auto_flight(now);
+			}
+
+			if (auto_go || throttle() > _param_nl_ho_thr.get()) {
 				if (_param_nl_fly_hold.get()) {
 					start_nose_hold(now);
 
 				} else {
 					set_state(State::Handover, now);
 					_fading = false;
+					_ho_off_legs = false;
 					mavlink_log_info(&_mavlink_log_pub, "Nose lift: handing over to PX4\t");
 				}
 			}
@@ -403,10 +535,16 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 	case State::Handover: {
 			// keep holding the nose until PX4 itself drives the lifting motors at least as hard as the hold (leaving
 			// the ground is not enough: the spool-up would otherwise drop the nose), or the timeout; then fade out
-			const float q_des = math::constrain(k_ang * (_target - _pitch), -rate, rate);
-			const float eq = q_des - _q;
+			// NL_HO_KANG: a stiffer angle hold here than the raise's NL_K_ANG (9 Oct SITL 32 N: with 1.0 the nose sagged
+			// 8.6 -> 7.7 deg over the throttle ramp; the aircraft then slid forward and PX4 braked at 5-7 deg/s)
+			const float k_ho = _param_nl_ho_kang.get() > 0.f ? _param_nl_ho_kang.get() : k_ang;
+			const float q_des = math::constrain(k_ho * (_target - _pitch), -rate, rate);
+			const float eq = q_des - _q_f;
 			_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
-			const float hold = thrust_to_cmd(ff + _param_nl_kq.get() * eq + _param_nl_kqi.get() * _integral);
+			// NL_HO_FF: the rear fans' thrust rising on the legs takes the nose down (8 Oct SITL 36 N: 8.5 -> 7.1 deg
+			// over the ramp, then PX4 snapped it back at the lift-off); feed it forward to the nose fans
+			const float hold = thrust_to_cmd(ff + _param_nl_ho_ff.get() * rear_thrust() + _param_nl_kq.get() * eq
+							 + _param_nl_kqi.get() * _integral);
 
 			float px4_share = 0.f;
 
@@ -424,7 +562,15 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 			const float ref = math::max(hold, thrust_to_cmd(ff));
 			const bool taken_over = px4_share >= 0.95f * ref;
 
-			if (!_fading && (taken_over || (now - _state_since) * 1e-6f > _param_nl_ho_tout.get() || !_rc_ok)) {
+			// NL_HO_LIFT: in an automatic flight the floor is kept until the aircraft is off its legs (the range finder
+			// NL_HO_LIFT_H above its takeoff reading; the legs' springs alone extend ~3 cm as the rear fans unload them). 8 Oct SITL 36 N: PX4 held the pitch poorly on the legs, the nose sagged 2.2 deg
+			// during the fade and PX4 snapped it back at 8.9 deg/s at the lift-off
+			const bool off_legs = !(_param_nl_ho_lift.get() && auto_flying() && range_ok() && PX4_ISFINITE(_auto_rng0))
+					      || _dist.current_distance - _auto_rng0 > _param_nl_ho_lift_h.get();
+
+			_ho_off_legs = off_legs;
+
+			if (!_fading && ((taken_over && off_legs) || (now - _state_since) * 1e-6f > _param_nl_ho_tout.get() || !_rc_ok)) {
 				_fading = true;
 				_fade_start = now;
 				_fade_from = ref;
@@ -477,7 +623,7 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 
 			const float f_rate = _param_nl_f_rate.get();
 			const float q_des = math::constrain(_param_nl_f_k_ang.get() * (_target - _pitch), -f_rate, f_rate);
-			const float eq = q_des - _q;
+			const float eq = q_des - _q_f;
 			const float f = _param_nl_f_ff.get() * rear + _param_nl_f_kq.get() * eq
 					+ _param_nl_f_kqi.get() * _integral;
 
@@ -501,14 +647,31 @@ void NoseLift::step_sequence(hrt_abstime now, float dt, bool kill)
 				const float ceil = _param_nl_ceil.get();
 				const bool high = ceil > 0.f && _pitch > _param_nl_tgt.get() + ceil;
 				const float ease = high ? 1.f : math::min(1.f, (now - _state_since) * 1e-6f / 1.f);
-				const float q_des = math::constrain(k_ang * (_target - _pitch), -rate * ease, rate);
-				const float eq = q_des - _q;
+				// 9 Oct HITL: the target is the pitch PX4 estimated before the lift; a few seconds after a reboot that
+				// estimate is 1 to 2 deg off, the nose stopped 1.4 deg above its front leg, the fade cut the fans and
+				// the nose fell onto the leg at 12 deg/s. With NL_LOW_VMIN the nose keeps coming down at least that
+				// fast until the leg stops it, and the fade starts on that contact, not on an estimated angle
+				const float vmin = math::max(_param_nl_low_vmin.get(), 0.f);
+				float q_des = math::constrain(k_ang * (_target - _pitch), -rate * ease, rate);
+
+				if (vmin > 0.f && !high) {
+					q_des = math::min(q_des, -vmin * ease);
+				}
+
+				const float eq = q_des - _q_f;
 				_integral = math::constrain(_integral + eq * dt, -40.f, 40.f);
 				_cmd = thrust_to_cmd(ff + _param_nl_low_kq.get() * eq + _param_nl_low_kqi.get() * _integral);
 
 				// fade only once the nose sits on its front leg again: fading from further up drops the last degrees
-				// (one-sided: legs that compress a little more than before may leave it slightly below where it started)
-				if (_pitch - _target < math::min(tol, 0.5f) && fabsf(_q_settled) < 1.f) {
+				// (one-sided: legs that compress a little more than before may leave it slightly below where it started).
+				// With NL_LOW_VMIN: on the leg = still asked down but standing still near the start pitch, or well
+				// below it (no leg found)
+				const bool at_target = vmin > 0.f
+						       ? ((_pitch - _target < tol && fabsf(_q_settled) < 0.3f * vmin && ease >= 1.f)
+							  || _pitch < _target - 3.f)
+						       : (_pitch - _target < math::min(tol, 0.5f) && fabsf(_q_settled) < 1.f);
+
+				if (at_target) {
 					if (_hold_since == 0) { _hold_since = now; }
 
 					if ((now - _hold_since) * 1e-6f >= _param_nl_hold_s.get()) {
@@ -596,9 +759,683 @@ void NoseLift::lower_from_nose_hold(hrt_abstime now)
 	mavlink_log_info(&_mavlink_log_pub, "Nose lift: landed, lowering the nose to %.1f deg\t", (double)_target);
 }
 
+// ------------------------------------------------------------------------------------------------- automatic flight
+
+bool NoseLift::in_stabilized() const
+{
+	return _status.nav_state == vehicle_status_s::NAVIGATION_STATE_STAB;
+}
+
+void NoseLift::touchdown_lower(hrt_abstime now, const char *why)
+{
+	request_stabilized(now);
+	mavlink_log_info(&_mavlink_log_pub, "Nose lift: touchdown under %s (%s), lowering\t", why,
+			 _land.landed ? "landed" : (_land.maybe_landed ? "maybe landed" : (_land.ground_contact ? "ground contact" : "still")));
+	_auto_thr = 0.f;
+	end_auto(now);
+
+	if (_state == State::Flying || _state == State::NoseHold) {
+		if (_state == State::NoseHold) { lower_from_nose_hold(now); } else { lower_from_flight(now); }
+
+	} else {
+		abort(Abort::SwitchOff, true, now);
+	}
+}
+
+bool NoseLift::range_ok() const
+{
+	return _dist.timestamp > 0 && hrt_elapsed_time(&_dist.timestamp) < 200_ms && _dist.signal_quality != 0
+	       && PX4_ISFINITE(_dist.current_distance) && _dist.current_distance > _dist.min_distance
+	       && _dist.current_distance < _dist.max_distance;
+}
+
+float NoseLift::ekf_height(float h_baro) const
+{
+	// height above the takeoff point. 8 Oct SITL: the estimator's height crept up 0.3 to 0.4 m during the flight
+	// (fan vibration), so the "1 m" hover sat at 0.64 m and on the ground it still read 0.4 m: the touchdown cue never
+	// fired. First choice: the range finder against its reading at the takeoff (same attitude, on the legs at the
+	// hover pitch); then the estimator against its height at the takeoff; then the baro
+	if (range_ok() && PX4_ISFINITE(_auto_rng0) && _param_nl_auto_rng.get()) {
+		return _dist.current_distance - _auto_rng0;
+	}
+
+	if (_lpos.z_valid && PX4_ISFINITE(_auto_z0) && hrt_elapsed_time(&_lpos.timestamp) < 200_ms) {
+		return _auto_z0 - _lpos.z;
+	}
+
+	return h_baro;
+}
+
+float NoseLift::ekf_climb_rate() const
+{
+	return _lpos.v_z_valid && hrt_elapsed_time(&_lpos.timestamp) < 200_ms ? -_lpos.vz : _baro_vz;
+}
+
+float NoseLift::stick_for_climb(float v_up) const
+{
+	// the throttle stick that makes PX4's Position mode climb at v_up (m/s, negative = descend): the inverse of
+	// FlightTaskManualAltitude::_scaleSticks, v = MPC_Z_VEL_MAX_UP/DN * expo_deadzone(2 s - 1, 0.6, MAN_DEADZONE)
+	if (fabsf(v_up) < 1e-3f) {
+		return 0.5f;
+	}
+
+	const float vmax = v_up > 0.f ? _param_mpc_z_vel_max_up.get() : _param_mpc_z_vel_max_dn.get();
+	const float frac = math::constrain(fabsf(v_up) / math::max(vmax, 0.1f), 0.f, 1.f);
+	const float e = 0.6f;
+	float lo = 0.f, hi = 1.f;
+
+	for (int i = 0; i < 24; i++) {
+		const float x = 0.5f * (lo + hi);
+
+		if ((1.f - e) * x + e * x * x * x < frac) { lo = x; } else { hi = x; }
+	}
+
+	const float dz = math::constrain(_param_man_deadzone.get(), 0.f, 0.9f);
+	const float z = dz + (1.f - dz) * 0.5f * (lo + hi);
+	return math::constrain(0.5f + (v_up > 0.f ? 0.5f : -0.5f) * z, 0.f, 1.f);
+}
+
+void NoseLift::update_touchdown(float h, hrt_abstime now)
+{
+	// the module's own touchdown cue (NL_AUTO_TD 3): near the ground and no longer descending. SITL 8 Oct: the
+	// vertical speed reaches zero 0.3 s after the rear feet touch, PX4's ground-contact stage only 2.5 to 3.5 s later
+	const float vz = _lpos.v_z_valid && hrt_elapsed_time(&_lpos.timestamp) < 200_ms ? -_lpos.vz : _baro_vz;
+	_td_vz = vz;
+
+	// stillness below half the creep speed: a creep slower than 0.12 m/s must not read as "still" (8 Oct SITL: a 0.06
+	// m/s creep fired the cue 10 cm up and dropped the aircraft)
+	const float still = math::min(0.06f, 0.5f * math::max(_param_nl_auto_vtd.get(), 0.02f));
+
+	if (h < 0.6f && fabsf(vz) < still) {
+		if (_td_still_since == 0) { _td_still_since = now; }
+
+	} else {
+		_td_still_since = 0;
+	}
+}
+
+bool NoseLift::touched_down(float h, float h_max) const
+{
+	// 8 Oct SITL: PX4 declares "landed" ~5 s after the rear feet touch; meanwhile it winds the thrust down on two feet
+	// and the nose falls forward uncontrolled at ~3 deg/s (8.5 -> -6 deg). NL_AUTO_TD picks the land detector stage
+	// at which the module takes the motors and lowers the nose itself: 0 landed, 1 maybe landed, 2 ground contact.
+	// Only near the ground (h above the takeoff point), so an early stage cannot fire in the air.
+	const int stage = _param_nl_auto_td.get();
+	const bool flag = _land.landed || (stage >= 1 && _land.maybe_landed) || (stage >= 2 && _land.ground_contact);
+	// stage 3: still for 0.25 s near the ground, or the nose already tipping forward while hardly descending
+	const bool own = stage >= 3 && h < h_max
+			 && ((_td_still_since != 0 && hrt_elapsed_time(&_td_still_since) > 150_ms)
+			     || (_pitch < _target - 2.f && fabsf(_td_vz) < 0.15f));
+	return own || (flag && (_land.landed || h < h_max));
+}
+
+bool NoseLift::ptko() const
+{
+	return _param_nl_auto_ptko.get() && _param_nl_auto_hold.get() && _param_nl_auto_pclb.get();
+}
+
+bool NoseLift::in_px4_hold() const
+{
+	return _status.nav_state == vehicle_status_s::NAVIGATION_STATE_POSCTL
+	       || _status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
+}
+
+bool NoseLift::in_px4_land() const
+{
+	return _status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LAND;
+}
+
+bool NoseLift::px4_position_ok() const
+{
+	return _lpos.xy_valid && _lpos.v_xy_valid && _lpos.z_valid && hrt_elapsed_time(&_lpos.timestamp) < 500_ms;
+}
+
+void NoseLift::request_px4_mode(float main_mode, float sub_mode, const char *name, hrt_abstime now)
+{
+	vehicle_command_s cmd{};
+	cmd.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
+	cmd.param1 = 1.f;	// MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+	cmd.param2 = main_mode;
+	cmd.param3 = sub_mode;
+	cmd.target_system = _status.system_id;
+	cmd.target_component = _status.component_id;
+	cmd.source_system = _status.system_id;
+	cmd.source_component = _status.component_id;
+	cmd.from_external = false;
+	cmd.timestamp = now;
+	_command_pub.publish(cmd);
+	mavlink_log_info(&_mavlink_log_pub, "Nose lift: asking PX4 for %s\t", name);
+}
+
+void NoseLift::request_stabilized(hrt_abstime now)
+{
+	// the automatic flight is a throttle hand in Stabilized: ask PX4 for that mode (PX4_CUSTOM_MAIN_MODE_STABILIZED
+	// = 7); the takeoff waits for the mode to show in vehicle_status and is refused if it never does
+	if (in_stabilized()) {
+		return;
+	}
+
+	vehicle_command_s cmd{};
+	cmd.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
+	cmd.param1 = 1.f;	// MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+	cmd.param2 = 7.f;	// PX4_CUSTOM_MAIN_MODE_STABILIZED
+	cmd.param3 = 0.f;
+	cmd.target_system = _status.system_id;
+	cmd.target_component = _status.component_id;
+	cmd.source_system = _status.system_id;
+	cmd.source_component = _status.component_id;
+	cmd.from_external = false;
+	cmd.timestamp = now;
+	_command_pub.publish(cmd);
+	mavlink_log_info(&_mavlink_log_pub, "Nose lift: switching to Stabilized for the automatic flight\t");
+}
+
+void NoseLift::start_auto_flight(hrt_abstime now)
+{
+	_auto = AutoPhase::Climb;
+	_auto_since = now;
+	_auto_h0 = _baro_f;
+	_auto_z0 = _lpos.z_valid ? _lpos.z : NAN;
+	_auto_rng0 = range_ok() ? _dist.current_distance : NAN;
+	_pclimb = false;
+	_pdesc = false;
+	_pclimb_v = 0.f;
+	_auto_h_t = 0.f;
+	_auto_vz_t = 0.f;
+	_auto_int = 0.f;
+	_auto_thr = 0.f;
+	_auto_still_since = 0;
+	_hold_refused_told = false;
+	_hold_refused = false;
+	_auto_hover_t0 = now;
+
+	if (ptko()) {
+		// NL_AUTO_PTKO: PX4 Position takes off from the legs (its own takeoff ramp, the position held from the
+		// start); the module asks for the climb with the stick, eased in from 0 at NL_AUTO_PACC
+		_pclimb = true;
+		_auto = AutoPhase::HoldPX4;
+	}
+
+	mavlink_log_info(&_mavlink_log_pub, "Nose lift: automatic takeoff to %.1f m, hover %.0f s, then landing\t",
+			 (double)_param_nl_auto_alt.get(), (double)_param_nl_auto_hov.get());
+}
+
+void NoseLift::auto_land_now(const char *why, hrt_abstime now)
+{
+	_auto = AutoPhase::Descend;
+	_auto_since = now;
+	_auto_still_since = 0;
+	mavlink_log_info(&_mavlink_log_pub, "Nose lift: landing (%s) from %.1f m\t", why,
+			 (double)(PX4_ISFINITE(_baro_f) && PX4_ISFINITE(_auto_h0) ? _baro_f - _auto_h0 : 0.f));
+}
+
+void NoseLift::end_auto(hrt_abstime now)
+{
+	_auto = AutoPhase::Done;
+	_auto_since = now;
+	_auto_thr = NAN;
+}
+
+void NoseLift::lower_from_flight(hrt_abstime now)
+{
+	// landed after a handover flight (NL_FLY_HOLD 0): take every motor back, the rear fans stop, the nose fans
+	// lower the nose from the balance thrust (the cancel's lowering, as nose_lift.py NoseLower cuts the others)
+	// 8 Oct SITL: taking the motors from zero (rear fans off at once, nose fans from _cmd 0 through the lowering
+	// loop) jolted the aircraft at +-14 deg/s right after the touchdown. Bumpless: the nose fans start from PX4's
+	// last command (the integral is set so the loop gives it), the rear fans keep their thrust and fade out over
+	// NL_LOW_RRAMP
+	_integral = 0.f;
+	_cmd = 0.f;
+	_rear_ramp = false;
+
+	// PX4's own motor outputs (actuator_motors, always published; 8 Oct SITL: nose_lift_feedback only comes while
+	// the module overrides, so it was stale here and the lowering started every motor from zero)
+	const bool act_fresh = _act.timestamp > 0 && hrt_elapsed_time(&_act.timestamp) < 100_ms;
+	const bool fb_fresh = hrt_elapsed_time(&_feedback.timestamp) < 100_ms;
+
+	if (act_fresh || fb_fresh) {
+		float sum = 0.f;
+
+		for (int k = 0; k < _lift_count; k++) {
+			const float cf = act_fresh ? _act.control[_lift_motor[k]] : _feedback.allocator_control[_lift_motor[k]];
+			sum += PX4_ISFINITE(cf) ? motor_command(math::max(cf, 0.f)) : 0.f;
+		}
+
+		_cmd = _lift_count > 0 ? sum / _lift_count : 0.f;
+		const float f_prev = powf(math::max(_cmd, 0.f), math::max(_param_nl_expo.get(), 1e-3f));
+		const float rest = f_prev - balance_fraction() + _param_nl_low_kq.get() * _q_f;	// eq = 0 - q at the start
+		_integral = math::constrain(rest / math::max(_param_nl_low_kqi.get(), 1e-6f), -40.f, 40.f);
+
+		const int n = math::constrain(static_cast<int>(_param_ca_rotor_count.get()), 1, NUM_MOTORS);
+		const int mask = _param_nl_mot_msk.get();
+
+		for (int i = 0; i < n; i++) {
+			const float cf = act_fresh ? _act.control[i] : _feedback.allocator_control[i];
+			_rear_from[i] = (!(mask & (1 << i)) && PX4_ISFINITE(cf)) ? math::max(cf, 0.f) : 0.f;
+		}
+
+		_rear_ramp = _param_nl_low_rramp.get() > 0.f;
+		_rear_t0 = now;
+	}
+
+	_target = _pitch0;
+	_fading = false;
+	_hold_since = 0;
+	_z0 = _lpos.z_valid ? _lpos.z : NAN;
+	_z_reset_counter = _lpos.z_reset_counter;
+	_baro0 = _baro_f;
+	_abort_reason = Abort::None;
+	set_state(State::Lowering, now);
+	mavlink_log_info(&_mavlink_log_pub, "Nose lift: landed, lowering the nose to %.1f deg\t", (double)_target);
+}
+
+void NoseLift::step_auto(hrt_abstime now, float dt, bool kill)
+{
+	if (!auto_flying()) {
+		return;
+	}
+
+	if (kill) {
+		// PX4's kill has stopped every motor already; nothing resumes
+		end_auto(now);
+
+		if (_state == State::Flying) {
+			abort(Abort::Kill, false, now);
+		}
+
+		return;
+	}
+
+	if (_state != State::Handover && _state != State::Flying && _state != State::NoseHold) {
+		// the sequence left the flight (an abort, a lowering): the automatic throttle has nothing to fly
+		end_auto(now);
+		return;
+	}
+
+	const int pilot = _param_nl_auto_pilot.get();
+
+	const bool under_px4 = _auto == AutoPhase::HoldWait || _auto == AutoPhase::HoldPX4 || _auto == AutoPhase::LandPX4;
+
+	if (pilot > 0 && pilot_throttle_us() > pilot) {
+		mavlink_log_critical(&_mavlink_log_pub, "Nose lift: throttle stick raised, the pilot flies the throttle\t");
+
+		if (under_px4) {
+			// no flight-mode switch on the transmitter: give the pilot a manual mode to fly in
+			request_stabilized(now);
+		}
+
+		end_auto(now);
+		return;
+	}
+
+	if (_sb_fell && (_auto == AutoPhase::Climb || _auto == AutoPhase::Hover)) {
+		auto_land_now("switch off", now);
+	}
+
+	if (_sb_fell && _auto == AutoPhase::HoldPX4 && _param_nl_auto_pdsc.get() && in_px4_hold()) {
+		// switch off under Position: the module's own gentle descent from here (NL_AUTO_VTD touchdown), as at the
+		// end of the hover (PX4 Land put the feet down at 0.2 m/s)
+		_pclimb = false;
+
+		if (!_pdesc) {
+			_pdesc = true;
+			_pdesc_t0 = now;
+			_pclimb_v = math::min(_pclimb_v, 0.f);
+			_td_still_since = 0;
+			mavlink_log_info(&_mavlink_log_pub, "Nose lift: switch off, descending in PX4 Position\t");
+		}
+
+	} else if (_sb_fell && (_auto == AutoPhase::HoldWait || _auto == AutoPhase::HoldPX4)) {
+		request_px4_mode(4.f, 6.f, "Land (switch off)", now);	// PX4_CUSTOM_MAIN_MODE_AUTO, SUB_MODE_AUTO_LAND
+		_auto = AutoPhase::LandPX4;
+		_auto_since = now;
+	}
+
+	const float el = (now - _auto_since) * 1e-6f;
+	const float h = PX4_ISFINITE(_baro_f) && PX4_ISFINITE(_auto_h0) ? _baro_f - _auto_h0 : 0.f;
+	const float alt = _param_nl_auto_alt.get();
+	const float vup = _param_nl_auto_vup.get();
+	const float vdn = _param_nl_auto_vdn.get();
+	// the feed-forward is a STICK position: with MPC_THR_CURVE 0 or 2 PX4 rescales the stick so that mid stick is
+	// the hover thrust (6 Oct: MPC_THR_HOVER sent as a stick read 14 % above hover); only curve 1 maps the stick
+	// straight to thrust
+	const float ff = _param_nl_auto_thr.get() > 0.f ? _param_nl_auto_thr.get()
+			 : (_param_mpc_thr_curve.get() == 1 ? _param_mpc_thr_hover.get() : 0.5f);
+
+	if ((_auto == AutoPhase::Climb || (_auto == AutoPhase::HoldPX4 && _pclimb && ptko())) && _param_nl_auto_hdrop.get() > 0.f
+	    && el < 3.f && ekf_height(h) < 0.3f
+	    && _pitch < _target - _param_nl_auto_hdrop.get()) {
+		// 7 Oct 15:38: in the handover the nose fans went to full while the rear fans were still spooling, the nose
+		// fell from 8.8 to -26 deg with the aircraft still on its legs. Still near the ground and early in the
+		// takeoff: cut the automatic throttle (0.5 s) and lower the nose rather than carry on
+		mavlink_log_critical(&_mavlink_log_pub, "Nose lift: takeoff cancelled, nose %.1f deg under the target in the handover\t",
+				     (double)(_target - _pitch));
+		_auto = AutoPhase::Cut;
+		_auto_since = now;
+		_auto_cut_from = PX4_ISFINITE(_auto_thr) ? _auto_thr : 0.f;
+		return;
+	}
+
+	switch (_auto) {
+	case AutoPhase::Climb: {
+			const float ramp = math::max(_param_nl_auto_ramp.get(), 0.1f);
+
+			// NL_AUTO_PCLB 1: at the lift-off; 2: as soon as the throttle ramp has the hover thrust, still on the legs
+			// (8 Oct SITL: Position from the lift-off still braked a forward slide that began on the legs)
+			const bool at_liftoff = !_land.landed && ekf_height(h) > 0.06f && ekf_climb_rate() > 0.1f;
+			const bool at_ramp_end = _param_nl_auto_pclb.get() >= 2 && el >= ramp;
+
+			if (_param_nl_auto_hold.get() && _param_nl_auto_pclb.get() && !_hold_refused && px4_position_ok()
+			    && (at_liftoff || at_ramp_end)) {
+				// 8 Oct SITL: climbing in Stabilized nobody holds the position: up to 1 m/s forward and 3.7 m of
+				// drift before PX4 Position took over at the hover, and its braking was the flight's worst jolt
+				// (20 to 38 deg/s). NL_AUTO_PCLB: PX4 Position takes over as soon as the aircraft is off its legs
+				// and the module climbs it with a climb-rate stick
+				_pclimb = true;
+				_pclimb_v = math::constrain(ekf_climb_rate(), 0.f, vup);
+				_auto_since = now;	// the climb timeout and the handover guard count from here
+				request_px4_mode(3.f, 0.f, "Position (climb)", now);	// PX4_CUSTOM_MAIN_MODE_POSCTL
+				_auto = AutoPhase::HoldWait;
+				_auto_since = now;
+				_auto_thr = stick_for_climb(_pclimb_v);
+				return;
+			}
+
+			if (el < ramp) {
+				// the throttle ramps to the hover feed-forward with the height target at the ground: no loop yet
+				_auto_thr = ff * el / ramp;
+				_auto_h_t = 0.f;
+				_auto_vz_t = 0.f;
+				return;
+			}
+
+			// the target climbs at NL_AUTO_VUP but never runs more than 0.5 m ahead of the aircraft: while it still
+			// sits on its legs the loop would otherwise wind up and leap off (SITL: 2.5 m and a 3 m/s fall)
+			_auto_h_t = math::min(math::min(_auto_h_t + vup * dt, alt), h + 0.5f);
+			_auto_vz_t = _auto_h_t < alt ? vup : 0.f;
+
+			if (_auto_h_t >= alt && h > alt - 0.3f) {
+				_auto = AutoPhase::Hover;
+				_auto_since = now;
+				_auto_hover_t0 = now;
+				mavlink_log_info(&_mavlink_log_pub, "Nose lift: hovering at %.1f m for %.0f s\t", (double)h,
+						 (double)_param_nl_auto_hov.get());
+
+			} else if (el > ramp + alt / math::max(vup, 0.05f) + 15.f) {
+				_auto = AutoPhase::Hover;
+				_auto_since = now;
+				_auto_hover_t0 = now;
+				mavlink_log_critical(&_mavlink_log_pub, "Nose lift: climb timed out at %.1f m, hovering here\t", (double)h);
+			}
+
+			break;
+		}
+
+	case AutoPhase::Hover: {
+		_auto_vz_t = 0.f;
+		const float hov_el = (now - _auto_hover_t0) * 1e-6f;
+
+		if (_param_nl_auto_hold.get() && !_hold_refused && el >= 1.f && px4_position_ok()) {
+			// the module's loop has the aircraft at the height and settled: PX4 Position mode holds the position (on
+			// the H-FLOW) and, with the module's stick at mid, the height (NL_AUTO_HOLD). 8 Oct SITL: Auto Loiter is
+			// refused without a global position, and the old code asked again every 3 s with the hover clock
+			// restarted, so it hovered for ever. One request; a refusal falls back to this hover for the rest of it
+			request_px4_mode(3.f, 0.f, "Position", now);	// PX4_CUSTOM_MAIN_MODE_POSCTL
+			_auto = AutoPhase::HoldWait;
+			_auto_since = now;
+			return;
+		}
+
+		if (_param_nl_auto_hold.get() && el >= 3.f && !px4_position_ok() && !_hold_refused_told) {
+			_hold_refused_told = true;
+			mavlink_log_critical(&_mavlink_log_pub, "Nose lift: no valid position for Hold, hovering on the module\t");
+		}
+
+		if (hov_el >= _param_nl_auto_hov.get()) {
+			auto_land_now("hover done", now);
+		}
+
+		break;
+	}
+
+	case AutoPhase::HoldWait:
+		// mid stick under PX4 (or the climb rate while climbing in Position): a manual-mode fall-back holds height
+		_auto_thr = _pclimb ? stick_for_climb(_pclimb_v) : ff;
+
+		if (in_px4_hold()) {
+			_auto = AutoPhase::HoldPX4;
+			_auto_since = now;
+			mavlink_log_info(&_mavlink_log_pub, "Nose lift: PX4 Position hold at %.1f m, then PX4 Land\t", (double)h);
+
+		} else if (el > 2.f) {
+			mavlink_log_critical(&_mavlink_log_pub, "Nose lift: Position refused (mode %d), hovering on the module\t",
+					     (int)_status.nav_state);
+			_hold_refused = true;
+			request_stabilized(now);
+
+			if (_pclimb) {
+				// refused at lift-off: the module's own climb carries on (past its ramp)
+				_pclimb = false;
+				_auto = AutoPhase::Climb;
+				_auto_since = now - (hrt_abstime)(1e6f * math::max(_param_nl_auto_ramp.get(), 0.1f));
+				_auto_h_t = h;
+
+			} else {
+				_auto = AutoPhase::Hover;
+				_auto_since = now;
+			}
+		}
+
+		return;
+
+	case AutoPhase::HoldPX4:
+		_auto_thr = ff;
+
+		if (_pclimb && in_px4_hold()) {
+			// climb in Position: the climb rate eases into the target height, its change limited to NL_AUTO_PACC
+			const float hz = ekf_height(h);
+			const float v_t = math::constrain(_param_nl_auto_pkz.get() * (alt - hz), 0.f, vup);
+			const float acc = math::max(_param_nl_auto_pacc.get(), 0.05f);
+			_pclimb_v += math::constrain(v_t - _pclimb_v, -acc * dt, acc * dt);
+			_auto_thr = stick_for_climb(_pclimb_v);
+
+			if ((hz > alt - 0.05f && _pclimb_v < 0.05f) || el > alt / math::max(vup, 0.05f) + 20.f) {
+				_pclimb = false;
+				_auto_hover_t0 = now;
+				_auto_thr = 0.5f;
+				mavlink_log_info(&_mavlink_log_pub, "Nose lift: hovering at %.2f m (PX4 Position) for %.0f s\t", (double)hz,
+						 (double)_param_nl_auto_hov.get());
+			}
+
+			return;
+		}
+
+		if (!in_px4_hold()) {
+			mavlink_log_critical(&_mavlink_log_pub, "Nose lift: PX4 left Position (mode %d), landing on the module\t",
+					     (int)_status.nav_state);
+			request_stabilized(now);
+			auto_land_now("hold lost", now);
+
+		} else if (_pdesc) {
+			// descent in Position (NL_AUTO_PDSC): eases from NL_AUTO_VDN down to NL_AUTO_VTD at NL_AUTO_HTD, then
+			// creeps until the feet are down (8 Oct SITL: PX4 Land put the feet down at 0.20 m/s, its crawl never
+			// engaged, and the rear-feet impact pitched the nose down at ~15 deg/s)
+			const float hz = ekf_height(h);
+			const float vtd = math::max(_param_nl_auto_vtd.get(), 0.02f);
+			const float v_t = -(vtd + math::min(math::max(vdn - vtd, 0.f),
+							    _param_nl_auto_pkz.get() * math::max(hz - _param_nl_auto_htd.get(), 0.f)));
+			const float acc = math::max(_param_nl_auto_pacc.get(), 0.05f);
+			_pclimb_v += math::constrain(v_t - _pclimb_v, -acc * dt, acc * dt);
+			_auto_thr = stick_for_climb(_pclimb_v);
+			update_touchdown(hz, now);
+
+			// with the range finder the height is good to a centimetre or two: the feet are down below 6 cm
+			if (touched_down(hz, range_ok() && PX4_ISFINITE(_auto_rng0) && _param_nl_auto_rng.get() ? 0.06f : 0.15f)) {
+				_pdesc = false;
+				touchdown_lower(now, "Position descent");
+
+			} else if ((now - _pdesc_t0) * 1e-6f > 60.f) {
+				_pdesc = false;
+				mavlink_log_critical(&_mavlink_log_pub, "Nose lift: Position descent timed out, PX4 Land\t");
+				request_px4_mode(4.f, 6.f, "Land", now);
+				_auto = AutoPhase::LandPX4;
+				_auto_since = now;
+			}
+
+		} else if (!_pclimb && (now - _auto_hover_t0) * 1e-6f >= _param_nl_auto_hov.get()) {
+			if (_param_nl_auto_pdsc.get()) {
+				_pdesc = true;
+				_pdesc_t0 = now;
+				_pclimb_v = 0.f;
+				_td_still_since = 0;
+				mavlink_log_info(&_mavlink_log_pub, "Nose lift: descending in PX4 Position from %.2f m\t", (double)ekf_height(h));
+
+			} else {
+				request_px4_mode(4.f, 6.f, "Land", now);
+				_auto = AutoPhase::LandPX4;
+				_auto_since = now;
+			}
+		}
+
+		return;
+
+	case AutoPhase::LandPX4:
+		_auto_thr = ff;
+		update_touchdown(h, now);
+
+		if (touched_down(h, 0.6f)) {
+			// the feet are down: back to Stabilized and the module lowers the nose under control at once (no 0.5 s
+			// cut: PX4 Land already has the thrust down, and the nose fell ~2 deg in that half second in SITL)
+			touchdown_lower(now, "PX4 Land");
+
+		} else if (!in_px4_land() && el > 2.f) {
+			mavlink_log_critical(&_mavlink_log_pub, "Nose lift: PX4 left Land (mode %d), landing on the module\t",
+					     (int)_status.nav_state);
+			request_stabilized(now);
+			auto_land_now("land lost", now);
+
+		} else if (el > 60.f) {
+			mavlink_log_critical(&_mavlink_log_pub, "Nose lift: PX4 Land timed out, landing on the module\t");
+			request_stabilized(now);
+			auto_land_now("land timeout", now);
+		}
+
+		return;
+
+	case AutoPhase::Descend: {
+			update_touchdown(h, now);
+			// the target runs on below the ground: the loop winds the thrust down until the aircraft sits still
+			// flare: at most 0.2 m/s in the last metre; the target leads the aircraft by at most 0.15 m down so a lagging loop does not add to the descent (SITL: 0.8 m/s touchdown without this)
+			// 30 Sep: 0.4 m/s to 0.7 m then 0.15 m/s gave 0.17 m/s touchdowns; 0.39 m/s and a 7-9 deg/s jolt without
+			const float v = h < _param_nl_auto_hfl.get() ? math::min(vdn, _param_nl_auto_vfl.get()) : vdn;
+			_auto_h_t = math::max(_auto_h_t - v * dt, h - 0.15f);
+			_auto_vz_t = -v;
+			const bool low = _auto_h_t <= h - 0.1f && h < 0.8f && fabsf(_baro_vz) < 0.25f;
+
+			if (low) {
+				if (_auto_still_since == 0) { _auto_still_since = now; }
+
+			} else {
+				_auto_still_since = 0;
+			}
+
+			const bool down = (_auto_still_since != 0 && now - _auto_still_since > 1_s) || _auto_h_t <= -2.f
+					  || (_land.landed && _auto_h_t <= 0.f) || (_param_nl_auto_td.get() > 0 && touched_down(h, 0.6f));
+
+			if (down) {
+				_auto = AutoPhase::Cut;
+				_auto_since = now;
+				_auto_cut_from = PX4_ISFINITE(_auto_thr) ? _auto_thr : 0.f;
+				mavlink_log_info(&_mavlink_log_pub, "Nose lift: touchdown (throttle %.2f), cutting\t", (double)_auto_cut_from);
+				return;
+			}
+
+			break;
+		}
+
+	case AutoPhase::Cut: {
+			const float k = el / 0.5f;
+			_auto_thr = _auto_cut_from * math::max(0.f, 1.f - k);
+
+			if (k >= 1.f) {
+				_auto_thr = 0.f;
+				end_auto(now);
+
+				if (_state == State::NoseHold) {
+					lower_from_nose_hold(now);
+
+				} else if (_state == State::Flying) {
+					lower_from_flight(now);
+
+				} else {
+					// still handing over (never took off properly): the cancel's lowering
+					abort(Abort::SwitchOff, true, now);
+				}
+			}
+
+			return;
+		}
+
+	default:
+		return;
+	}
+
+	// the height loop: hover feed-forward plus height, climb-rate and integral terms, on the barometer
+	// climb rate: the estimator's in the air (it drifts by tenths of a m/s on the ground under fan vibration, which
+	// matters little once airborne), the barometer's rate when it has none
+	const float vz = _lpos.v_z_valid && hrt_elapsed_time(&_lpos.timestamp) < 200_ms ? -_lpos.vz : _baro_vz;
+	const float eh = _auto_h_t - h;
+	const float ev = _auto_vz_t - vz;
+	const float thr_max = _param_nl_auto_max.get();
+	const float ki = _param_nl_auto_ki.get();
+	const float thr = ff + _param_nl_auto_kp.get() * eh + _param_nl_auto_kv.get() * ev + ki * _auto_int;
+
+	// the integral covers the hover-throttle error only: at most +-0.2 of throttle
+	if (!((thr >= thr_max && eh > 0.f) || (thr <= 0.f && eh < 0.f))) {
+		const float lim = ki > 1e-6f ? 0.2f / ki : 0.f;
+		_auto_int = math::constrain(_auto_int + eh * dt, -lim, lim);
+	}
+
+	// the throttle may not move faster than NL_AUTO_SLEW per second: a lagging barometer under fan wash made the
+	// loop ask for 0.9 within half a second (6 Oct)
+	const float step = math::max(_param_nl_auto_slew.get(), 0.01f) * dt;
+	const float prev = PX4_ISFINITE(_auto_thr) ? _auto_thr : 0.f;
+	_auto_thr = math::constrain(math::constrain(thr, prev - step, prev + step), 0.f, thr_max);
+}
+
+const char *NoseLift::auto_name(AutoPhase a)
+{
+	switch (a) {
+	case AutoPhase::Off: return "off";
+
+	case AutoPhase::Wait: return "waiting";
+
+	case AutoPhase::Climb: return "climbing";
+
+	case AutoPhase::Hover: return "hovering";
+
+	case AutoPhase::HoldWait: return "asking PX4 Position";
+
+	case AutoPhase::HoldPX4: return "PX4 Position hold";
+
+	case AutoPhase::LandPX4: return "PX4 Land";
+
+	case AutoPhase::Descend: return "descending";
+
+	case AutoPhase::Cut: return "cutting";
+
+	case AutoPhase::Done: return "done";
+	}
+
+	return "?";
+}
+
 void NoseLift::abort(Abort reason, bool controlled, hrt_abstime now)
 {
+	_rear_ramp = false;
 	_abort_reason = reason;
+	_auto = AutoPhase::Off;
+	_auto_thr = NAN;
 
 	if (controlled && (_state == State::Ramping || _state == State::Holding)) {
 		// same integrator contribution under the lowering gains, so the thrust does not jump
@@ -654,6 +1491,12 @@ void NoseLift::publish(hrt_abstime now)
 	out.pitch_deg = _pitch;
 	out.target_deg = _target;
 	out.cmd = _cmd;
+	out.throttle = auto_flying() ? _auto_thr : NAN;
+	out.auto_phase = static_cast<uint8_t>(_auto);
+	out.on_legs = _state == State::Ramping || _state == State::Holding || _state == State::Lowering
+		      || (_state == State::Handover && !_ho_off_legs);
+	out.legs_hold = static_cast<uint8_t>(math::constrain(static_cast<int>(_param_nl_legs_att.get()), 0, 3));
+	out.legs_fade_s = _param_nl_legs_fade.get();
 
 	for (int i = 0; i < NUM_MOTORS; i++) {
 		out.control[i] = NAN;
@@ -719,6 +1562,21 @@ void NoseLift::publish(hrt_abstime now)
 			for (int k = 0; k < _lift_count; k++) {
 				out.control[_lift_motor[k]] = motor_thrust(math::constrain(_cmd * _split[k], 0.f, 1.f));
 			}
+
+			if (_state == State::Lowering && _rear_ramp) {
+				const float k = (now - _rear_t0) * 1e-6f / math::max(_param_nl_low_rramp.get(), 1e-3f);
+
+				if (k >= 1.f) {
+					_rear_ramp = false;
+
+				} else {
+					const int mask = _param_nl_mot_msk.get();
+
+					for (int i = 0; i < n; i++) {
+						if (!(mask & (1 << i))) { out.control[i] = _rear_from[i] * (1.f - k); }
+					}
+				}
+			}
 		}
 
 		break;
@@ -768,6 +1626,8 @@ void NoseLift::Run()
 	_manual_sub.update(&_manual);
 	_rc_sub.update(&_rc);
 	_lpos_sub.update(&_lpos);
+	_dist_sub.update(&_dist);
+	_act_sub.update(&_act);
 	_air_sub.update(&_air);
 	_status_sub.update(&_status);
 	_feedback_sub.update(&_feedback);
@@ -806,7 +1666,13 @@ void NoseLift::Run()
 		}
 
 		_cmd = 0.f;
+		_auto = AutoPhase::Off;
+		_auto_thr = NAN;
 		set_state(State::Disarmed, now);
+	}
+
+	if (armed) {
+		step_auto(now, dt, kill);
 	}
 
 	switch (_state) {
@@ -912,6 +1778,10 @@ const char *NoseLift::abort_name(Abort a)
 	case Abort::HoldTimeout: return "hold timeout";
 
 	case Abort::LowerTimeout: return "lowering timeout";
+
+	case Abort::Stuck: return "nose stuck";
+
+	case Abort::Weak: return "nose fans too weak for the takeoff";
 	}
 
 	return "?";

@@ -1,0 +1,84 @@
+diff --git a/src/modules/mc_att_control/mc_att_control.hpp b/src/modules/mc_att_control/mc_att_control.hpp
+index d9bddda..c9cc38e 100644
+--- a/src/modules/mc_att_control/mc_att_control.hpp
++++ b/src/modules/mc_att_control/mc_att_control.hpp
+@@ -55,6 +55,7 @@
+ #include <uORB/topics/vehicle_local_position.h>
+ #include <uORB/topics/vehicle_rates_setpoint.h>
+ #include <uORB/topics/vehicle_status.h>
++#include <uORB/topics/nose_lift_output.h>
+ #include <lib/mathlib/math/filter/AlphaFilter.hpp>
+ #include <lib/slew_rate/SlewRate.hpp>
+ #include <lib/stick_yaw/StickYaw.hpp>
+@@ -110,6 +111,18 @@ private:
+ 	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
+ 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+ 
++	// AIRFRAME_DESIGNER nose lift: while the aircraft stands on its legs under the ground sequence the roll / pitch
++	// setpoint follows the estimated angle (offset, NL_LEGS_ATT), and the offset fades out once it is off them
++	uORB::Subscription _nose_lift_output_sub{ORB_ID(nose_lift_output)};
++	nose_lift_output_s _nose_lift_output{};
++	float _nl_roll_off{0.f};
++	float _nl_roll_off0{0.f};
++	float _nl_pitch_off{0.f};
++	float _nl_pitch_off0{0.f};
++	float _nl_fade_s{1.f};
++	hrt_abstime _nl_off_legs_t{0};
++	bool _nl_on_legs{false};
++
+ 	uORB::SubscriptionCallbackWorkItem _vehicle_attitude_sub{this, ORB_ID(vehicle_attitude)};
+ 
+ 	uORB::Publication<vehicle_rates_setpoint_s>     _vehicle_rates_setpoint_pub{ORB_ID(vehicle_rates_setpoint)};    /**< rate setpoint publication */
+diff --git a/src/modules/mc_att_control/mc_att_control_main.cpp b/src/modules/mc_att_control/mc_att_control_main.cpp
+index 0b8f9c8..a49e11a 100644
+--- a/src/modules/mc_att_control/mc_att_control_main.cpp
++++ b/src/modules/mc_att_control/mc_att_control_main.cpp
+@@ -313,7 +313,47 @@ MulticopterAttitudeControl::Run()
+ 				if (_vehicle_attitude_setpoint_sub.copy(&vehicle_attitude_setpoint)
+ 				    && (vehicle_attitude_setpoint.timestamp > _last_attitude_setpoint)) {
+ 
+-					_attitude_control.setAttitudeSetpoint(Quatf(vehicle_attitude_setpoint.q_d), vehicle_attitude_setpoint.yaw_sp_move_rate);
++					Quatf q_sp(vehicle_attitude_setpoint.q_d);
++
++					// AIRFRAME_DESIGNER nose lift: on the legs a roll or pitch error cannot be corrected, it only loads the
++					// legs and comes out as a jolt when they leave the ground (9 Oct HITL: 0.4 deg of estimated tilt -> a
++					// 5-6 deg/s roll kick). Hold the setpoint at the estimated angle there (NL_LEGS_ATT: 1 roll, 2 pitch),
++					// then fade the offset out over NL_LEGS_FADE.
++					_nose_lift_output_sub.update(&_nose_lift_output);
++					const bool nl_fresh = hrt_elapsed_time(&_nose_lift_output.timestamp) < 100_ms;
++					const bool on_legs = nl_fresh && _nose_lift_output.on_legs && _nose_lift_output.legs_hold != 0;
++					Eulerf e_sp(q_sp);
++
++					if (on_legs) {
++						const Eulerf e(q);
++						_nl_roll_off = (_nose_lift_output.legs_hold & 1) ? math::constrain(wrap_pi(e.phi() - e_sp.phi()), -0.05f, 0.05f) : 0.f;
++						_nl_pitch_off = (_nose_lift_output.legs_hold & 2) ? math::constrain(wrap_pi(e.theta() - e_sp.theta()), -0.05f, 0.05f) : 0.f;
++						_nl_fade_s = math::max(PX4_ISFINITE(_nose_lift_output.legs_fade_s) ? _nose_lift_output.legs_fade_s : 1.f, 0.2f);
++						_nl_on_legs = true;
++
++					} else if (_nl_on_legs) {
++						_nl_on_legs = false;
++						_nl_roll_off0 = _nl_roll_off;
++						_nl_pitch_off0 = _nl_pitch_off;
++						_nl_off_legs_t = hrt_absolute_time();
++					}
++
++					if (!on_legs && (fabsf(_nl_roll_off0) > 0.f || fabsf(_nl_pitch_off0) > 0.f)) {
++						const float k = hrt_elapsed_time(&_nl_off_legs_t) * 1e-6f / _nl_fade_s;
++						const float w = k >= 1.f ? 0.f : 0.5f * (1.f + cosf(M_PI_F * k));
++						_nl_roll_off = _nl_roll_off0 * w;
++						_nl_pitch_off = _nl_pitch_off0 * w;
++
++						if (k >= 1.f) { _nl_roll_off0 = 0.f; _nl_pitch_off0 = 0.f; }
++					}
++
++					if (fabsf(_nl_roll_off) > 0.f || fabsf(_nl_pitch_off) > 0.f) {
++						e_sp.phi() = e_sp.phi() + _nl_roll_off;
++						e_sp.theta() = e_sp.theta() + _nl_pitch_off;
++						q_sp = Quatf(e_sp);
++					}
++
++					_attitude_control.setAttitudeSetpoint(q_sp, vehicle_attitude_setpoint.yaw_sp_move_rate);
+ 					_thrust_setpoint_body = Vector3f(vehicle_attitude_setpoint.thrust_body);
+ 					_last_attitude_setpoint = vehicle_attitude_setpoint.timestamp;
+ 				}

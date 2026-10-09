@@ -1,0 +1,60 @@
+diff --git a/src/modules/rc_update/rc_update.cpp b/src/modules/rc_update/rc_update.cpp
+index 52d65bf..17e7616 100644
+--- a/src/modules/rc_update/rc_update.cpp
++++ b/src/modules/rc_update/rc_update.cpp
+@@ -489,8 +489,15 @@ void RCUpdate::Run()
+ 					}
+ 				}
+ 
++				// AIRFRAME_DESIGNER nose lift: while the module gives the throttle it changes every cycle with the sticks
++				// standing still; the 300 ms limit below turned the automatic throttle ramp into 0.05 steps at 3.3 Hz,
++				// a pitch shake through the handover and the climb (9 Oct HITL and SITL). Process every RC frame then.
++				_nose_lift_output_sub.update(&_nose_lift_output);
++				const bool nose_lift_throttle = PX4_ISFINITE(_nose_lift_output.throttle)
++								&& hrt_elapsed_time(&_nose_lift_output.timestamp) < 200_ms;
++
+ 				// limit processing if there's no update
+-				if (rc_updated || (hrt_elapsed_time(&_last_manual_control_input_publish) > 300_ms)) {
++				if (rc_updated || nose_lift_throttle || (hrt_elapsed_time(&_last_manual_control_input_publish) > 300_ms)) {
+ 					UpdateManualControlInput(input_rc.timestamp_last_signal);
+ 				}
+ 
+@@ -671,6 +678,15 @@ void RCUpdate::UpdateManualControlInput(const hrt_abstime &timestamp_sample)
+ 	manual_control_input.pitch = get_rc_value(rc_channels_s::FUNCTION_PITCH,   -1.f, 1.f);
+ 	manual_control_input.yaw = get_rc_value(rc_channels_s::FUNCTION_YAW,     -1.f, 1.f);
+ 	manual_control_input.throttle = get_rc_value(rc_channels_s::FUNCTION_THROTTLE, -1.f, 1.f);
++
++	// AIRFRAME_DESIGNER nose lift (NL_AUTO): while the module asks for a throttle (finite, fresh), it replaces the
++	// pilot's throttle stick here, so attitude control, the land detector and everything downstream see it as the
++	// pilot's. The kill switch and disarm act in the output driver and are not affected.
++	_nose_lift_output_sub.update(&_nose_lift_output);
++
++	if (PX4_ISFINITE(_nose_lift_output.throttle) && hrt_elapsed_time(&_nose_lift_output.timestamp) < 200_ms) {
++		manual_control_input.throttle = 2.f * math::constrain(_nose_lift_output.throttle, 0.f, 1.f) - 1.f;
++	}
+ 	manual_control_input.flaps = get_rc_value(rc_channels_s::FUNCTION_FLAPS,   -1.f, 1.f);
+ 	manual_control_input.aux1  = get_rc_value(rc_channels_s::FUNCTION_AUX_1,   -1.f, 1.f);
+ 	manual_control_input.aux2  = get_rc_value(rc_channels_s::FUNCTION_AUX_2,   -1.f, 1.f);
+diff --git a/src/modules/rc_update/rc_update.h b/src/modules/rc_update/rc_update.h
+index 2ebdebb..ff08053 100644
+--- a/src/modules/rc_update/rc_update.h
++++ b/src/modules/rc_update/rc_update.h
+@@ -55,6 +55,7 @@
+ #include <uORB/SubscriptionCallback.hpp>
+ #include <uORB/topics/manual_control_setpoint.h>
+ #include <uORB/topics/manual_control_switches.h>
++#include <uORB/topics/nose_lift_output.h>
+ #include <uORB/topics/input_rc.h>
+ #include <uORB/topics/rc_channels.h>
+ #include <uORB/topics/rc_parameter_map.h>
+@@ -168,6 +169,10 @@ protected:
+ 
+ 	uORB::SubscriptionCallbackWorkItem _input_rc_sub{this, ORB_ID(input_rc)};
+ 
++	// AIRFRAME_DESIGNER nose lift: a throttle the automatic takeoff/hover/landing asks for in place of the stick
++	uORB::Subscription _nose_lift_output_sub{ORB_ID(nose_lift_output)};
++	nose_lift_output_s _nose_lift_output{};
++
+ 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
+ 
+ 	uORB::Subscription _rc_parameter_map_sub{ORB_ID(rc_parameter_map)};

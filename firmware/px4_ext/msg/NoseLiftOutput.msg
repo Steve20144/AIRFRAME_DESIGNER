@@ -14,3 +14,14 @@ uint8 abort_reason		# NoseLift::Abort
 float32 pitch_deg		# [deg] structural pitch (PX4's pitch plus NL_HOV_PITCH)
 float32 target_deg		# [deg] structural pitch the sequence is driving to
 float32 cmd			# [-] lifting-motor command before the roll/yaw split
+
+# Automatic takeoff, hover and landing (NL_AUTO): the throttle the sequence asks for, applied by rc_update in place of
+# the pilot's throttle stick while it is finite and fresh (NaN = the stick flies).
+float32 throttle		# [-] 0..1
+uint8 auto_phase		# NoseLift::AutoPhase
+
+# The aircraft stands on its legs under the ground sequence (raise, hold, handover until it is off its legs, lowering):
+# mc_att_control then holds no roll error against the legs (it would load them and release as a roll jolt at lift-off).
+bool on_legs
+uint8 legs_hold		# NL_LEGS_ATT: which errors are not held against the legs (1 roll, 2 pitch)
+float32 legs_fade_s	# NL_LEGS_FADE: the setpoint offset fades out over this long once off the legs
