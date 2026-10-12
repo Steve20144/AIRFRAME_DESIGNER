@@ -60,3 +60,20 @@ Quirks it handles, each found the hard way:
 - ULog download over MAVLink: `LOG_REQUEST_LIST` for sizes (entries can be lost on the radio: ask for the id
   directly), then `LOG_REQUEST_DATA` with the exact size, re-requesting gaps. Logs are time-ordered, so a partial
   download already holds the start of a run.
+
+## 2026-10-12 additions (scripts/throttle_dashboard.py)
+- **HITL on / off** button (same two-click, save, reboot, read-back flow as Set hover pitch): writes the HITL board
+  conditions (SYS_HITL 1, RC_MAP_ARM_SW 0, RC_CRSF_PRT_CFG 0, MBE/IMU/BAR autocal 0, EKF2 OF/RNG delays 0, CAL_*3
+  offsets 0) after saving the flight values to `results/board_params/hitl_toggle_flight_values.json`; off writes them
+  back plus RC_MAP_KILL_SW / RC3_MIN / RC3_TRIM / COM_RC_IN_MODE (changed by the HITL scenarios). No snapshot -> the
+  8 Oct pre-HITL backup values.
+- **Rotation test** (pre-flight sanity check, no firmware change: final3 only starts the lift from the radio switch,
+  PX4 ignores MAVLink RC when a real receiver is input_rc 0): sets NL_AUTO 0, NL_HO_THR 1 (no handover even with the
+  throttle up), NL_HOLD_TOUT 10 after saving the flight values to `results/board_params/rotation_test_flight_values.json`;
+  pilot arms and switches the nose lift on; final3 raises, holds 10 s, lowers (HoldTimeout -> controlled Lowering) and
+  disarms; the run is judged (rise, hold within 1.5 deg of NL_TGT, lowering, abort only "hold timeout", no nose rate
+  above 8 deg/s) and the flight values are restored. A test left half-done shows "Restore flight settings".
+- **Firmware backup after every arm -> disarm**: `firmware-backups/<time>_<run>/` with firmware.px4 (the .px4 under
+  results/ or ~/PX4-nl/build whose build_time is 0-120 s after the board's `ver all` Build datetime, same git hash),
+  identity.json (ver all, image sha256) and params.json (every parameter). The board cannot read its flash back over
+  MAVLink, so the image is matched, not downloaded; the CRC check needs the bootloader (see the 12 Oct CRC check).

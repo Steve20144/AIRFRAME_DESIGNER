@@ -12,6 +12,16 @@ then open http://127.0.0.1:8095. Needs pymavlink and pyserial.
   consistently: SENS_BOARD_Y_OFF, the nose-lift target (NL_TGT, NL_HOV_PITCH), every rotor's position and thrust axis
   in PX4's frame (CA_ROTOR*_PX/PZ/AX/AZ, rotated by the change), the H-FLOW's range tilt and lever arms
   (EKF2_RNG_PITCH, EKF2_OF_POS / EKF2_RNG_POS); then saves and reboots the board so the estimator re-aligns.
+- Rotation test (pre-flight sanity check, disarmed only, two clicks): sets the board to raise and hold only (NL_AUTO 0,
+  NL_HO_THR 1, NL_HOLD_TOUT 10 s) after saving the flight values; the pilot arms and switches the nose lift on; the nose
+  rises, holds 10 s, is lowered and the board disarms by itself; the run is judged (rise, hold at the target, lowering,
+  no abort, no fast movement) and the flight values are written back. No firmware change.
+- After every arm -> disarm: firmware-backups/<time>_<run>/ with the board's firmware image (the .px4 built here whose
+  build time matches the board's "Build datetime"), its identity (ver all) and every parameter.
+- HITL on / off (disarmed only), the same two-click, save, reboot and read-back flow: writes the board conditions the
+  simulator needs (SYS_HITL 1, no arm switch, CRSF off, no sensor auto-calibration, H-FLOW delays 0) after saving the
+  flight values to results/board_params/hitl_toggle_flight_values.json; off writes those back, with the kill switch
+  channel and the throttle calibration the HITL scenarios change.
 - H-FLOW: how far to trust it (FlowCheck): the flow's velocity against EKF2's, the noise floor at rest, quality,
   range noise, the EKF's own accuracy, and a distance check against a tape measure for the true scale error.
 - Every run (arm to disarm) saved to results/telemetry_runs/run_<time>.json with its messages, nose-lift states,
@@ -44,7 +54,8 @@ from pymavlink import mavutil  # noqa: E402
 STATES =["disabled", "disarmed", "parked", "raising the nose", "holding", "handing over", "flying",
           "lowering the nose", "aborted", "holding the nose"]
 ABORTS = ["none", "kill switch", "switch off", "radio lost", "attitude lost", "roll limit", "overshoot",
-          "left the ground", "lift timeout", "motors cannot hold the nose", "hold timeout", "lowering timeout"]
+          "left the ground", "lift timeout", "motors cannot hold the nose", "hold timeout", "lowering timeout",
+          "nose stuck", "nose fans too weak"]
 FUNC_PARAMS = [f"PWM_MAIN_FUNC{i}" for i in range(1, 9)] + [f"PWM_AUX_FUNC{i}" for i in range(1, 9)]
 
 lock = threading.Lock()
@@ -54,6 +65,8 @@ state = {
     "nl": None, "nl_t": 0.0, "volt": None, "rssi": None, "remrssi": None, "texts": [], "rate": 0.0, "ack": None,
     "att": None, "att_t": 0.0, "boot_ms": None, "boot_t": 0.0,
     "port": "", "link_pref": "auto", "params": {}, "flow": None, "hover": {"deg": None, "busy": False, "msg": "", "ok": None, "t": 0.0, "readback": None},
+    "fw_backup": None,
+    "rot": {"active": False, "busy": False, "phase": "", "msg": "", "ok": None, "t": 0.0, "result": None},
 }
 INT_TYPES = {mavutil.mavlink.MAV_PARAM_TYPE_INT32, mavutil.mavlink.MAV_PARAM_TYPE_UINT32, mavutil.mavlink.MAV_PARAM_TYPE_INT16,
              mavutil.mavlink.MAV_PARAM_TYPE_UINT16, mavutil.mavlink.MAV_PARAM_TYPE_INT8, mavutil.mavlink.MAV_PARAM_TYPE_UINT8}
@@ -259,6 +272,360 @@ def set_hover(deg):
                       False, False)
     except Exception as e:
         hover_msg(f"hover pitch not changed: {e}", False, False)
+
+
+# HITL on / off: the board conditions the simulator needs (brain/lessons/hitl-board-conditions.md), each with its HITL
+# value. Turning HITL on first saves the board's own (flight) values of these and of the scenario-changed ones below to
+# HITL_SNAPSHOT; turning it off writes them back. Without a snapshot the flight values are the 8 Oct pre-HITL backup's.
+HITL_SET = {"SYS_HITL": 1, "RC_MAP_ARM_SW": 0, "RC_CRSF_PRT_CFG": 0, "MBE_ENABLE": 0, "SENS_IMU_AUTOCAL": 0,
+            "SENS_BAR_AUTOCAL": 0, "EKF2_OF_DELAY": 0.0, "EKF2_RNG_DELAY": 0.0}
+# changed by the HITL scenarios, not by the switch: restored when HITL goes off (the kill switch is on channel 5)
+HITL_RESTORE_ONLY = ["RC_MAP_KILL_SW", "RC3_MIN", "RC3_TRIM", "COM_RC_IN_MODE"]
+# offsets learned for the simulated sensors (device ids of the HIL sensors only): zeroed when HITL goes on, never restored
+HITL_ZERO = ["CAL_MAG3_XOFF", "CAL_MAG3_YOFF", "CAL_MAG3_ZOFF", "CAL_GYRO3_XOFF", "CAL_GYRO3_YOFF", "CAL_GYRO3_ZOFF",
+             "CAL_BARO2_OFF"]
+HITL_FLIGHT_DEFAULTS = {"SYS_HITL": 0, "RC_MAP_ARM_SW": 8, "RC_CRSF_PRT_CFG": 102, "MBE_ENABLE": 1, "SENS_IMU_AUTOCAL": 1,
+                        "SENS_BAR_AUTOCAL": 1, "EKF2_OF_DELAY": 20.0, "EKF2_RNG_DELAY": 5.0, "RC_MAP_KILL_SW": 5,
+                        "RC3_MIN": 1001.0, "RC3_TRIM": 1001.0, "COM_RC_IN_MODE": 0}
+HITL_SNAPSHOT = Path(__file__).resolve().parents[1] / "results/board_params/hitl_toggle_flight_values.json"
+
+
+def set_hitl(on):
+    """Turn HITL on or off (disarmed only): write the HITL conditions (or the saved flight values back), save,
+    reboot, then read every written value back from the rebooted board. Same flow as the hover pitch."""
+    what = "HITL on" if on else "HITL off"
+    try:
+        m = link.get("m")
+        if m is None:
+            raise RuntimeError("no link to the aircraft")
+        with lock:
+            if state["armed"]:
+                raise RuntimeError("disarm first")
+        hover_msg(f"{what}: reading the current values from the board…")
+        keys = list(HITL_SET) + HITL_RESTORE_ONLY
+        cur = read_params(m, keys)
+        if on:
+            if int(cur["SYS_HITL"][0]) == 0:
+                # the board is in its flight configuration: keep it, so HITL off puts exactly this back
+                snap = {k: cur[k][0] for k in keys}
+                HITL_SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+                HITL_SNAPSHOT.write_text(json.dumps({"saved": time.strftime("%Y-%m-%d %H:%M:%S"), "flight_values": snap}, indent=1))
+            want = {k: (v, cur[k][1]) for k, v in HITL_SET.items()}
+            for k in HITL_ZERO:
+                try:
+                    want[k] = (0.0, read_params(m, [k], timeout=4.0)[k][1])
+                except RuntimeError:
+                    pass  # the simulated sensor has never been seen on this board: nothing to clear
+        else:
+            flight = dict(HITL_FLIGHT_DEFAULTS)
+            src = "the 8 Oct pre-HITL backup"
+            if HITL_SNAPSHOT.exists():
+                try:
+                    flight.update(json.loads(HITL_SNAPSHOT.read_text())["flight_values"])
+                    src = "the values saved when HITL went on"
+                except Exception:
+                    pass
+            want = {k: (flight[k], cur[k][1]) for k in keys}
+            hover_msg(f"{what}: restoring the flight values from {src}…")
+        changes = [f"{k} {cur[k][0]:g}→{v:g}" for k, (v, _) in want.items() if k in cur and abs(float(cur[k][0]) - float(v)) > 1e-4]
+        hover_msg(f"{what}: writing {len(want)} parameters ({len(changes)} change)…")
+        bad = [k for k, (v, t) in want.items() if not write_param(m, k, v, t)]
+        if bad:
+            raise RuntimeError(f"not confirmed: {', '.join(bad[:6])} (nothing rebooted; check and retry)")
+        m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_STORAGE, 0, 1, 0, 0, 0, 0, 0, 0)
+        time.sleep(1.5)
+        if rec is not None:
+            rec.event(time.time(), "hitl", f"{what}: " + (", ".join(changes) or "no change"))
+        with lock:
+            still_disarmed = not state["armed"]
+        if not still_disarmed:
+            hover_msg(f"{what} saved; armed meanwhile, so not rebooted: reboot before anything else", True, False)
+            return
+        hover_msg(f"{what} saved ({len(want)} parameters); board rebooting, then reading them back…")
+        t_reboot = time.time()
+        m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 0, 1, 0, 0, 0, 0, 0, 0)
+        rb = wait_back_and_readback(t_reboot, {k: v for k, (v, _) in want.items()})
+        if rb is None:
+            hover_msg(f"{what} saved, but the board did not answer after the reboot: press Read back", False, False)
+        elif rb["bad"]:
+            hover_msg(f"{what}: read back after reboot, {len(rb['bad'])} parameter(s) differ "
+                      f"({', '.join(list(rb['bad'])[:4])}): toggle it again", False, False)
+        else:
+            hover_msg(f"verified after reboot: {what}, {rb['checked']}/{rb['checked']} parameters match"
+                      + ("" if on else " (motors live again, kill switch on channel "
+                         f"{int(want['RC_MAP_KILL_SW'][0])})"), True, False)
+    except Exception as e:
+        hover_msg(f"{what} not done: {e}", False, False)
+
+
+# Rotation test (pre-flight sanity check) on the firmware as it is (no firmware change): the board is set to raise and
+# hold only (no automatic takeoff, no handover even with the throttle up, the hold ends after ROT_HOLD_S and the nose is
+# lowered and the board disarms by itself); the pilot arms and switches the nose lift on as for a flight; when it has
+# disarmed the flight values are written back. The raise and the hold are the flight's own code; the lowering is the
+# same Lowering state, entered the way a switch-off on the ground enters it.
+ROT_HOLD_S = 10.0
+ROT_SET = {"NL_AUTO": 0, "NL_HO_THR": 1.0, "NL_HOLD_TOUT": ROT_HOLD_S}
+ROT_SNAPSHOT = Path(__file__).resolve().parents[1] / "results/board_params/rotation_test_flight_values.json"
+
+
+_rot_pending = [0.0, False]
+
+
+def rot_pending():
+    """A rotation test's flight values are still saved (the test did not finish): checked at most once a second."""
+    if time.time() - _rot_pending[0] > 1.0:
+        _rot_pending[:] = [time.time(), ROT_SNAPSHOT.exists() and not state["rot"]["active"]]
+    return _rot_pending[1]
+
+
+def rot_msg(text, ok=None, busy=True, **kw):
+    with lock:
+        state["rot"].update(msg=text, ok=ok, busy=busy, t=time.time(), **kw)
+    print("[rotation]", text)
+
+
+def rot_restore(m, why):
+    """Write the flight values saved before the test back, and confirm them."""
+    snap = json.loads(ROT_SNAPSHOT.read_text())["flight_values"]
+    cur = read_params(m, list(snap))
+    bad = [k for k, v in snap.items() if not write_param(m, k, v, cur[k][1])]
+    if bad:
+        raise RuntimeError(f"flight values NOT restored: {', '.join(bad)} (press the button again)")
+    m.mav.command_long_send(1, 1, mavutil.mavlink.MAV_CMD_PREFLIGHT_STORAGE, 0, 1, 0, 0, 0, 0, 0, 0)
+    back = read_params(m, list(snap))
+    wrong = [k for k, v in snap.items() if abs(float(back[k][0]) - float(v)) > 1e-4]
+    if wrong:
+        raise RuntimeError(f"read back differs after the restore: {', '.join(wrong)}")
+    ROT_SNAPSHOT.unlink()
+    if rec is not None:
+        rec.event(time.time(), "rotation test", f"flight values restored ({why}): " + ", ".join(f"{k} {v:g}" for k, v in snap.items()))
+    return snap
+
+
+def rotation_test():
+    """Set the board up for a rotation-only run, follow it through arm -> raise -> hold -> lower -> disarm, judge it,
+    then restore the flight values."""
+    m = link.get("m")
+    try:
+        if m is None:
+            raise RuntimeError("no link to the aircraft")
+        with lock:
+            if state["armed"]:
+                raise RuntimeError("disarm first")
+        rot_msg("reading the flight settings from the board…", active=True, result=None, phase="setup")
+        keys = list(ROT_SET) + ["NL_TGT", "NL_EN", "NL_RC_CH", "SYS_HITL"]
+        cur = read_params(m, keys)
+        if int(cur["NL_EN"][0]) != 1:
+            raise RuntimeError("the nose lift is off on this board (NL_EN 0)")
+        if not ROT_SNAPSHOT.exists():   # a test left half-done keeps the original flight values
+            ROT_SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+            ROT_SNAPSHOT.write_text(json.dumps({"saved": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                                "flight_values": {k: cur[k][0] for k in ROT_SET}}, indent=1))
+        bad = [k for k, v in ROT_SET.items() if not write_param(m, k, v, cur[k][1])]
+        if bad:
+            raise RuntimeError(f"test settings not confirmed: {', '.join(bad)}")
+        target = float(cur["NL_TGT"][0])
+        if rec is not None:
+            rec.event(time.time(), "rotation test", f"armed for a rotation test: NL_AUTO 0, NL_HO_THR 1, NL_HOLD_TOUT {ROT_HOLD_S:g}")
+        rot_msg(f"READY: arm, keep the throttle at minimum and switch the nose lift on (channel {int(cur['NL_RC_CH'][0])}). "
+                f"The nose rises to {target:g}°, holds {ROT_HOLD_S:g} s, comes down and the board disarms by itself. "
+                "The kill switch stays live.", None, True, phase="waiting for arm")
+        # follow the run
+        t0 = time.time(); seen = []; armed_once = False; t_arm = None; res = {"target": target}
+        pitches, hold_p = [], []
+        while time.time() - t0 < 600:
+            time.sleep(0.1)
+            with lock:
+                armed, nl, nl_t, cancel = state["armed"], state["nl"], state["nl_t"], state["rot"].get("cancel")
+            if cancel and not armed:
+                raise RuntimeError("cancelled from the page")
+            if armed and not armed_once:
+                armed_once, t_arm = True, time.time()
+                rot_msg("armed: switch the nose lift on", None, True, phase="armed")
+            if nl is not None and time.time() - nl_t < 1.0 and armed_once:
+                st = nl["state"]
+                if not seen or seen[-1] != st:
+                    seen.append(st)
+                    rot_msg(f"{st}: nose {nl['pitch']:.1f}°", None, True, phase=st)
+                pitches.append((time.time(), nl["pitch"], st, nl["cmd"]))
+                if st == "holding":
+                    hold_p.append(nl["pitch"])
+                if nl["abort"] != "none":
+                    res["abort"] = nl["abort"]
+            if armed_once and not armed:
+                break
+        else:
+            raise RuntimeError("no complete run within 10 minutes")
+        # judge it: rose, held near the target, ended by the hold timeout, came down, no other abort
+        res["states"] = seen
+        res["peak"] = round(max(p for _, p, _, _ in pitches), 2) if pitches else None
+        res["hold_mean"] = round(sum(hold_p) / len(hold_p), 2) if hold_p else None
+        res["hold_spread"] = round(max(hold_p) - min(hold_p), 2) if hold_p else None
+        res["final"] = round(pitches[-1][1], 2) if pitches else None
+        res["cmd_max"] = round(max(c for _, _, _, c in pitches), 3) if pitches else None
+        rates = [abs((b[1] - a[1]) / max(b[0] - a[0], 1e-3)) for a, b in zip(pitches, pitches[1:]) if b[0] - a[0] > 0.05]
+        res["rate_max"] = round(max(rates), 1) if rates else None
+        problems = []
+        if "raising the nose" not in seen:
+            problems.append("the nose never started to rise (switch on, throttle at minimum?)")
+        if "holding" not in seen:
+            problems.append("the nose never reached the hold")
+        elif res["hold_mean"] is not None and abs(res["hold_mean"] - target) > 1.5:
+            problems.append(f"held at {res['hold_mean']:g}° instead of {target:g}°")
+        if "lowering the nose" not in seen:
+            problems.append("no controlled lowering")
+        if res.get("abort") not in (None, "hold timeout"):
+            problems.append(f"nose lift stopped: {res['abort']}")
+        if res["rate_max"] is not None and res["rate_max"] > 8:
+            problems.append(f"fast nose movement {res['rate_max']:g}°/s")
+        res["pass"] = not problems
+        res["problems"] = problems
+        summary = (f"peak {res['peak']}°, hold {res['hold_mean']}° (±{(res['hold_spread'] or 0) / 2:.1f}), "
+                   f"fastest {res['rate_max']}°/s, nose fans up to {(res['cmd_max'] or 0) * 100:.0f}%, back to {res['final']}°")
+        rot_msg(("PASS: " if res["pass"] else "CHECK: " + "; ".join(problems) + " · ") + summary + " · restoring the flight settings…",
+                res["pass"], True, phase="restoring", result=res)
+        if rec is not None:
+            rec.event(time.time(), "rotation test", ("PASS " if res["pass"] else "CHECK ") + summary)
+        snap = rot_restore(m, "test done")
+        rot_msg(("PASS: " if res["pass"] else "CHECK: " + "; ".join(problems) + " · ") + summary
+                + f" · flight settings restored ({', '.join(f'{k} {v:g}' for k, v in snap.items())})",
+                res["pass"], False, active=False, phase="done")
+    except Exception as e:
+        restored = ""
+        try:
+            if m is not None and ROT_SNAPSHOT.exists():
+                with lock:
+                    armed = state["armed"]
+                if not armed:
+                    rot_restore(m, str(e)); restored = " · flight settings restored"
+                else:
+                    restored = " · STILL ARMED: the flight settings are restored when you press the button after disarming"
+        except Exception as e2:
+            restored = f" · {e2}"
+        rot_msg(f"rotation test stopped: {e}{restored}", False, False, active=False, phase="stopped")
+    finally:
+        with lock:
+            state["rot"]["cancel"] = False
+
+
+# after every arm -> disarm: a copy of the firmware the board runs (the .px4 image whose build time matches the board's
+# "Build datetime", found among the images built here), what the board says about it (ver all) and every parameter
+FW_BACKUP_DIR = Path(__file__).resolve().parents[1] / "firmware-backups"
+FW_IMAGE_GLOBS = ["results/**/*.px4", "firmware-backups/**/*.px4"]
+PX4_BUILD = Path.home() / "PX4-nl/build/px4_fmu-v6x_multicopter/px4_fmu-v6x_multicopter.px4"
+
+
+def shell_read(m, cmd, wait=3.0):
+    """Run one NSH command through MAVLink SERIAL_CONTROL and return what the board printed."""
+    flags = mavutil.mavlink.SERIAL_CONTROL_FLAG_EXCLUSIVE | mavutil.mavlink.SERIAL_CONTROL_FLAG_RESPOND
+    with lock:
+        shell_buf.clear()
+    for c in ["", cmd]:
+        b = (c + "\n").encode()
+        m.mav.serial_control_send(mavutil.mavlink.SERIAL_CONTROL_DEV_SHELL, flags, 0, 0, len(b), list(b) + [0] * (70 - len(b)))
+        time.sleep(0.4)
+    t0 = time.time()
+    while time.time() - t0 < wait:
+        m.mav.serial_control_send(mavutil.mavlink.SERIAL_CONTROL_DEV_SHELL, flags, 0, 0, 0, [0] * 70)  # poll for more
+        time.sleep(0.3)
+    m.mav.serial_control_send(mavutil.mavlink.SERIAL_CONTROL_DEV_SHELL, 0, 0, 0, 0, [0] * 70)
+    with lock:
+        return "".join(shell_buf)
+
+
+def find_image(build_dt, git):
+    """The .px4 image of this build: same PX4 git hash, packed 0 to 120 s after the board's build time."""
+    import glob, hashlib
+    root = Path(__file__).resolve().parents[1]
+    paths = [Path(x) for g in FW_IMAGE_GLOBS for x in glob.glob(str(root / g), recursive=True)] + [PX4_BUILD]
+    best = None
+    for p in paths:
+        try:
+            d = json.loads(p.read_text())
+        except Exception:
+            continue
+        dt = float(d.get("build_time", 0)) - build_dt
+        if 0 <= dt <= 120 and (not git or str(d.get("git_hash", "")).startswith(git[:10])):
+            if best is None or dt < best[0]:
+                best = (dt, p)
+    if best is None:
+        return None, None
+    return best[1], hashlib.sha256(best[1].read_bytes()).hexdigest()
+
+
+def all_params(m, timeout=180.0):
+    """Every parameter of the board (asks for the list, then the missing indices); {name: value}."""
+    t_ask = time.time()
+    with lock:
+        param_index.clear()
+    m.mav.param_request_list_send(1, 1)
+    last_n, t_last = -1, time.time()
+    while time.time() - t_ask < timeout:
+        time.sleep(1.0)
+        with lock:
+            n_total = param_index.get("count")
+            have = {i: k for i, k in param_index.items() if i != "count"}
+        if n_total and len(have) >= n_total:
+            break
+        if len(have) != last_n:
+            last_n, t_last = len(have), time.time()
+        elif n_total and time.time() - t_last > 3:
+            for i in range(n_total):
+                if i not in have:
+                    m.mav.param_request_read_send(1, 1, b"", i); time.sleep(0.02)
+            t_last = time.time()
+    with lock:
+        names = [k for i, k in param_index.items() if i != "count"]
+        return {k: state["params"][k][0] for k in names if k in state["params"]}, param_index.get("count")
+
+
+def firmware_backup(t_disarm, run_name, settle=3.0):
+    """After a disarm (or on demand, run_name "manual"): firmware-backups/<time>_<run>/ with firmware.px4,
+    identity.json and params.json."""
+    import shutil
+    time.sleep(settle)
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(t_disarm))
+    out = FW_BACKUP_DIR / (f"{stamp}_{run_name}" if run_name else stamp)
+    try:
+        m = link.get("m")
+        if m is None:
+            raise RuntimeError("no link to the aircraft")
+        with lock:
+            state["fw_backup"] = {"t": time.time(), "busy": True, "ok": None, "msg": "reading the firmware identity…", "dir": str(out.name)}
+        ver = shell_read(m, "ver all", 4.0)
+        fields = {}
+        for line in ver.splitlines():
+            k, sep, v = line.partition(":")
+            if sep and k.strip() in ("PX4 git-hash", "PX4 version", "Build datetime", "Build variant", "HW arch", "OS version", "PX4GUID"):
+                fields[k.strip()] = v.strip()
+        if "Build datetime" not in fields:
+            raise RuntimeError("the board's shell did not answer 'ver all'")
+        build_dt = time.mktime(time.strptime(" ".join(fields["Build datetime"].split()), "%b %d %Y %H:%M:%S"))
+        img, sha = find_image(build_dt, fields.get("PX4 git-hash", ""))
+        with lock:
+            state["fw_backup"]["msg"] = "reading every parameter…"
+        params, n_total = all_params(m)
+        out.mkdir(parents=True, exist_ok=True)
+        if img is not None:
+            shutil.copy2(img, out / "firmware.px4")
+        ident = {"saved": time.strftime("%Y-%m-%d %H:%M:%S"), "run": run_name, "disarmed": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t_disarm)),
+                 "board": fields, "image_source": str(img) if img else None, "image_sha256": sha,
+                 "note": None if img else "no .px4 image built here matches this build time: only the identity and parameters are kept",
+                 "params": len(params), "params_expected": n_total, "ver_all": ver}
+        (out / "identity.json").write_text(json.dumps(ident, indent=1))
+        (out / "params.json").write_text(json.dumps({"count": n_total, "params": params}, indent=1, sort_keys=True))
+        ok = img is not None and n_total is not None and len(params) >= n_total
+        msg = (f"firmware backup {out.name}: " + (f"{img.name}" if img else "image not found locally")
+               + f", {len(params)}/{n_total} parameters")
+        with lock:
+            state["fw_backup"] = {"t": time.time(), "busy": False, "ok": ok, "msg": msg, "dir": str(out.name)}
+        if rec is not None:
+            rec.event(time.time(), "backup", msg)
+        print("[backup]", msg)
+    except Exception as e:
+        with lock:
+            state["fw_backup"] = {"t": time.time(), "busy": False, "ok": False, "msg": f"firmware backup failed: {e}", "dir": str(out.name)}
+        print("[backup] failed:", e)
 
 
 FN_NAMES = {**{101 + i: f"M{i + 1}" for i in range(12)}, **{201 + i: f"S{i + 1}" for i in range(8)}}
@@ -583,6 +950,8 @@ class Recorder:
 
 
 rec = None
+shell_buf = []       # text the board's shell sent back (SERIAL_CONTROL), for shell_read()
+param_index = {}     # PARAM_VALUE index -> name, and "count": the board's parameter count
 texts_partial = {}  # STATUSTEXT id -> text so far (PX4 splits long texts into 50-character chunks)
 
 
@@ -615,6 +984,7 @@ def configure(m, dev):
     m.mav.param_request_read_send(1, 1, b"NL_MOT_MSK", -1)
     m.mav.param_request_read_send(1, 1, b"SENS_BOARD_Y_OFF", -1)
     m.mav.param_request_read_send(1, 1, b"EKF2_OF_QMIN", -1)
+    m.mav.param_request_read_send(1, 1, b"SYS_HITL", -1)
 
 
 def reader(args):
@@ -754,7 +1124,9 @@ def read_link(args):
                 if armed and not state["armed"]:
                     rec.arm(now)
                 elif state["armed"] and not armed:
+                    run_name = (rec.run or {}).get("name")
                     rec.disarm(now)
+                    threading.Thread(target=firmware_backup, args=(now, run_name), daemon=True).start()
                 new_mode = msg.custom_mode != state["mode"] and not gap
                 state["last_hb"], state["armed"], state["mode"] = now, armed, msg.custom_mode
                 if new_mode:  # after the update, so the mode change's log row shows the new mode
@@ -816,9 +1188,15 @@ def read_link(args):
                 text = text.strip()
                 state["texts"] = ([time.strftime("%H:%M:%S ") + text] + state["texts"])[:8]
                 rec.event(now, "message", text)
+            elif ty == "SERIAL_CONTROL":
+                if msg.count:
+                    shell_buf.append(bytes(msg.data[:msg.count]).decode(errors="ignore"))
             elif ty == "PARAM_VALUE":
                 v = as_int(msg.param_value) if msg.param_type in INT_TYPES else float(msg.param_value)
                 state["params"][msg.param_id] = (v, msg.param_type, now)
+                param_index["count"] = msg.param_count
+                if msg.param_index < 65535:
+                    param_index[msg.param_index] = msg.param_id
                 if msg.param_id == "SENS_BOARD_Y_OFF":
                     state["hover"]["deg"] = round(v, 2)
                 if msg.param_id == "EKF2_OF_QMIN":
@@ -873,7 +1251,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Throttle</tit
 <nav class="tabs"><button class="tab on" data-tab="live">Live</button><button class="tab" data-tab="logs">Logs<span class="rec" id="recdot"></span></button></nav>
 <section id="tab-live">
 <div class="top"><div class="top" id="top" style="margin:0"></div><div class="pill" id="linkpill">link <b id="lnkstate" class="bad">-</b> <span id="lnkport"></span> <button class="btn lnk" data-lnk="auto" onclick="setLink('auto')">auto</button><button class="btn lnk" data-lnk="radio" onclick="setLink('radio')">radio</button><button class="btn lnk" data-lnk="usb" onclick="setLink('usb')">usb</button><button class="btn lnk qg" data-lnk="off" title="release the serial port so QGroundControl can open it; press again to take it back" onclick="qg()">QG</button></div>
-<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover(this)">Set hover pitch</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button><button class="btn hovbtn rbt" onclick="rebootBoard(this)">Reboot board</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div>
+<span class="modes"><button class="pill btn" data-mode="Stabilized" onclick="setMode('stabilized')">Stabilized</button><button class="pill btn" data-mode="Altitude" onclick="setMode('altitude')">Altitude</button><button class="pill btn" data-mode="Position" onclick="setMode('position')">Position</button><button class="pill btn" data-mode="Auto Hold" onclick="setMode('hold')">Hold</button><button class="pill btn" data-mode="Auto Land" onclick="setMode('land')">Land</button></span><span class="pill hov">hover pitch <b id="hovnow">-</b>° → <input id="hovdeg" type="number" step="0.5" min="-10" max="60"> <button class="btn hovbtn" onclick="setHover(this)">Set hover pitch</button><button class="btn hovbtn rot" onclick="rotTest(this)">Rotation test</button><button class="btn hovbtn rb" onclick="fetch('/readback',{method:'POST'})">Read back</button><button class="btn hovbtn rbt" onclick="rebootBoard(this)">Reboot board</button><button class="btn hovbtn bak" onclick="fetch('/backup',{method:'POST'}).then(r=>{if(!r.ok)note('Backup not started: no link, or a backup is running.',true)})">Backup now</button></span><span class="pill hov">HITL <b id="hitlnow">-</b> <button class="btn hovbtn hitl" onclick="toggleHitl(this)">HITL on</button></span><div class="pill" id="ack" style="display:none"></div><div class="pill" id="hovmsg" style="display:none"></div></div><div class="rbline" id="rbline"></div><div class="rbline" id="fwbak"></div><div class="rbline" id="rotline"></div><h3 class="lbl row">Front · nose lift (left · centre · right, seen from behind)</h3><div class="big front" id="big"></div><h3 class="lbl row">Rear</h3><div class="big rear" id="rear"></div>
 <h3 class="lbl row">H-FLOW · how far to trust it</h3><div class="flow" id="flow">
 <div class="card" id="fl-res"><div class="lbl">flow vs EKF velocity</div><div class="v">-</div><div class="us"></div></div>
 <div class="card" id="fl-rest"><div class="lbl">at rest (noise floor)</div><div class="v">-</div><div class="us"></div></div>
@@ -922,6 +1300,19 @@ function render(s){
       (Object.keys(rb.bad).length?` · <span class="bad">differ: ${Object.keys(rb.bad).join(', ')}</span>`:''):'';
     document.querySelector('.hovbtn.rb').disabled=!!s.hover.busy;
     document.querySelector('.hovbtn.rbt').disabled=!!(s.armed||s.hover.busy||!s.link)}
+  {const hp=s.params&&s.params.SYS_HITL, hn=document.getElementById('hitlnow'), hbn=document.querySelector('.hovbtn.hitl');
+   hitlOn=hp?Number(hp[0])>0:null;
+   hn.textContent=hitlOn==null?'-':hitlOn?'ON (motors disabled)':'off';hn.className=hitlOn?'warn':'';
+   if(!(armedBtn.hitl&&Date.now()-armedBtn.hitl<5000))hbn.textContent=hitlOn?'Turn HITL off':'Turn HITL on';
+   hbn.disabled=!!(s.armed||(s.hover&&s.hover.busy)||!s.link||hitlOn==null)}
+  {const r=s.rot||{}, b=document.querySelector('.hovbtn.rot'), el=document.getElementById('rotline');
+   rotState=r.active?'cancel':(r.pending_restore?'restore':'start');
+   if(!(armedBtn.rot&&Date.now()-armedBtn.rot<5000))b.textContent=r.active?'Cancel rotation test':(r.pending_restore?'Restore flight settings':'Rotation test');
+   b.disabled=!!(s.armed||!s.link||(s.hover&&s.hover.busy)||(r.busy&&!r.active));
+   el.innerHTML=r.msg?`<span class="${r.ok===false?'bad':r.ok?'ok':'warn'}">${r.active?'▶':r.ok?'✓':r.ok===false?'✗':'·'}</span> rotation test: <b>${esc(r.msg)}</b>`:''}
+  {const fb=s.fw_backup, el=document.getElementById('fwbak');
+   document.querySelector('.hovbtn.bak').disabled=!!(!s.link||(fb&&fb.busy));
+   el.innerHTML=fb?`<span class="${fb.ok===false?'bad':fb.ok?'ok':''}">${fb.busy?'…':fb.ok?'✓':'✗'}</span> ${esc(fb.msg)} <span class="us">(firmware-backups/)</span>`:''}
   const ack=document.getElementById('ack');
   if(s.ack&&now-s.ack.t<8){ack.style.display='';ack.innerHTML=`<b class="${s.ack.ok===false?'bad':s.ack.ok?'ok':''}">${s.ack.text}</b>`}else ack.style.display='none';
   let big='',rear='',grid='';const front={};
@@ -982,6 +1373,13 @@ function twoStep(btn,key,label,go){
 function note(text,bad){const el=document.getElementById('hovmsg');el.style.display='';el.innerHTML=`<b class="${bad?'bad':''}">${text}</b>`}
 function rebootBoard(btn){twoStep(btn,'reboot','Reboot board',()=>
   fetch('/reboot',{method:'POST'}).then(r=>{if(!r.ok)note('Not rebooted: disarm first, and wait for the link and any change in progress.',true)}))}
+let hitlOn=null, rotState='start';
+function rotTest(btn){const label={start:'Rotation test',cancel:'Cancel rotation test',restore:'Restore flight settings'}[rotState];
+  twoStep(btn,'rot',label,()=>fetch('/rotation?act='+rotState,{method:'POST'}).then(r=>{if(!r.ok)note('Not started: disarm first, and wait for the link and any change in progress.',true)}))}
+function toggleHitl(btn){if(hitlOn==null){note('HITL state not read from the board yet',true);return}
+  const on=hitlOn?0:1;
+  twoStep(btn,'hitl',on?'Turn HITL on':'Turn HITL off',()=>
+    fetch('/hitl?on='+on,{method:'POST'}).then(r=>{if(!r.ok)note('Not started: disarm first, and wait for the link and any change in progress.',true)}))}
 function setHover(btn){const v=parseFloat(document.getElementById('hovdeg').value);
   if(!isFinite(v)||v<-10||v>60){note('Enter a hover pitch between -10 and 60 deg',true);return}
   twoStep(btn,'hover','Set hover pitch',()=>
@@ -1126,6 +1524,53 @@ class Handler(BaseHTTPRequestHandler):
                     hover_msg(f"read back failed: {e}", False, False)
             threading.Thread(target=go, daemon=True).start()
             self.send_response(204); self.end_headers(); return
+        if self.path == "/backup":
+            with lock:
+                fb = state["fw_backup"]
+                ok = "m" in link and state["link"] and not (fb and fb.get("busy"))
+            if ok:
+                threading.Thread(target=firmware_backup, args=(time.time(), "manual", 0.0), daemon=True).start()
+            self.send_response(204 if ok else 400)
+            self.end_headers()
+            return
+        if self.path.startswith("/rotation?"):
+            act = self.path.partition("act=")[2]
+            with lock:
+                active, armed = state["rot"]["active"], state["armed"]
+                ok = "m" in link and not armed and not state["hover"]["busy"]
+                if act == "start":
+                    ok = ok and not active
+                elif act == "cancel":
+                    ok = ok and active
+                    if ok:
+                        state["rot"]["cancel"] = True
+                elif act == "restore":   # a test left in the board (dashboard closed mid-test): put the flight values back
+                    ok = ok and not active and ROT_SNAPSHOT.exists()
+                else:
+                    ok = False
+            if ok and act == "start":
+                threading.Thread(target=rotation_test, daemon=True).start()
+            if ok and act == "restore":
+                def go():
+                    try:
+                        snap = rot_restore(link["m"], "restored from the page")
+                        rot_msg("flight settings restored: " + ", ".join(f"{k} {v:g}" for k, v in snap.items()), True, False)
+                    except Exception as e:
+                        rot_msg(f"restore failed: {e}", False, False)
+                threading.Thread(target=go, daemon=True).start()
+            self.send_response(204 if ok else 400)
+            self.end_headers()
+            return
+        if self.path.startswith("/hitl?"):
+            on = self.path.partition("on=")[2]
+            with lock:
+                ok = on in ("0", "1") and "m" in link and not state["armed"] and not state["hover"]["busy"]
+            if ok:
+                hover_msg("starting…")
+                threading.Thread(target=set_hitl, args=(on == "1",), daemon=True).start()
+            self.send_response(204 if ok else 400)
+            self.end_headers()
+            return
         if self.path.startswith("/hover?"):
             try:
                 deg = float(self.path.partition("deg=")[2])
@@ -1195,6 +1640,7 @@ class Handler(BaseHTTPRequestHandler):
                 while True:
                     with lock:
                         s = dict(state, now=time.time(), mode_name=mode_name(state["mode"]) if state["link"] else "-")
+                        s["rot"] = dict(state["rot"], pending_restore=rot_pending())
                     self.wfile.write(f"data: {json.dumps(no_nan(s))}\n\n".encode())
                     self.wfile.flush()
                     time.sleep(0.05)

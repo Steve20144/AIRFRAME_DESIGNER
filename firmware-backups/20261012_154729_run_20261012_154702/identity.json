@@ -1,0 +1,20 @@
+{
+ "saved": "2026-10-12 15:47:52",
+ "run": "run_20261012_154702",
+ "disarmed": "2026-10-12 15:47:29",
+ "board": {
+  "HW arch": "PX4_FMU_V6X",
+  "PX4 git-hash": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+  "PX4 version": "Release 1.17.0 (17891583)",
+  "OS version": "Release 12.12.0 (202113279)",
+  "Build datetime": "Oct  8 2026 18:46:45",
+  "Build variant": "multicopter",
+  "PX4GUID": "0006000000003339343834335112003a0036"
+ },
+ "image_source": "/Users/stefanosfragkoulis/Documents/UtopiaLabs/AIRFRAME_DESIGNER/results/hitl_pack/firmware/px4_fmu-v6x_multicopter_final3_20261009.px4",
+ "image_sha256": "4e5c485a414a05dc3731a97f4bdd3f070b1bab9c6f2b4bd26c60b63926b35b8d",
+ "note": null,
+ "params": 1271,
+ "params_expected": 1271,
+ "ver_all": "\nNuttShell (NSH) NuttX-12.12.0\nnsh> \u001b[K\nnsh> \u001b[Kver all\nHW arch: PX4_FMU_V6X\nHW type: V6X\nHW FMUM ID: 0x006\nHW BASE ID: 0x000\nPX4 git-hash: d6f12ad1c4f70ad3230afd7d86e971421e02fef4\nPX4 version: Release 1.17.0 (17891583)\nOS: NuttX\nOS version: Release 12.12.0 (202113279)\nOS git-hash: fb2fadf6f599c1406f052db013efd00a2518e72c\nBuild datetime: Oct  8 2026 18:46:45\nBuild uri: localhost\nBuild variant: multicopter\nToolchain: GNU GCC, 13.2.1 20231009\nPX4GUID: 0006000000003339343834335112003a0036\nMCU: STM32H7[4|5]xxx, rev. V\nnsh> \u001b[K"
+}
